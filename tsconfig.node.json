@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node", "electron-vite/node", "vitest"]
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/renderer/src/editor/editorTimelineHistory.ts",
+    "src/renderer/src/editor/editorTimelineView.ts",
+    "src/renderer/src/editor/dockTabs.ts",
+    "src/renderer/src/editor/editorPanelLayout.ts",
+    "src/renderer/src/editor/editorLayoutPreferences.ts",
+    "src/renderer/src/editor/editorNativeMenuState.ts",
+    "src/renderer/src/editor/editorShortcuts.ts",
+    "src/renderer/src/editor/clipEffectControls.ts",
+    "src/renderer/src/editor/mediaLoadFailures.ts",
+    "src/renderer/src/editor/programMonitorMediaSync.ts",
+    "src/renderer/src/editor/programMonitorPreview.ts",
+    "src/renderer/src/editor/projectAssetImportFeedback.ts",
+    "src/renderer/src/editor/exportUiState.ts",
+    "src/renderer/src/appWorkspaces.ts",
+    "src/renderer/src/theme.ts",
+    "src/shared/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

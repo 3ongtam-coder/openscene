@@ -1,0 +1,29 @@
+{
+  "name": "video-window-recorder",
+  "version": "0.1.0",
+  "description": "Secure Electron MVP for selected-window preview and local WebM recording.",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "5.1.4",
+    "electron": "latest",
+    "electron-vite": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest",
+    "vite": "7.3.6",
+    "vitest": "latest"
+  }
+}
