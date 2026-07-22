@@ -1,0 +1,163 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  EDITOR_SHORTCUT_DEFAULT_PREFERENCES,
+  EDITOR_SHORTCUT_DEFINITIONS,
+  EDITOR_SHORTCUT_SCHEMA_VERSION,
+  disableEditorShortcutBindingPreference,
+  findEditorShortcutConflicts,
+  formatEditorShortcutBindingForAria,
+  formatEditorShortcutBindingForDisplay,
+  formatEditorShortcutChordForAriaKeyShortcuts,
+  formatEditorShortcutChordForAria,
+  formatEditorShortcutChordForDisplay,
+  getEditorShortcutBindings,
+  isEditorShortcutEventMatch,
+  isReservedEditorShortcutChord,
+  parseEditorShortcutChord,
+  parseEditorShortcutPreferences,
+  resetEditorShortcutBindingPreference,
+  setEditorShortcutBindingPreference,
+  serializeEditorShortcutPreferences
+} from '../src/renderer/src/editor/editorShortcuts';
+
+describe('editor shortcuts', () => {
+  it('Given no stored shortcut preferences, When parsed, Then the defaults stay stable', () => {
+    expect(parseEditorShortcutPreferences(null)).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+    expect(parseEditorShortcutPreferences(undefined)).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+    expect(EDITOR_SHORTCUT_DEFINITIONS.map((definition) => definition.actionId)).toEqual([
+      'playPause',
+      'undo',
+      'redo',
+      'deleteSelection',
+      'splitSelection',
+      'toggleLeftDock',
+      'toggleInspector',
+      'resetLayout',
+    ]);
+    expect(EDITOR_SHORTCUT_SCHEMA_VERSION).toBe(1);
+  });
+
+  it('Given stored shortcut overrides, When parsed, Then valid chords are normalized and serialized', () => {
+    const storedPreferences = JSON.stringify({
+      overrides: {
+        redo: 'meta + shift + z',
+        undo: 'meta + z'
+      },
+      schemaVersion: 1
+    });
+
+    const parsedPreferences = parseEditorShortcutPreferences(storedPreferences);
+
+    expect(serializeEditorShortcutPreferences(parsedPreferences)).toBe(JSON.stringify({
+      overrides: {
+        undo: 'Meta+Z',
+        redo: 'Meta+Shift+Z'
+      },
+      schemaVersion: 1
+    }));
+  });
+
+  it('Given a disabled shortcut override, When parsed, Then the action has no active chord or conflict', () => {
+    const parsedPreferences = parseEditorShortcutPreferences(JSON.stringify({
+      overrides: {
+        undo: null,
+        redo: 'Meta+Z'
+      },
+      schemaVersion: 1
+    }));
+
+    const bindings = getEditorShortcutBindings(parsedPreferences);
+    const undoBinding = bindings.find((candidate) => candidate.actionId === 'undo');
+
+    expect(serializeEditorShortcutPreferences(parsedPreferences)).toBe(JSON.stringify({
+      overrides: {
+        undo: null,
+        redo: 'Meta+Z'
+      },
+      schemaVersion: 1
+    }));
+    expect(undoBinding).toMatchObject({ actionId: 'undo', chord: null, isDefault: false, isEnabled: false });
+    expect(findEditorShortcutConflicts(bindings)).toEqual([]);
+  });
+
+  it('Given a reserved chord, When parsed or inspected, Then it stays blocked from customization', () => {
+    const reservedChord = parseEditorShortcutChord('Meta+W');
+
+    expect(reservedChord).not.toBeNull();
+    expect(reservedChord === null ? false : isReservedEditorShortcutChord(reservedChord)).toBe(true);
+    expect(parseEditorShortcutPreferences(JSON.stringify({
+      overrides: {
+        undo: 'Meta+W'
+      },
+      schemaVersion: 1
+    }))).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+  });
+
+  it('Given conflicting bindings, When compared, Then the conflict report lists every action sharing a chord', () => {
+    const preferences = parseEditorShortcutPreferences(JSON.stringify({
+      overrides: {
+        redo: 'Meta+Z'
+      },
+      schemaVersion: 1
+    }));
+
+    const conflicts = findEditorShortcutConflicts(getEditorShortcutBindings(preferences));
+
+    expect(conflicts).toEqual([
+      {
+        actionIds: ['undo', 'redo'],
+        chord: { key: 'Z', modifiers: ['Meta'] }
+      }
+    ]);
+  });
+
+  it('Given shortcut preference edits, When remapping, disabling, or resetting, Then reserved and conflicting chords are rejected', () => {
+    const reserved = parseEditorShortcutChord('Meta+W');
+    const conflict = parseEditorShortcutChord('Meta+Z');
+    const remap = parseEditorShortcutChord('Ctrl+U');
+
+    expect(reserved).not.toBeNull();
+    expect(conflict).not.toBeNull();
+    expect(remap).not.toBeNull();
+
+    const reservedResult = reserved === null
+      ? null
+      : setEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'undo', reserved);
+    const conflictResult = conflict === null
+      ? null
+      : setEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'redo', conflict);
+    const remapResult = remap === null
+      ? null
+      : setEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'undo', remap);
+
+    expect(reservedResult).toEqual({ ok: false, reason: 'reserved-chord' });
+    expect(conflictResult).toEqual({ ok: false, reason: 'conflict', conflictingActionId: 'undo' });
+    expect(remapResult).toMatchObject({ ok: true, preferences: { overrides: { undo: { key: 'U', modifiers: ['Ctrl'] } } } });
+
+    const disabled = disableEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'undo');
+    expect(disabled.overrides.undo).toBeNull();
+    expect(resetEditorShortcutBindingPreference(disabled, 'undo')).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+  });
+
+  it('Given a keyboard event, When compared with a binding chord, Then exact key and modifier matches trigger actions', () => {
+    const chord = parseEditorShortcutChord('Meta+Shift+Z');
+
+    expect(chord).not.toBeNull();
+    expect(chord === null ? false : isEditorShortcutEventMatch({ altKey: false, ctrlKey: false, key: 'z', metaKey: true, shiftKey: true }, chord)).toBe(true);
+    expect(chord === null ? false : isEditorShortcutEventMatch({ altKey: false, ctrlKey: true, key: 'z', metaKey: true, shiftKey: true }, chord)).toBe(false);
+    expect(parseEditorShortcutChord('Space')).toMatchObject({ key: 'Space', modifiers: [] });
+  });
+
+  it('Given chord and binding formatters, When rendered, Then display and aria strings stay human-readable', () => {
+    const chord = parseEditorShortcutChord('Ctrl+Shift+Z');
+    const binding = getEditorShortcutBindings(parseEditorShortcutPreferences(null)).find((candidate) => candidate.actionId === 'undo');
+
+    expect(chord).not.toBeNull();
+    expect(chord === null ? '' : formatEditorShortcutChordForDisplay(chord)).toBe('Ctrl+Shift+Z');
+    expect(chord === null ? '' : formatEditorShortcutChordForAriaKeyShortcuts(chord)).toBe('Control+Shift+Z');
+    expect(chord === null ? '' : formatEditorShortcutChordForAria(chord)).toBe('Control plus Shift plus Z');
+    expect(binding === undefined ? '' : formatEditorShortcutBindingForDisplay(binding)).toBe('Undo (Meta+Z)');
+    expect(binding === undefined ? '' : formatEditorShortcutBindingForAria(binding)).toBe('Undo the last editor change, Command plus Z');
+  });
+});
