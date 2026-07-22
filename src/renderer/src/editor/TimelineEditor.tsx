@@ -217,7 +217,7 @@ export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
         <div className="panel-heading editor-program-region__heading">
           <div>
             <p className="section-kicker">Local studio</p>
-            <h1 id="timeline-editor-title">Window Loom</h1>
+            <h1 id="timeline-editor-title">OpenVideo</h1>
             <span className="editor-program-region__subtitle">Timeline editor</span>
           </div>
           <TimelineShortcutMap shortcutPreferences={shortcutPreferences} onShortcutPreferencesChange={updateShortcutPreferences} />

@@ -9,7 +9,7 @@ export const NARRATION_SAMPLE_LIMITS = {
 } as const;
 
 export const DEFAULT_NARRATION_SCRIPT =
-  'This is my local narration reference for Window Loom. I consent to storing this sample on this device for local voice generation.';
+  'This is my local narration reference for OpenVideo. I consent to storing this sample on this device for local voice generation.';
 
 export type NarrationProfileDraft = {
   readonly displayName: string;

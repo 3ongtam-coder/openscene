@@ -1,6 +1,6 @@
-# Window Loom Design System
+# OpenVideo Design System
 
-Window Loom is a compact local editing bay with an enterprise editorial light and dark theme called Pineglass Ledger. The renderer should feel like a precise desktop NLE console for arranging local recordings, imported media, and narration, not like a cloud video generator or generic web dashboard.
+OpenVideo is a compact local editing bay with an enterprise editorial light and dark theme called Pineglass Ledger. The renderer should feel like a precise desktop NLE console for arranging local recordings, imported media, and narration, not like a cloud video generator or generic web dashboard.
 
 ## Core Principles
 
@@ -12,7 +12,7 @@ Window Loom is a compact local editing bay with an enterprise editorial light an
 
 ## Layout Contract
 
-- `product-chrome` is a compact top bar with the current workspace, a concise `Local` indicator, and the theme switch. Do not duplicate the Window Loom identity here; the active Edit program header owns product branding.
+- `product-chrome` is a compact top bar with the current workspace, a concise `Local` indicator, and the theme switch. Do not duplicate the OpenVideo identity here; the active Edit program header owns product branding.
 - `local-edit-bay` owns the application workspace grid: a left sidebar for workspace navigation and a single active workspace panel on the right.
 - Workspace panels for Edit, Screen Recording, and Voice Generation stay mounted while inactive. Hide inactive panels with the platform `hidden` state rather than unmounting them, so recording sessions, sample capture, local TTS job state, and timeline editor state survive navigation.
 - The left sidebar navigation is labeled `Application workspaces` and lists exactly `Edit`, `Screen Recording`, and `Voice Generation`. It is navigation, not dock tabs and not a collapsed disclosure group. MP4 export lives inside the Edit workspace because it acts on the saved local timeline.
@@ -30,7 +30,7 @@ Window Loom is a compact local editing bay with an enterprise editorial light an
 
 ## Program Header And Command Surface
 
-- The Program header owns `Local studio`, `Window Loom`, and the visible `Timeline editor` subtitle. App chrome must not duplicate this branding.
+- The Program header owns `Local studio`, `OpenVideo`, and the visible `Timeline editor` subtitle. App chrome must not duplicate this branding.
 - Timeline commands such as Play, Rewind, Undo, Redo, Split at playhead, add track actions, layout changes, and Save timeline live in the native Timeline menu bridge.
 - The only visible command customization surface in the workspace is the Program header `Shortcut map` disclosure. It must support remap, disable, reset, validation, persistence, and `role="status"` feedback.
 - Save state must remain explicit. Local timeline mutations are unsaved until `saveTimeline` succeeds.
@@ -90,7 +90,7 @@ Window Loom is a compact local editing bay with an enterprise editorial light an
 ## Enterprise Editorial Refinement Contract
 
 - Keep the product direction original, restrained, and local first. The refinement may borrow from generic public design principles such as hierarchy, rhythm, contrast, and editorial spacing, but it must not borrow third party brand expression.
-- Preserve Window Loom as an expressive light and dark desktop NLE with restrained enterprise editorial color. Do not change the product into a cloud editor, provider console, marketing dashboard, or generative media suite.
+- Preserve OpenVideo as an expressive light and dark desktop NLE with restrained enterprise editorial color. Do not change the product into a cloud editor, provider console, marketing dashboard, or generative media suite.
 - Strengthen hierarchy through scale, weight, placement, and concise labels. Program monitor, timeline, dock tabs, inspector tabs, and workspace navigation should each have one clear job and a visible reading order.
 - Use measured whitespace, not empty decoration. Give the monitor and timeline enough breathing room to feel primary, keep command clusters tight, and separate dock, inspector, and status content with consistent gaps.
 - Build surface depth with semantic theme tokens only. Warm parchment light surfaces and cool slate green dark surfaces may carry quiet tint, while card elevation, hairline borders, inset shadows, muted grids, opacity changes, and subtle hatch patterns keep local editing clarity intact.
@@ -137,4 +137,4 @@ Window Loom is a compact local editing bay with an enterprise editorial light an
 
 ## OpenCut Reference Boundary
 
-OpenCut is high level inspiration for local asset and timeline UX only. Window Loom must not copy or claim OpenCut code, assets, branding, exact visual identity, interaction details, or unsupported feature scope. Any future reference to OpenCut must state that no OpenCut source, dependency, artwork, logo, name treatment, or branded design system is used in this renderer.
+OpenCut is high level inspiration for local asset and timeline UX only. OpenVideo must not copy or claim OpenCut code, assets, branding, exact visual identity, interaction details, or unsupported feature scope. Any future reference to OpenCut must state that no OpenCut source, dependency, artwork, logo, name treatment, or branded design system is used in this renderer.

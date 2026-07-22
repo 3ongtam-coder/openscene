@@ -132,7 +132,7 @@ describe('voice and local TTS IPC service', () => {
 
     const startedJob = await service.startTtsJob({
       voiceProfileId: profile.value.id,
-      script: 'Hello from Window Loom.',
+      script: 'Hello from OpenVideo.',
       language: 'en-US',
       mimeType: 'audio/wav'
     });
@@ -203,7 +203,7 @@ describe('voice and local TTS IPC service', () => {
     });
     const request = {
       voiceProfileId: profile.profile.id,
-      script: 'Hello from Window Loom.',
+      script: 'Hello from OpenVideo.',
       language: 'en-US',
       mimeType: 'audio/wav'
     } as const;

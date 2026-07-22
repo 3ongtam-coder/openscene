@@ -125,14 +125,14 @@ describe('local TTS contracts', () => {
     expect(
       parseStartTtsJobInput({
         voiceProfileId: 'profile_01',
-        script: 'Hello from Window Loom.',
+        script: 'Hello from OpenVideo.',
         language: 'en-US',
         mimeType: 'audio/wav',
         modelId: 'qwen3-tts-1.7b-base'
       })
     ).toEqual({
       voiceProfileId: 'profile_01',
-      script: 'Hello from Window Loom.',
+      script: 'Hello from OpenVideo.',
       language: 'en-US',
       mimeType: 'audio/wav',
       modelId: 'qwen3-tts-1.7b-base'
@@ -141,7 +141,7 @@ describe('local TTS contracts', () => {
     expect(
       parseStartTtsJobInput({
         voiceProfileId: '',
-        script: 'Hello from Window Loom.',
+        script: 'Hello from OpenVideo.',
         language: 'en-US',
         mimeType: 'audio/wav'
       })
@@ -165,7 +165,7 @@ describe('local TTS contracts', () => {
     expect(
       parseStartTtsJobInput({
         voiceProfileId: 'profile_01',
-        script: 'Hello from Window Loom.',
+        script: 'Hello from OpenVideo.',
         language: '',
         mimeType: 'audio/wav'
       })
@@ -173,7 +173,7 @@ describe('local TTS contracts', () => {
     expect(
       parseStartTtsJobInput({
         voiceProfileId: 'profile_01',
-        script: 'Hello from Window Loom.',
+        script: 'Hello from OpenVideo.',
         language: 'en-US',
         mimeType: 'audio/aac'
       })

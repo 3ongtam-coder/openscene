@@ -99,7 +99,7 @@ function createWindow(): void {
     height: 820,
     minWidth: 980,
     minHeight: 680,
-    title: 'Window Loom',
+    title: 'OpenVideo',
     backgroundColor: '#10100f',
     show: false,
     webPreferences: {
