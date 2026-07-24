@@ -21,7 +21,11 @@ import { registerVoiceTtsIpcHandlers } from './voiceTtsIpcHandlers';
 import { VoiceProfileStore } from './voiceProfileStore';
 import { VoiceTtsIpcService } from './voiceTtsIpcService';
 import { resolvePreloadScriptPath } from './preloadPath';
+import { fail, ok } from './ipcResponses';
+import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
+
+import { createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getSpeechGenerationJob, getVideoGenerationJob } from './aiJobManager';
 
 registerTimelineAssetScheme();
 
@@ -55,7 +59,7 @@ const resultAssetImportService = new ResultAssetImportService({
       ? null
       : { sourcePath: result.outputPath, displayName: result.fileName, kind: 'video', mimeType: 'video/webm' };
   },
-  resolveTtsSource: (jobId) => voiceTtsService.getCompletedAudioSource(jobId)
+  resolveTtsSource: (jobId) => voiceTtsService.getCompletedAudioSource(jobId) ?? getCompletedAiSource(jobId)
 });
 const exportIpcService = new ExportIpcService({
   projects: projectStore,
@@ -207,6 +211,40 @@ function installIpcHandlers(): void {
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
   registerExportIpcHandlers(ipcMain, exportIpcService);
+
+  ipcMain.handle(IPC_CHANNELS.aiGenerateVideo, async (_event, request) => {
+    try {
+      const job = await createVideoGenerationJob(request);
+      return ok(job);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create video job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGetVideoJob, async (_event, jobId: string) => {
+    const job = getVideoGenerationJob(jobId);
+    if (job === null) {
+      return fail('JOB_NOT_FOUND', 'Video generation job was not found.');
+    }
+    return ok(job);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGenerateSpeech, async (_event, request) => {
+    try {
+      const job = await createSpeechGenerationJob(request);
+      return ok(job);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create speech job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGetSpeechJob, async (_event, jobId: string) => {
+    const job = getSpeechGenerationJob(jobId);
+    if (job === null) {
+      return fail('JOB_NOT_FOUND', 'Speech generation job was not found.');
+    }
+    return ok(job);
+  });
 }
 
 app.whenReady().then(() => {
