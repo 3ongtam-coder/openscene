@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { getMcpServerDefinition, McpResource, McpServer, McpTool } from '@theorvane/type-mcp';
 import { z } from 'zod';
+import { DEFAULT_CLIP_EFFECTS, type TimelineTrack } from '../shared/timelineTypes';
+import type { ExportIpcService } from './exportIpcService';
+import type { ProjectStore } from './projectStore';
 import {
   createSpeechGenerationJob,
   createVideoGenerationJob,
@@ -9,8 +13,19 @@ import {
 
 @McpServer({ name: 'openvideo-mcp-server', version: '0.1.0' })
 export class OpenVideoMcpServer {
+  private projectStore: ProjectStore | undefined;
+  private exportIpcService: ExportIpcService | undefined;
+
+  public setServices(projectStore?: ProjectStore | undefined, exportIpcService?: ExportIpcService | undefined): void {
+    this.projectStore = projectStore;
+    this.exportIpcService = exportIpcService;
+  }
+
   @McpTool({
-    description: 'Create an AI video generation job using local diffusion models or cloud APIs (Gemini Veo, OpenAI Sora).',
+    description:
+      'Create an AI video generation job using a locally configured runner. ' +
+      'Only mode="local" is supported; cloud API providers (Gemini Veo, OpenAI Sora, Runway, Kling, Luma) ' +
+      'are not yet implemented and will return an error.',
     input: z.object({
       prompt: z.string().min(1, 'Prompt is required'),
       aspectRatio: z.enum(['16:9', '9:16', '1:1']).default('16:9'),
@@ -30,14 +45,21 @@ export class OpenVideoMcpServer {
     provider?: 'local_video' | 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream';
     apiKey?: string;
   }) {
+    if (params.mode === 'api') {
+      return {
+        success: false,
+        error:
+          'Cloud API video generation is not yet implemented. ' +
+          'Use mode="local" with a configured local runner (VIDEO_TOOL_LOCAL_VIDEO_RUNNER_PATH).'
+      };
+    }
+
     const job = await createVideoGenerationJob({
       prompt: params.prompt,
       aspectRatio: params.aspectRatio ?? '16:9',
       durationSeconds: params.durationSeconds ?? 5,
       stylePreset: params.stylePreset ?? 'Cinematic',
-      mode: params.mode ?? 'local',
-      ...(params.provider !== undefined ? { provider: params.provider } : {}),
-      ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {})
+      mode: 'local'
     });
 
     return {
@@ -51,7 +73,9 @@ export class OpenVideoMcpServer {
   }
 
   @McpTool({
-    description: 'Create an AI voiceover/speech synthesis job using local Qwen TTS or ElevenLabs cloud API.',
+    description:
+      'Create an AI voiceover/speech synthesis job using the local Qwen TTS runner. ' +
+      'Only mode="local" is supported; ElevenLabs cloud API speech synthesis is not yet implemented.',
     input: z.object({
       script: z.string().min(1, 'Script is required'),
       voiceId: z.string().default('qwen-neutral'),
@@ -65,11 +89,19 @@ export class OpenVideoMcpServer {
     mode?: 'local' | 'api';
     apiKey?: string;
   }) {
+    if (params.mode === 'api') {
+      return {
+        success: false,
+        error:
+          'ElevenLabs cloud speech synthesis is not yet implemented. ' +
+          'Use mode="local" with a configured Qwen TTS runner (VIDEO_TOOL_LOCAL_TTS_RUNNER_PATH).'
+      };
+    }
+
     const job = await createSpeechGenerationJob({
       script: params.script,
       voiceId: params.voiceId ?? 'qwen-neutral',
-      mode: params.mode ?? 'local',
-      ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {})
+      mode: 'local'
     });
 
     return {
@@ -103,6 +135,124 @@ export class OpenVideoMcpServer {
     };
   }
 
+  @McpTool({
+    description: 'Add a video or audio clip to a specific project timeline track.',
+    input: z.object({
+      projectId: z.string().min(1),
+      trackId: z.string().min(1).default('video-1'),
+      assetId: z.string().min(1),
+      startOffsetSeconds: z.number().min(0).default(0),
+      durationSeconds: z.number().min(1).default(5)
+    })
+  })
+  async addClipToTimeline(params: {
+    projectId: string;
+    trackId: string;
+    assetId: string;
+    startOffsetSeconds: number;
+    durationSeconds: number;
+  }) {
+    if (!this.projectStore) {
+      return { success: false, error: 'ProjectStore service is not available.' };
+    }
+
+    try {
+      const project = await this.projectStore.open(params.projectId);
+      if (!project) {
+        return { success: false, error: `Project ${params.projectId} not found.` };
+      }
+
+      const targetTrack = project.timeline.tracks.find((t) => t.id === params.trackId);
+      if (!targetTrack) {
+        return { success: false, error: `Track ${params.trackId} not found in project ${params.projectId}.` };
+      }
+
+      const asset = project.assets.find((a) => a.id === params.assetId);
+      if (!asset) {
+        return { success: false, error: `Asset ${params.assetId} not found in project ${params.projectId}.` };
+      }
+
+      const clipId = `clip-${randomUUID()}`;
+      const durationMs = params.durationSeconds * 1000;
+      const assetDurationMs = asset.metadata?.durationMs ?? durationMs;
+
+      const newClip = {
+        id: clipId,
+        assetId: params.assetId,
+        timelineStartMs: params.startOffsetSeconds * 1000,
+        sourceStartMs: 0,
+        sourceEndMs: Math.min(durationMs, assetDurationMs),
+        sourceDurationMs: assetDurationMs,
+        effects: DEFAULT_CLIP_EFFECTS,
+        keyframes: []
+      };
+
+      const updatedTracks: TimelineTrack[] = project.timeline.tracks.map((t) =>
+        t.id === params.trackId ? { ...t, clips: [...t.clips, newClip] } : t
+      );
+
+      await this.projectStore.saveTimeline(params.projectId, {
+        ...project.timeline,
+        tracks: updatedTracks
+      });
+
+      return {
+        success: true,
+        clipId,
+        projectId: params.projectId,
+        trackId: params.trackId,
+        assetId: params.assetId,
+        startOffsetSeconds: params.startOffsetSeconds,
+        durationSeconds: params.durationSeconds,
+        message: `Added clip ${clipId} to track ${params.trackId} in project ${params.projectId}`
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : `Failed to add clip to project ${params.projectId}`
+      };
+    }
+  }
+
+  @McpTool({
+    description: 'Start FFmpeg MP4 export for an OpenVideo project timeline.',
+    input: z.object({
+      projectId: z.string().min(1),
+      preset: z.enum(['fast', 'high', 'lossless']).default('high')
+    })
+  })
+  async exportProjectVideo(params: { projectId: string; preset?: 'fast' | 'high' | 'lossless' }) {
+    if (!this.exportIpcService) {
+      return { success: false, error: 'Export service is not available.' };
+    }
+
+    try {
+      const response = await this.exportIpcService.startExportJob({
+        projectId: params.projectId
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: response.error.message
+        };
+      }
+
+      return {
+        success: true,
+        exportJobId: response.value.id,
+        projectId: params.projectId,
+        preset: params.preset ?? 'high',
+        message: `Started FFmpeg export job ${response.value.id} for project ${params.projectId}`
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : `Failed to export project ${params.projectId}`
+      };
+    }
+  }
+
   @McpResource({
     uri: 'openvideo://mcp-capabilities',
     mimeType: 'application/json',
@@ -112,7 +262,7 @@ export class OpenVideoMcpServer {
     return {
       server: 'openvideo-mcp-server',
       version: '0.1.0',
-      tools: ['createVideoJob', 'createSpeechJob', 'getJobStatus']
+      tools: ['createVideoJob', 'createSpeechJob', 'getJobStatus', 'addClipToTimeline', 'exportProjectVideo']
     };
   }
 }
