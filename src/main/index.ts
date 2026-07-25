@@ -29,6 +29,11 @@ import { createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSour
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
 import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from './openVideoMcpServer';
+import { AGENT_CHAT_MUTATING_TOOL_NAMES, createAgentChatTools } from './agentChatTools';
+import { buildAgentChatGraph } from './agentChatGraph';
+import { AgentChatSessionManager } from './agentChatSession';
+import { createOllamaAgentChatModel } from './agentChatModel';
+import { registerAgentChatIpcHandlers } from './agentChatIpcHandlers';
 
 registerTimelineAssetScheme();
 
@@ -199,7 +204,7 @@ function installDisplayMediaHandler(): void {
   });
 }
 
-function installIpcHandlers(): void {
+async function installIpcHandlers(): Promise<void> {
   registerCaptureIpcHandlers({
     ipcMain,
     shell,
@@ -321,13 +326,22 @@ function installIpcHandlers(): void {
       return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : `Failed to execute MCP tool ${toolName}`);
     }
   });
+
+  const agentChatTools = await createAgentChatTools(mcpServerInstance);
+  const agentChatGraphBundle = buildAgentChatGraph({
+    tools: agentChatTools,
+    mutatingToolNames: AGENT_CHAT_MUTATING_TOOL_NAMES,
+    createModel: createOllamaAgentChatModel(agentChatTools)
+  });
+  const agentChatSessions = new AgentChatSessionManager(agentChatGraphBundle);
+  registerAgentChatIpcHandlers(ipcMain, agentChatSessions);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   installApplicationMenu();
   installDisplayMediaHandler();
   registerTimelineAssetProtocol(timelineIpcService);
-  installIpcHandlers();
+  await installIpcHandlers();
   createWindow();
 
   app.on('activate', () => {
