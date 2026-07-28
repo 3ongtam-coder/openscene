@@ -63,7 +63,6 @@ export function AgentChatPanel({ selectedContextAsset, width }: AgentChatPanelPr
               {selectedModel.label} · {isLocalModel ? 'Local · Ollama' : 'Select an available editing model'}
             </span>
           </div>
-          <AiDomainModelSelector domain="edit-agent" label="Edit model" description="Local connection for chat-controlled edits." />
           <div className="agent-chat-panel__actions">
             <Button variant="ghost" onClick={resetConversation} disabled={isBusy} title="Reset conversation" aria-label="Reset conversation">
               Reset
@@ -72,26 +71,26 @@ export function AgentChatPanel({ selectedContextAsset, width }: AgentChatPanelPr
         </div>
 
         <div className="agent-chat-log" aria-live="polite">
-          <section className="agent-chat-context" aria-label="Edit Agent asset context">
-            <p className="agent-chat-context__title">Project context</p>
-            {selectedContextAsset !== null && (
-              <div className="agent-chat-context__candidate">
-                <span className="agent-chat-context__eyebrow">Selected asset</span>
-                <span className="agent-chat-context__name">{selectedContextAsset.label}</span>
-                <span className="agent-chat-context__meta">{selectedContextAsset.mediaKind}</span>
-                <Button
-                  variant="ghost"
-                  onClick={attachSelectedContextAsset}
-                  disabled={isBusy || selectedContextIsAttached}
-                  aria-label={`Attach ${selectedContextAsset.label} to Edit Agent context`}
-                >
-                  {selectedContextIsAttached ? 'Attached' : 'Attach'}
-                </Button>
+          {selectedContextAsset !== null && !selectedContextIsAttached && (
+            <div className="agent-chat-context-banner">
+              <div className="agent-chat-context-banner__info">
+                <span className="agent-chat-context-banner__eyebrow">Active selection</span>
+                <span className="agent-chat-context-banner__name">{selectedContextAsset.label}</span>
               </div>
-            )}
-            {contextAssets.length === 0 ? (
-              <p className="agent-chat-log__hint">Import an AI voice or video result, then add its project asset here before asking for an edit.</p>
-            ) : (
+              <Button
+                variant="ghost"
+                onClick={attachSelectedContextAsset}
+                disabled={isBusy}
+                aria-label={`Attach ${selectedContextAsset.label} to Edit Agent context`}
+              >
+                Attach
+              </Button>
+            </div>
+          )}
+
+          {contextAssets.length > 0 && (
+            <div className="agent-chat-context-list">
+              <p className="agent-chat-context-list__title">Attached context</p>
               <ul className="agent-chat-context__assets">
                 {contextAssets.map((asset) => (
                   <li key={`${asset.projectId}:${asset.assetId}`}>
@@ -110,18 +109,25 @@ export function AgentChatPanel({ selectedContextAsset, width }: AgentChatPanelPr
                   </li>
                 ))}
               </ul>
-            )}
-          </section>
+            </div>
+          )}
+
           {!isLocalModel && (
-            <p className="agent-chat-log__hint">
-              Agent chat currently uses a local Ollama model. Pick a Local Engine model above to control OpenVideo with chat.
-            </p>
+            <div className="agent-chat-hint-card agent-chat-hint-card--warning">
+              <span className="agent-chat-hint-card__icon">⚠️</span>
+              <p className="agent-chat-hint-card__text">
+                Agent chat currently uses a local Ollama model. Pick a Local Engine model below to control OpenVideo with chat.
+              </p>
+            </div>
           )}
 
           {messages.length === 0 && (
-            <p className="agent-chat-log__hint">
-              Ask the agent to generate video or speech, add a clip to the timeline, check a job, or export a project. Changes ask for approval before they run.
-            </p>
+            <div className="agent-chat-hint-card agent-chat-hint-card--welcome">
+              <span className="agent-chat-hint-card__icon">✦</span>
+              <p className="agent-chat-hint-card__text">
+                Ask the agent to generate video or speech, add a clip to the timeline, check a job, or export a project. Changes ask for approval before they run.
+              </p>
+            </div>
           )}
 
           {messages.map((message) => (
@@ -160,23 +166,38 @@ export function AgentChatPanel({ selectedContextAsset, width }: AgentChatPanelPr
         </div>
 
         <form className="agent-chat-panel__form" onSubmit={submitMessage}>
-          <input
-            type="text"
-            className="agent-chat-panel__input"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder={pendingApproval ? 'Respond to the approval above first...' : 'Tell OpenVideo what to do…'}
-            aria-label="Edit Agent prompt"
-            disabled={isBusy || !isLocalModel || pendingApproval !== null}
-          />
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={isBusy || !isLocalModel || pendingApproval !== null || input.trim().length === 0}
-            aria-label="Send Edit Agent prompt"
-          >
-            {isBusy ? 'Working…' : 'Send'}
-          </Button>
+          <div className="agent-chat-prompt-card">
+            <textarea
+              className="agent-chat-panel__input agent-chat-prompt-card__textarea"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (!isBusy && isLocalModel && pendingApproval === null && input.trim().length > 0) {
+                    void sendMessage(input);
+                  }
+                }
+              }}
+              placeholder={pendingApproval ? 'Respond to the approval above first...' : 'Tell OpenVideo what to do…'}
+              aria-label="Edit Agent prompt"
+              disabled={isBusy || !isLocalModel || pendingApproval !== null}
+              rows={2}
+            />
+            <div className="agent-chat-prompt-card__toolbar">
+              <div className="agent-chat-prompt-card__meta">
+                <AiDomainModelSelector domain="edit-agent" label="Edit model" description="Local connection for chat-controlled edits." />
+              </div>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={isBusy || !isLocalModel || pendingApproval !== null || input.trim().length === 0}
+                aria-label="Send Edit Agent prompt"
+              >
+                {isBusy ? 'Working…' : 'Send'}
+              </Button>
+            </div>
+          </div>
         </form>
       </div>
     </aside>

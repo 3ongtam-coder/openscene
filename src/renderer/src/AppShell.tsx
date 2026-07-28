@@ -8,7 +8,7 @@ import {
   clampAgentChatPanelWidth,
   getNextAgentChatPanelWidthFromKey
 } from './agentChatLayoutPreferences';
-import type { AppPage, AppPageId } from './appPages';
+import { isWorkspacePageId, type AppPage, type AppPageId } from './appPages';
 import { AgentChatPanel } from './AgentChatPanel';
 import { AgentChatProvider, useAgentChat } from './AgentChatContext';
 import { ThemeSelector } from './ThemeSelector';
@@ -35,6 +35,7 @@ type AppShellProps = {
   readonly children: ReactNode;
   readonly onPageChange: (pageId: AppPageId) => void;
   readonly selectedContextAsset: EditAgentContextAsset | null;
+  readonly activeProjectName?: string | null | undefined;
 };
 
 function SettingsIcon(): ReactElement {
@@ -56,14 +57,41 @@ function HomeIcon(): ReactElement {
   );
 }
 
-function AppShellContent({ activePage, children, onPageChange, selectedContextAsset }: AppShellProps): ReactElement {
+function FolderIcon(): ReactElement {
+  return (
+    <svg className="product-chrome__button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+    </svg>
+  );
+}
+
+function getStageBadge(pageId: AppPageId): string {
+  switch (pageId) {
+    case 'projects':
+      return 'Stage 1 · Projects';
+    case 'home':
+      return 'Stage 2 · Main Menu';
+    case 'edit':
+    case 'voice-generation':
+    case 'video-generation':
+      return 'Stage 3 · Workspace';
+    case 'settings':
+      return 'Settings';
+    default:
+      return 'Local';
+  }
+}
+
+function AppShellContent({ activePage, children, onPageChange, selectedContextAsset, activeProjectName }: AppShellProps): ReactElement {
   const { isBusy } = useAgentChat();
   const { layoutPreference, updateLayoutPreference } = useAgentChatLayoutPreference();
   const shellBodyRef = useRef<HTMLDivElement | null>(null);
   const dragOriginRef = useRef<ChatPanelDragOrigin | null>(null);
   const chatPanelWidth = layoutPreference.chatPanelWidth;
   const homeIsActive = activePage.id === 'home';
+  const projectsIsActive = activePage.id === 'projects';
   const settingsIsActive = activePage.id === 'settings';
+  const showChatPanel = isWorkspacePageId(activePage.id);
 
   const setChatPanelWidth = (width: number): void => {
     const containerWidth = shellBodyRef.current?.getBoundingClientRect().width;
@@ -110,10 +138,24 @@ function AppShellContent({ activePage, children, onPageChange, selectedContextAs
         <div id="app-shell-workspace" className="agent-workspace-lock" aria-busy={isBusy} inert={isBusy}>
           <header className="product-chrome" aria-label="Application chrome">
             <div className="product-chrome__context" aria-label="Current page">
+              <span className="product-chrome__stage-pill">{getStageBadge(activePage.id)}</span>
               <span className="product-chrome__workspace">{activePage.chromeLabel}</span>
-              <span className="local-pill">Local</span>
+              {activeProjectName && (
+                <span className="product-chrome__project-pill">📁 Project: {activeProjectName}</span>
+              )}
+              <span className="local-pill">● Local</span>
             </div>
             <div className="product-chrome__actions">
+              <Button
+                aria-controls="app-page-panel-projects"
+                aria-current={projectsIsActive ? 'page' : undefined}
+                className="product-chrome__nav-button"
+                onClick={() => onPageChange('projects')}
+                variant={projectsIsActive ? 'primary' : 'ghost'}
+              >
+                <FolderIcon />
+                Projects
+              </Button>
               <Button
                 aria-controls="app-page-panel-home"
                 aria-current={homeIsActive ? 'page' : undefined}
@@ -122,7 +164,7 @@ function AppShellContent({ activePage, children, onPageChange, selectedContextAs
                 variant={homeIsActive ? 'primary' : 'ghost'}
               >
                 <HomeIcon />
-                Home
+                Menu
               </Button>
               <Button
                 aria-controls="app-page-panel-settings"
@@ -139,44 +181,47 @@ function AppShellContent({ activePage, children, onPageChange, selectedContextAs
           </header>
           <div className="agent-workspace-lock__content">{children}</div>
           {isBusy && (
-            <div className="agent-workspace-lock__message" aria-hidden="true">
-              Agent is working in this project. Workspace controls are temporarily locked.
+            <div aria-live="polite">
+              <div className="agent-workspace-lock__message" aria-hidden="true">
+                Edit Agent is updating your workspace...
+              </div>
+              <span className="agent-workspace-lock__announcement">Edit Agent is updating your workspace</span>
             </div>
           )}
         </div>
-        {isBusy && (
-          <div className="agent-workspace-lock__announcement" role="status" aria-live="polite">
-            Agent is working in this project. Workspace controls are temporarily locked.
-          </div>
+        {showChatPanel && (
+          <>
+            <div
+              aria-controls="app-shell-workspace app-shell-agent-chat"
+              aria-label="Resize Edit Agent chat panel"
+              aria-orientation="vertical"
+              aria-valuemax={AGENT_CHAT_LAYOUT_MAX_WIDTH}
+              aria-valuemin={AGENT_CHAT_LAYOUT_MIN_WIDTH}
+              aria-valuenow={chatPanelWidth}
+              aria-valuetext={`Edit Agent chat ${chatPanelWidth} pixels`}
+              className="agent-chat-resize-splitter"
+              onKeyDown={onChatSplitterKeyDown}
+              onPointerDown={onChatSplitterPointerDown}
+              onPointerMove={onChatSplitterPointerMove}
+              onPointerUp={releasePointer}
+              role="separator"
+              tabIndex={0}
+              title="Drag to resize Edit Agent chat panel"
+            />
+            <aside id="app-shell-agent-chat" className="agent-chat-panel-shell" style={{ width: `${chatPanelWidth}px` }}>
+              <AgentChatPanel selectedContextAsset={selectedContextAsset} width={chatPanelWidth} />
+            </aside>
+          </>
         )}
-        <div
-          className="agent-chat-resize-splitter"
-          role="separator"
-          tabIndex={0}
-          aria-label="Resize Edit Agent chat"
-          aria-orientation="vertical"
-          aria-valuemin={AGENT_CHAT_LAYOUT_MIN_WIDTH}
-          aria-valuemax={AGENT_CHAT_LAYOUT_MAX_WIDTH}
-          aria-valuenow={chatPanelWidth}
-          aria-valuetext={`Edit Agent chat ${chatPanelWidth} pixels`}
-          aria-controls="app-shell-workspace app-shell-agent-chat"
-          onKeyDown={onChatSplitterKeyDown}
-          onPointerDown={onChatSplitterPointerDown}
-          onPointerMove={onChatSplitterPointerMove}
-          onPointerUp={releasePointer}
-          onPointerCancel={releasePointer}
-          onDoubleClick={() => setChatPanelWidth(AGENT_CHAT_LAYOUT_DEFAULT_WIDTH)}
-        />
-        <AgentChatPanel selectedContextAsset={selectedContextAsset} width={chatPanelWidth} />
       </div>
     </main>
   );
 }
 
-export function AppShell({ activePage, children, onPageChange, selectedContextAsset }: AppShellProps): ReactElement {
+export function AppShell(props: AppShellProps): ReactElement {
   return (
     <AgentChatProvider>
-      <AppShellContent activePage={activePage} onPageChange={onPageChange} selectedContextAsset={selectedContextAsset}>{children}</AppShellContent>
+      <AppShellContent {...props} />
     </AgentChatProvider>
   );
 }
