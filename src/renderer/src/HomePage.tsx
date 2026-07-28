@@ -1,28 +1,37 @@
 import type { ReactElement } from 'react';
 
+import type { LocalProjectSnapshot, LocalProjectSummary } from '../../shared/timelineTypes';
 import type { AppWorkspace, AppWorkspaceId } from './appWorkspaces';
 import { Button } from './ui';
 
 type HomePageProps = {
   readonly onWorkspaceOpen: (workspaceId: AppWorkspaceId) => void;
   readonly workspaces: readonly AppWorkspace[];
+  readonly project?: LocalProjectSnapshot | null;
+  readonly projects?: readonly LocalProjectSummary[];
+  readonly newProjectName?: string;
+  readonly onNewProjectNameChange?: (name: string) => void;
+  readonly onCreateProject?: () => Promise<void>;
+  readonly onOpenProject?: (projectId: string) => Promise<void>;
+  readonly onGoToProjects?: () => void;
+  readonly isBusy?: boolean;
 };
 
 const WORKSPACE_COPY = {
   edit: {
-    heading: 'Editing',
-    description: 'Open the mounted timeline editor, review local media, and export a saved MP4 with your local FFmpeg setup.',
-    action: 'Open editor'
+    heading: 'Editing (영상 편집)',
+    description: 'Open the timeline editor, manage media bin assets, cut clips, and export MP4 output with local FFmpeg.',
+    action: 'Enter Timeline Editor ➔'
   },
   'voice-generation': {
-    heading: 'Voice Generation',
-    description: 'Create consent-based narration through your configured local voice workflow and import the result into a project.',
-    action: 'Open voice tools'
+    heading: 'Voice Generation (음성 합성)',
+    description: 'Synthesize voice narration scripts, configure local Qwen TTS or cloud engines, and import voice tracks into your timeline.',
+    action: 'Enter Voice Studio ➔'
   },
   'video-generation': {
-    heading: 'Video Generation',
-    description: 'Manage generated video jobs through configured provider seams, then bring local results into the active project.',
-    action: 'Open video tools'
+    heading: 'Video Generation (비디오 생성)',
+    description: 'Generate video clips from AI prompt engines, monitor job completion, and add generated videos directly to project assets.',
+    action: 'Enter Video Studio ➔'
   }
 } as const satisfies Readonly<Record<AppWorkspaceId, { readonly heading: string; readonly description: string; readonly action: string }>>;
 
@@ -66,16 +75,46 @@ function assertNever(value: never): never {
   throw new Error(`Unexpected home workspace id: ${String(value)}`);
 }
 
-export function HomePage({ onWorkspaceOpen, workspaces }: HomePageProps): ReactElement {
+export function HomePage({
+  onWorkspaceOpen,
+  workspaces,
+  project = null,
+  onGoToProjects
+}: HomePageProps): ReactElement {
   return (
     <div className="home-page">
       <header className="home-page__hero">
-        <p className="section-kicker">Local studio home</p>
-        <h1 id="home-page-title">Start with the local tool you need.</h1>
+        <p className="section-kicker">Stage 2 / 3 · Main Studio Menu</p>
+        <h1 id="home-page-title">Select Studio Workspace</h1>
         <p>
-          OpenVideo keeps editing, consent-based narration, generated result management, and the Edit Agent in one local-first desktop shell.
+          Choose a studio tool below for your active project folder. Entering a workspace opens the full toolset and activates the Edit Agent chat assistant.
         </p>
       </header>
+
+      {/* Active Project Banner */}
+      {project !== null ? (
+        <div className="home-active-project-banner" role="status">
+          <div className="home-active-project-banner__info">
+            <span className="home-active-project-banner__kicker">● Active Project Folder</span>
+            <strong className="home-active-project-banner__name">{project.name}</strong>
+          </div>
+          <Button variant="ghost" onClick={onGoToProjects}>
+            Change Project Folder
+          </Button>
+        </div>
+      ) : (
+        <div className="home-active-project-banner home-active-project-banner--empty" role="status">
+          <div className="home-active-project-banner__info">
+            <span className="home-active-project-banner__kicker">● Stage 1 Required</span>
+            <strong className="home-active-project-banner__name">No Project Folder Selected</strong>
+          </div>
+          <Button variant="primary" onClick={onGoToProjects}>
+            Go to Projects Page ➔
+          </Button>
+        </div>
+      )}
+
+      {/* Studio Workspace Cards */}
       <div className="home-card-grid" aria-label="OpenVideo workspaces">
         {workspaces.map((workspace) => {
           const card = WORKSPACE_COPY[workspace.id];
@@ -90,7 +129,7 @@ export function HomePage({ onWorkspaceOpen, workspaces }: HomePageProps): ReactE
                 <CardIcon workspaceId={workspace.id} />
               </span>
               <span className="home-card__body">
-                <span className="home-card__kicker">{workspace.statusLabel}</span>
+                <span className="home-card__kicker">STAGE 3 · {workspace.statusLabel}</span>
                 <span className="home-card__title">{card.heading}</span>
                 <span className="home-card__description">{card.description}</span>
                 <span className="home-card__action">{card.action}</span>

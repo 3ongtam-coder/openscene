@@ -1,5 +1,20 @@
 export type AiDomain = 'voice-generation' | 'video-generation' | 'edit-agent';
 
+export type AiDomainProvider = {
+  readonly id: string;
+  readonly label: string;
+  readonly executionPath: 'local' | 'api';
+};
+
+export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
+  { id: 'local_ollama', label: 'Ollama Local', executionPath: 'local' },
+  { id: 'local_qwen', label: 'Local Engine', executionPath: 'local' },
+  { id: 'local_video', label: 'Local Engine', executionPath: 'local' },
+  { id: 'openai', label: 'OpenAI', executionPath: 'api' },
+  { id: 'gemini', label: 'Google Gemini', executionPath: 'api' },
+  { id: 'elevenlabs', label: 'ElevenLabs', executionPath: 'api' }
+] as const;
+
 export type AiDomainModelConfig = {
   readonly id: string;
   readonly providerId: string;
@@ -10,6 +25,10 @@ export type AiDomainModelConfig = {
   readonly domains: readonly AiDomain[];
   readonly available: boolean;
   readonly unavailableReason?: string;
+  readonly contextWindow?: string;
+  readonly availableContexts?: readonly string[];
+  readonly precisionBit?: string;
+  readonly availablePrecisions?: readonly string[];
 };
 
 export type AiDomainModelPreferences = Record<AiDomain, string>;
@@ -20,20 +39,24 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   {
     id: 'local-qwen-tts',
     providerId: 'local_qwen',
-    label: 'Local Qwen TTS',
+    label: 'Qwen Speech Synthesis',
     providerLabel: 'Local Engine',
     description: 'User-configured local Qwen speech synthesis runner.',
     executionPath: 'local',
+    precisionBit: '16-bit',
+    availablePrecisions: ['8-bit', '16-bit', 'FP32'],
     domains: ['voice-generation'],
     available: true
   },
   {
     id: 'elevenlabs-multilingual-v2',
     providerId: 'elevenlabs',
-    label: 'ElevenLabs Multilingual v2',
+    label: 'Multilingual v2',
     providerLabel: 'ElevenLabs',
     description: 'Cloud speech synthesis model.',
     executionPath: 'api',
+    contextWindow: '128k',
+    availableContexts: ['32k', '64k', '128k'],
     domains: ['voice-generation'],
     available: false,
     unavailableReason: 'ElevenLabs adapter is not implemented in this build.'
@@ -41,31 +64,37 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   {
     id: 'local-video-runner',
     providerId: 'local_video',
-    label: 'Local Video Runner',
+    label: 'Video Synthesis Runner',
     providerLabel: 'Local Engine',
     description: 'User-configured local video synthesis runner.',
     executionPath: 'local',
+    precisionBit: 'FP16',
+    availablePrecisions: ['8-bit (Q8_0)', 'FP16', 'FP32'],
     domains: ['video-generation'],
     available: true
   },
   {
     id: 'gemini-veo',
-    providerId: 'gemini_veo',
-    label: 'Gemini Veo',
+    providerId: 'gemini',
+    label: 'Veo Video Generator',
     providerLabel: 'Google Gemini',
     description: 'Cloud video generation model.',
     executionPath: 'api',
+    contextWindow: '1M',
+    availableContexts: ['128k', '512k', '1M'],
     domains: ['video-generation'],
     available: false,
     unavailableReason: 'Gemini Veo adapter is not implemented in this build.'
   },
   {
     id: 'openai-sora',
-    providerId: 'openai_sora',
-    label: 'OpenAI Sora',
+    providerId: 'openai',
+    label: 'Sora',
     providerLabel: 'OpenAI',
     description: 'Cloud video generation model.',
     executionPath: 'api',
+    contextWindow: '128k',
+    availableContexts: ['32k', '64k', '128k'],
     domains: ['video-generation'],
     available: false,
     unavailableReason: 'OpenAI Sora adapter is not implemented in this build.'
@@ -74,9 +103,11 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     id: 'qwen2.5-coder',
     providerId: 'local_ollama',
     label: 'Qwen 2.5 Coder 14B',
-    providerLabel: 'Local Engine (Ollama)',
+    providerLabel: 'Ollama Local',
     description: 'Local tool-calling model for LangGraph edit operations.',
     executionPath: 'local',
+    precisionBit: '4-bit (Q4_K_M)',
+    availablePrecisions: ['4-bit (Q4_K_M)', '8-bit (Q8_0)', '16-bit (FP16)'],
     domains: ['edit-agent'],
     available: true
   },
@@ -87,6 +118,8 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerLabel: 'OpenAI',
     description: 'Cloud tool-calling model for agentic timeline editing.',
     executionPath: 'api',
+    contextWindow: '128k',
+    availableContexts: ['32k', '64k', '128k', '256k'],
     domains: ['edit-agent'],
     available: false,
     unavailableReason: 'OpenAI tool-calling adapter is not implemented in this build.'
@@ -94,6 +127,13 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
 ] as const;
 
 const AI_DOMAINS: readonly AiDomain[] = ['voice-generation', 'video-generation', 'edit-agent'];
+
+export function formatAiModelOptionLabel(model: AiDomainModelConfig): string {
+  const isZen = model.id === 'qwen2.5-coder' || model.id === 'local-video-runner' || model.id === 'local-qwen-tts';
+  const prefix = isZen ? '★ ' : '';
+  const statusSuffix = model.available ? '' : ' (Unavailable)';
+  return `${prefix}${model.providerLabel} → ${model.label}${statusSuffix}`;
+}
 
 export function getDomainModels(domain: AiDomain): readonly AiDomainModelConfig[] {
   return AI_DOMAIN_MODEL_CATALOG.filter((model) => model.domains.includes(domain));

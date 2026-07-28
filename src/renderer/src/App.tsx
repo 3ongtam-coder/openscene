@@ -6,6 +6,7 @@ import { FirstRunOnboarding } from './FirstRunOnboarding';
 import { HomePage } from './HomePage';
 import { NarrationPanel } from './NarrationPanel';
 import { ProjectResultImportProvider } from './ProjectResultImportContext';
+import { ProjectsPage } from './ProjectsPage';
 import { SettingsWorkspace } from './SettingsWorkspace';
 import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
 import { APP_PAGE_BY_ID, getDefaultAppPageId, isWorkspacePageId } from './appPages';
@@ -108,7 +109,7 @@ export function App(): ReactElement {
   const workspaceIsVisible = isWorkspacePageId(activePageId);
 
   return (
-    <AppShell activePage={activePage} onPageChange={setActivePage} selectedContextAsset={selectedContextAsset}>
+    <AppShell activePage={activePage} onPageChange={setActivePage} selectedContextAsset={selectedContextAsset} activeProjectName={editor.project?.name}>
       <ProjectResultImportProvider editor={editor}>
         <div className="app-page-stack">
           <section
@@ -120,7 +121,49 @@ export function App(): ReactElement {
             role="region"
             tabIndex={-1}
           >
-            <HomePage onWorkspaceOpen={setActiveWorkspace} workspaces={APP_WORKSPACES} />
+            <HomePage
+              onWorkspaceOpen={setActiveWorkspace}
+              workspaces={APP_WORKSPACES}
+              project={editor.project}
+              projects={editor.projects}
+              newProjectName={editor.newProjectName}
+              onNewProjectNameChange={editor.setNewProjectName}
+              onCreateProject={async () => {
+                await editor.createProject();
+                setActivePage('home');
+              }}
+              onOpenProject={async (projectId) => {
+                await editor.openProject(projectId);
+                setActivePage('home');
+              }}
+              onGoToProjects={() => setActivePage('projects')}
+              isBusy={editor.isBusy}
+            />
+          </section>
+          <section
+            aria-labelledby="projects-page-title"
+            className="app-page app-page--projects"
+            hidden={activePageId !== 'projects'}
+            id="app-page-panel-projects"
+            ref={setPagePanelRef('projects')}
+            role="region"
+            tabIndex={-1}
+          >
+            <ProjectsPage
+              project={editor.project}
+              projects={editor.projects}
+              newProjectName={editor.newProjectName}
+              onNewProjectNameChange={editor.setNewProjectName}
+              onCreateProject={async () => {
+                await editor.createProject();
+                setActivePage('home');
+              }}
+              onOpenProject={async (projectId) => {
+                await editor.openProject(projectId);
+                setActivePage('home');
+              }}
+              isBusy={editor.isBusy}
+            />
           </section>
           <div className="app-stack local-edit-bay" hidden={!workspaceIsVisible}>
             <div className="app-workspace-panel-stack">
@@ -162,8 +205,8 @@ export function App(): ReactElement {
               </section>
             </div>
           </div>
-          <div
-            aria-labelledby="settings-page-title"
+          <section
+            aria-labelledby="settings-title"
             className="app-page app-page--settings"
             hidden={activePageId !== 'settings'}
             id="app-page-panel-settings"
@@ -172,10 +215,10 @@ export function App(): ReactElement {
             tabIndex={-1}
           >
             <SettingsWorkspace onReplayFirstRunOnboarding={replayFirstRunOnboarding} />
-          </div>
-          {showFirstRunOnboarding && <FirstRunOnboarding onComplete={completeFirstRunOnboarding} />}
+          </section>
         </div>
       </ProjectResultImportProvider>
+      {showFirstRunOnboarding && <FirstRunOnboarding onComplete={completeFirstRunOnboarding} />}
     </AppShell>
   );
 }
