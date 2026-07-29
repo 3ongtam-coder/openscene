@@ -63,10 +63,11 @@ describe('LLM provider and model catalog configuration', () => {
     expect(getLlmProvider('deepseek')?.credentialKey).toBe('deepseekApiKey');
     expect(isProviderConnected('unknown-provider', { anyKey: true })).toBe(false);
 
-    // Codex parity entry: OAuth sign-in is listed but not connectable yet.
-    const codex = getLlmProvider('openai-codex');
-    expect(codex?.auth).toBe('oauth');
-    expect(isProviderConnected('openai-codex', { openaiApiKey: true })).toBe(false);
+    const openAiProviders = LLM_PROVIDERS.filter((provider) => provider.id === 'openai');
+    expect(openAiProviders).toHaveLength(1);
+    expect(openAiProviders[0]?.auth).toBe('api-key');
+    expect(isProviderConnected('openai', { openaiApiKey: true })).toBe(true);
+    expect(getLlmProvider('openai-codex')).toBeUndefined();
   });
 
   it('parses canonical provider/model keys and keeps resolvable stored selections', () => {

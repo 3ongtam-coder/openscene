@@ -373,7 +373,10 @@ export function parseAiDomainModelPreferences(stored: Partial<Record<AiDomain, s
   return Object.fromEntries(
     AI_DOMAINS.map((domain) => {
       const candidate = stored?.[domain];
-      const model = candidate === undefined ? undefined : getDomainModel(domain, candidate);
+      const normalizedCandidate = candidate?.startsWith('openai-codex/')
+        ? `openai/${candidate.slice('openai-codex/'.length)}`
+        : candidate;
+      const model = normalizedCandidate === undefined ? undefined : getDomainModel(domain, normalizedCandidate);
       return [domain, model?.available ? model.id : getDefaultDomainModelId(domain)];
     })
   ) as AiDomainModelPreferences;

@@ -116,27 +116,10 @@ export const MEDIA_PROVIDERS: readonly LlmProviderInfo[] = [
   }
 ];
 
-/**
- * OpenAI Codex parity with opencode: in opencode this provider signs in with a
- * ChatGPT Pro/Plus OAuth flow rather than an API key. That flow needs its own
- * reviewed implementation, so the entry is listed honestly as not-yet
- * connectable — the codex model family itself is usable today through the
- * regular OpenAI API-key provider (Responses API routing).
- */
-export const OPENAI_CODEX_PROVIDER: LlmProviderInfo = {
-  id: 'openai-codex',
-  label: 'OpenAI Codex',
-  kind: 'cloud',
-  auth: 'oauth',
-  adapter: 'openai-compatible',
-  description: 'Codex over ChatGPT Pro/Plus sign-in. Sign-in is not supported yet; use the OpenAI API-key provider for codex models.'
-};
-
 export const LLM_PROVIDERS: readonly LlmProviderInfo[] = [
   OLLAMA_PROVIDER,
   ...LLM_CATALOG.map(toProviderInfo),
-  ...MEDIA_PROVIDERS,
-  OPENAI_CODEX_PROVIDER
+  ...MEDIA_PROVIDERS
 ];
 
 /** opencode-style popular shortlist shown before "Show all providers". */

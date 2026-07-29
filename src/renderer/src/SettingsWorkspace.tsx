@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 
 import type { LocalFfmpegRuntimeStatus } from '../../shared/exportTypes';
 import { DEFAULT_LLM_MODELS, type LlmProviderId } from '../../shared/llmModels';
-import { LLM_PROVIDERS, MEDIA_PROVIDERS, OPENAI_CODEX_PROVIDER, POPULAR_LLM_PROVIDER_IDS, isProviderConnected, type LlmProviderInfo } from '../../shared/llmProviders';
+import { LLM_PROVIDERS, MEDIA_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, isProviderConnected, type LlmProviderInfo } from '../../shared/llmProviders';
 import { useModelVisibility } from './ModelVisibilityContext';
 import { ProviderConnectDialog } from './ProviderConnectDialog';
 import { AiDomainModelSelector } from './AiDomainModelSelector';
@@ -258,21 +258,16 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
                     <div key={provider.id} className="settings-list__row">
                       <div className="settings-list__main settings-list__main--stacked">
                         <span className="settings-list__name">{provider.label}</span>
-                        <span className="settings-list__note">{provider.description}</span>
+                        <span className="settings-list__note">
+                          {provider.id === 'openai'
+                            ? 'One OpenAI API key enables regular OpenAI text models and Codex-family models through the public Responses API.'
+                            : provider.description}
+                        </span>
                       </div>
                       <Button variant="default" onClick={() => setConnectTarget(provider)}>+ Connect</Button>
                     </div>
                   ))
                 )}
-                {/* opencode parity: Codex signs in with ChatGPT OAuth, which is
-                    not implemented yet — listed honestly instead of pretending. */}
-                <div className="settings-list__row">
-                  <div className="settings-list__main settings-list__main--stacked">
-                    <span className="settings-list__name">{OPENAI_CODEX_PROVIDER.label}</span>
-                    <span className="settings-list__note">{OPENAI_CODEX_PROVIDER.description}</span>
-                  </div>
-                  <Button variant="default" disabled title="ChatGPT sign-in is not supported yet">Sign in — not supported yet</Button>
-                </div>
               </div>
             </div>
 

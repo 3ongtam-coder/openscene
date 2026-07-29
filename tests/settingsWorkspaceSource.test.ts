@@ -51,8 +51,9 @@ describe('Settings workspace source contract', () => {
     expect(source).toContain('id="ollama-base-url"');
     expect(source).toContain('Media providers');
     expect(source).toContain('MEDIA_PROVIDERS.map');
-    expect(source).toContain('OPENAI_CODEX_PROVIDER');
-    expect(source).toContain('Sign in — not supported yet');
+    expect(source).toContain('One OpenAI API key enables regular OpenAI text models and Codex-family models through the public Responses API.');
+    expect(source).not.toContain('OPENAI_CODEX_PROVIDER');
+    expect(source).not.toContain('Sign in — not supported yet');
   });
 
   it('renders an opencode-style Models section with search and per-model visibility switches', async () => {

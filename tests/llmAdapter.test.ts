@@ -111,6 +111,7 @@ describe('LlmExecutionAdapter (main process)', () => {
       await credentialStore.setCredential('openaiApiKey', 'sk-test-valid-openai-key-12345');
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
         expect(url).toBe('https://api.openai.com/v1/chat/completions');
+        expect(url).not.toContain('/v1/responses');
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test-valid-openai-key-12345');
         const body = JSON.parse(init.body as string);
         expect(body.model).toBe('gpt-5');
@@ -192,6 +193,7 @@ describe('LlmExecutionAdapter (main process)', () => {
       await credentialStore.setCredential('openaiApiKey', 'sk-codex-key');
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
         expect(url).toBe('https://api.openai.com/v1/responses');
+        expect(url).not.toContain('chatgpt.com/backend-api/codex/responses');
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-codex-key');
         const body = JSON.parse(init.body as string);
         expect(body.model).toBe('gpt-5.3-codex');
