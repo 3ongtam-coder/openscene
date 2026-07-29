@@ -76,6 +76,74 @@ describe('agent chat graph', () => {
     expect(failed.messages[2]!.text).toBe('and now?');
   });
 
+  it('stops asking once the user allows a tool always, and carries a denial reason to the model', async () => {
+    const call = (id: string) => new AIMessage({
+      content: '',
+      tool_calls: [{ id, name: MUTATING_TOOL_NAME, args: { projectId: 'p1' } }]
+    });
+    const session = buildSession([call('call-1'), call('call-2'), call('call-3'), new AIMessage('Done.')]);
+
+    // First call asks, and "always" answers it.
+    const first = await session.sendMessage({ conversationId: 'c-perm', text: 'export it', modelId: 'qwen2.5-coder' });
+    expect(first.status).toBe('awaiting-approval');
+    const afterAlways = await session.respondToApproval({
+      conversationId: 'c-perm',
+      toolCallId: first.pendingApproval!.toolCallId,
+      decision: 'always'
+    });
+    // The next call of the same tool runs without another prompt.
+    expect(afterAlways.status).not.toBe('awaiting-approval');
+    expect(afterAlways.messages.some((message) => message.role === 'tool' && message.toolName === MUTATING_TOOL_NAME)).toBe(true);
+  });
+
+  it('passes the denial reason back as a correction rather than a bare refusal', async () => {
+    const session = buildSession([
+      new AIMessage({ content: '', tool_calls: [{ id: 'call-x', name: MUTATING_TOOL_NAME, args: { projectId: 'p1' } }] }),
+      new AIMessage('Understood.')
+    ]);
+
+    const asked = await session.sendMessage({ conversationId: 'c-deny', text: 'export it', modelId: 'qwen2.5-coder' });
+    const denied = await session.respondToApproval({
+      conversationId: 'c-deny',
+      toolCallId: asked.pendingApproval!.toolCallId,
+      decision: 'deny',
+      feedback: 'Trim the intro first'
+    });
+
+    const toolMessage = denied.messages.find((message) => message.role === 'tool');
+    expect(toolMessage?.text).toContain('Trim the intro first');
+  });
+
+  it('compacts a long conversation into a summary plus the recent tail', async () => {
+    const replies = Array.from({ length: 9 }, (_, index) => new AIMessage(`reply ${index + 1}`));
+    const session = buildSession([...replies, new AIMessage('## Objective\n- Trim the intro')]);
+
+    for (let turn = 0; turn < 9; turn += 1) {
+      await session.sendMessage({ conversationId: 'c-compact', text: `message ${turn + 1}`, modelId: 'qwen2.5-coder' });
+    }
+    const before = await session.sendMessage({ conversationId: 'c-compact', text: 'one more', modelId: 'qwen2.5-coder' });
+    expect(before.messages.length).toBeGreaterThan(6);
+
+    const compacted = await session.compactConversation({ conversationId: 'c-compact' });
+
+    expect(compacted.status).toBe('idle');
+    // The summary replaces the older turns, and the tail survives verbatim.
+    expect(compacted.messages[0]?.text).toContain('[Compacted conversation summary]');
+    expect(compacted.messages.length).toBeLessThan(before.messages.length);
+    // The newest turns are kept verbatim rather than folded into the summary.
+    expect(compacted.messages.some((message) => message.role === 'user' && message.text === 'one more')).toBe(true);
+  });
+
+  it('refuses to compact a conversation that has nothing to fold away', async () => {
+    const session = buildSession([new AIMessage('Hi.')]);
+    await session.sendMessage({ conversationId: 'c-short', text: 'hello', modelId: 'qwen2.5-coder' });
+
+    const result = await session.compactConversation({ conversationId: 'c-short' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('too short to compact');
+  });
+
   it('answers directly when the model makes no tool calls', async () => {
     const session = buildSession([new AIMessage('Hello! How can I help?')]);
 

@@ -1,5 +1,6 @@
-import { useEffect, useRef, type CSSProperties, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactElement } from 'react';
 
+import { contextPressure, contextUsagePercent, formatContextUsage } from '../../shared/agentChatUsage';
 import { useAgentChat } from './AgentChatContext';
 import { AgentChatMessageView } from './AgentChatMessageView';
 import { AgentChatSessionPicker } from './AgentChatSessionPicker';
@@ -30,12 +31,18 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
     reasoningEffort,
     setReasoningEffort,
     activeProject,
+    contextUsage,
     sendMessage,
     respondToApproval,
-    resetConversation
+    resetConversation,
+    compactConversation
   } = useAgentChat();
 
   const listEndRef = useRef<HTMLDivElement | null>(null);
+  const [denialFeedback, setDenialFeedback] = useState('');
+  const usageLabel = formatContextUsage(contextUsage);
+  const usagePercent = contextUsagePercent(contextUsage);
+  const pressure = contextPressure(contextUsage);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ block: 'end' });
@@ -91,6 +98,19 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
               <span className="agent-chat-project-scope__meta">
                 {activeProject.assetCount} assets · {activeProject.trackCount} tracks
               </span>
+              {usageLabel !== null && (
+                <span
+                  className={`agent-chat-context-meter agent-chat-context-meter--${pressure}`}
+                  title={usagePercent === null ? `${usageLabel} used` : `${usageLabel} of the context window used (${usagePercent}%)`}
+                >
+                  <span className="agent-chat-context-meter__track" aria-hidden="true">
+                    <span className="agent-chat-context-meter__fill" style={{ width: `${usagePercent ?? 0}%` }} />
+                  </span>
+                  <span className="agent-chat-context-meter__label">
+                    {usageLabel}{usagePercent === null ? '' : ` · ${usagePercent}%`}
+                  </span>
+                </span>
+              )}
             </>
           )}
         </div>
@@ -125,11 +145,37 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
                 Run <strong>{pendingApproval.toolName}</strong>?
               </p>
               <pre className="agent-chat-approval__args">{JSON.stringify(pendingApproval.args, null, 2)}</pre>
+              <label className="agent-chat-approval__feedback">
+                <span className="visually-hidden">Why are you denying this action?</span>
+                <input
+                  type="text"
+                  value={denialFeedback}
+                  onChange={(event) => setDenialFeedback(event.target.value)}
+                  placeholder="Optional — tell the agent what to do instead"
+                  disabled={isBusy}
+                />
+              </label>
               <div className="agent-chat-approval__actions">
-                <Button variant="primary" disabled={isBusy} onClick={() => void respondToApproval('approve')}>
-                  Run
+                <Button
+                  variant="primary"
+                  disabled={isBusy}
+                  onClick={() => { setDenialFeedback(''); void respondToApproval('approve'); }}
+                >
+                  Run once
                 </Button>
-                <Button variant="stop" disabled={isBusy} onClick={() => void respondToApproval('deny')}>
+                <Button
+                  variant="ghost"
+                  disabled={isBusy}
+                  title={`Stop asking about ${pendingApproval.toolName} in this conversation`}
+                  onClick={() => { setDenialFeedback(''); void respondToApproval('always'); }}
+                >
+                  Always allow
+                </Button>
+                <Button
+                  variant="stop"
+                  disabled={isBusy}
+                  onClick={() => { const feedback = denialFeedback; setDenialFeedback(''); void respondToApproval('deny', feedback); }}
+                >
                   Deny
                 </Button>
               </div>
@@ -144,6 +190,19 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
           )}
           <div ref={listEndRef} />
         </div>
+
+        {pressure !== 'ok' && (
+          <div className={`agent-chat-context-notice agent-chat-context-notice--${pressure}`} role="status">
+            <span>
+              {pressure === 'overflow'
+                ? 'The conversation fills this model\u2019s context window. Compact it to keep going.'
+                : 'This conversation is near the model\u2019s context window.'}
+            </span>
+            <Button variant="ghost" disabled={isBusy} onClick={() => void compactConversation()}>
+              Compact
+            </Button>
+          </div>
+        )}
 
         <form className="agent-chat-panel__form" onSubmit={submitMessage}>
           <div className="agent-chat-prompt-card">
