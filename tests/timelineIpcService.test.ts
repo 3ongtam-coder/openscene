@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { AssetLibraryStore } from '../src/main/assetLibraryStore';
+import { ProjectLocationRegistry } from '../src/main/projectLocations';
 import { ProjectStore } from '../src/main/projectStore';
 import { TimelineIpcService } from '../src/main/timelineIpcService';
 import { DEFAULT_CLIP_EFFECTS } from '../src/shared/timelineTypes';
@@ -22,25 +23,165 @@ describe('timeline IPC service', () => {
   it('given project requests, when handled through the IPC service, then path-free project responses are returned', async () => {
     await withTempDirectory(async (directory) => {
       // Given
-      const projects = new ProjectStore(join(directory, 'projects'));
-      const service = new TimelineIpcService({ projects, assets: new AssetLibraryStore(join(directory, 'projects'), projects) });
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const service = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [workspace] })
+      });
 
       // When
       const created = await service.createProject({ name: 'Cutdown' });
-      if (!created.ok) {
+      if (!created.ok || created.value.cancelled) {
         throw new Error('Expected project creation to succeed.');
       }
+      const project = created.value.project;
       const listed = await service.listProjects(undefined);
-      const opened = await service.openProject({ projectId: created.value.id });
+      const opened = await service.openProject({ projectId: project.id });
       const invalid = await service.openProject({ projectId: '../escape' });
-      const deleted = await service.deleteProject({ projectId: created.value.id });
+      const deleted = await service.deleteProject({ projectId: project.id });
 
       // Then
-      expect(listed).toEqual({ ok: true, value: [{ id: created.value.id, name: 'Cutdown', createdAt: created.value.createdAt, updatedAt: created.value.updatedAt }] });
-      expect(opened).toEqual({ ok: true, value: created.value });
+      expect(listed).toEqual({
+        ok: true,
+        value: [{ id: project.id, name: 'Cutdown', createdAt: project.createdAt, updatedAt: project.updatedAt, storage: 'external', folderName: 'Cutdown' }]
+      });
+      expect(opened).toEqual({ ok: true, value: project });
       expect(invalid).toEqual({ ok: false, error: { code: 'INVALID_INPUT', message: 'The project lookup payload was not valid.' } });
       expect(deleted).toEqual({ ok: true, value: { deleted: true } });
       expect(JSON.stringify({ created, listed, opened, deleted })).not.toContain(directory);
+    });
+  });
+
+  it('given a cancelled directory dialog, when a project is created, then a cancelled result is returned without touching disk', async () => {
+    await withTempDirectory(async (directory) => {
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const service = new TimelineIpcService({ projects, assets: new AssetLibraryStore(join(directory, 'projects'), projects) });
+
+      const created = await service.createProject({ name: 'Cutdown' });
+
+      expect(created).toEqual({ ok: true, value: { cancelled: true } });
+      expect(await projects.list()).toEqual([]);
+    });
+  });
+
+  it('given a picked folder containing a project, when the folder is opened, then the project is registered and returned', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const seedService = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [workspace] })
+      });
+      const created = await seedService.createProject({ name: 'Folder Cut' });
+      if (!created.ok || created.value.cancelled) {
+        throw new Error('Expected seed project creation to succeed.');
+      }
+      const projectFolder = join(workspace, 'Folder Cut');
+      await projects.delete(created.value.project.id);
+      expect(await projects.list()).toEqual([]);
+
+      const service = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [projectFolder] })
+      });
+      const reopened = await service.openProjectFolder(undefined);
+
+      if (!reopened.ok || reopened.value.cancelled) {
+        throw new Error('Expected the project folder to open.');
+      }
+      expect(reopened.value.project.id).toBe(created.value.project.id);
+      expect((await projects.list()).map((summary) => summary.folderName)).toEqual(['Folder Cut']);
+      expect(JSON.stringify(reopened)).not.toContain(directory);
+    });
+  });
+
+  it('given a picked empty folder, when opened, then a project named after the folder is initialized there', async () => {
+    await withTempDirectory(async (directory) => {
+      const emptyFolder = join(directory, 'Fresh Cut');
+      await mkdir(emptyFolder);
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const service = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [emptyFolder] })
+      });
+
+      const opened = await service.openProjectFolder(undefined);
+
+      if (!opened.ok || opened.value.cancelled) {
+        throw new Error('Expected the empty folder to become a project.');
+      }
+      expect(opened.value.created).toBe(true);
+      expect(opened.value.project.name).toBe('Fresh Cut');
+      await expect(readFile(join(emptyFolder, 'project.json'), 'utf8')).resolves.toContain(opened.value.project.id);
+      expect(JSON.stringify(opened)).not.toContain(directory);
+    });
+  });
+
+  it('given a picked folder with unrelated files, when opened, then a project is initialized there without touching the files', async () => {
+    await withTempDirectory(async (directory) => {
+      const cluttered = join(directory, 'Location Footage');
+      await mkdir(cluttered);
+      await writeFile(join(cluttered, 'notes.txt'), 'not a project');
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const service = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [cluttered] })
+      });
+
+      const opened = await service.openProjectFolder(undefined);
+
+      if (!opened.ok || opened.value.cancelled) {
+        throw new Error('Expected the folder to become a project.');
+      }
+      expect(opened.value.created).toBe(true);
+      expect(opened.value.project.name).toBe('Location Footage');
+      await expect(readFile(join(cluttered, 'notes.txt'), 'utf8')).resolves.toBe('not a project');
+      expect(JSON.stringify(opened)).not.toContain(directory);
+    });
+  });
+
+  it('given a picked folder with an unreadable project file, when opened, then a safe invalid-input error is returned and the file survives', async () => {
+    await withTempDirectory(async (directory) => {
+      const corrupt = join(directory, 'corrupt');
+      await mkdir(corrupt);
+      await writeFile(join(corrupt, 'project.json'), '{not valid json', 'utf8');
+      const projects = new ProjectStore(
+        join(directory, 'projects'),
+        new ProjectLocationRegistry(join(directory, 'project-locations.json'))
+      );
+      const service = new TimelineIpcService({
+        projects,
+        assets: new AssetLibraryStore(join(directory, 'projects'), projects),
+        selectProjectDirectory: async () => ({ canceled: false, filePaths: [corrupt] })
+      });
+
+      const opened = await service.openProjectFolder(undefined);
+
+      expect(opened).toEqual({ ok: false, error: { code: 'INVALID_INPUT', message: 'The selected folder has a project file that could not be read, so it was left untouched.' } });
+      await expect(readFile(join(corrupt, 'project.json'), 'utf8')).resolves.toBe('{not valid json');
     });
   });
 

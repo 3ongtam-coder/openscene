@@ -1,51 +1,52 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import { IPC_CHANNELS } from '../shared/ipc';
-import type { ExportJobActionInput, LocalExportJob, StartExportJobInput } from '../shared/exportTypes';
+import type { ExportJobActionInput, LocalExportJob, LocalFfmpegRuntimeStatus, StartExportJobInput } from '../shared/exportTypes';
+import type { ReferenceImageSelection, TextToSpeechJob, TextToSpeechRequest, VideoGenerationJob, VideoGenerationRequest } from '../shared/providerSeams';
 import type {
   AbortRecordingInput,
   ApiResponse,
   AppSettings,
   AppendRecordingChunkInput,
-  AppendVoiceProfileSampleChunkInput,
   CaptureSource,
   ChunkAck,
-  DeleteVoiceProfileInput,
-  DiscardVoiceProfileSampleInput,
   FinishRecordingInput,
-  FinalizeVoiceProfileSampleInput,
-  GetTtsJobInput,
-  LocalTtsJob,
-  LocalTtsRuntimeStatus,
   RecordingResult,
   RecordingSession,
   ResultActionInput,
   SelectSourceInput,
   SourceAvailability,
   SourceAvailabilityInput,
-  StartRecordingInput,
-  StartTtsJobInput,
-  StartVoiceProfileSampleInput,
-  TtsJobActionInput,
-  VoiceProfile,
-  VoiceProfileSampleSession
+  StartRecordingInput
 } from '../shared/models';
 import type {
   CreateProjectInput,
+  CreateProjectResult,
   DeleteProjectInput,
   GetAssetPlaybackUrlInput,
   ImportProjectAssetsInput,
   ImportRecordingResultAssetInput,
-  ImportTtsResultAssetInput,
   LocalProjectSnapshot,
   LocalProjectSummary,
   MediaAsset,
+  OpenProjectFolderResult,
   OpenProjectInput,
   SaveTimelineInput,
   UpdateAssetMetadataInput
 } from '../shared/timelineTypes';
 import { parseTimelineMenuCommandId } from '../shared/timelineMenuCommands';
 import type { TimelineMenuCommandId, TimelineMenuState } from '../shared/timelineMenuCommands';
+import type {
+  AgentChatApprovalInput,
+  AgentChatCompactInput,
+  AgentChatHistoryEntry,
+  AgentChatHistoryGetInput,
+  AgentChatResetInput,
+  AgentChatSendInput,
+  AgentChatStoredConversation,
+  AgentChatTurnState
+} from '../shared/agentChat';
+import type { ChatGptOAuthStatus, OpenAiAuthMode } from '../shared/openAiAuth';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -57,6 +58,7 @@ type AssetPlaybackUrl = {
 
 export interface VideoToolApi {
   onTimelineMenuCommand(listener: (commandId: TimelineMenuCommandId) => void): () => void;
+  onProjectTimelineChanged(listener: (projectId: string) => void): () => void;
   updateTimelineMenuState(state: TimelineMenuState): void;
   getSettings(): Promise<ApiResponse<AppSettings>>;
   listSources(): Promise<ApiResponse<CaptureSource[]>>;
@@ -69,32 +71,51 @@ export interface VideoToolApi {
   abortRecording(input: AbortRecordingInput): Promise<ApiResponse<{ aborted: boolean }>>;
   openResult(input: ResultActionInput): Promise<ApiResponse<{ opened: boolean }>>;
   revealResult(input: ResultActionInput): Promise<ApiResponse<{ revealed: boolean }>>;
-  listVoiceProfiles(): Promise<ApiResponse<VoiceProfile[]>>;
-  startVoiceProfile(input: StartVoiceProfileSampleInput): Promise<ApiResponse<VoiceProfileSampleSession>>;
-  appendVoiceProfile(input: AppendVoiceProfileSampleChunkInput): Promise<ApiResponse<ChunkAck>>;
-  finalizeVoiceProfile(input: FinalizeVoiceProfileSampleInput): Promise<ApiResponse<VoiceProfile>>;
-  discardVoiceProfile(input: DiscardVoiceProfileSampleInput): Promise<ApiResponse<{ discarded: boolean }>>;
-  deleteVoiceProfile(input: DeleteVoiceProfileInput): Promise<ApiResponse<{ deleted: boolean }>>;
-  getTtsRuntimeStatus(): Promise<ApiResponse<LocalTtsRuntimeStatus>>;
-  startTtsJob(input: StartTtsJobInput): Promise<ApiResponse<LocalTtsJob>>;
-  getTtsJob(input: GetTtsJobInput): Promise<ApiResponse<LocalTtsJob>>;
-  openTtsResult(input: TtsJobActionInput): Promise<ApiResponse<{ opened: boolean }>>;
-  revealTtsResult(input: TtsJobActionInput): Promise<ApiResponse<{ revealed: boolean }>>;
   listProjects(): Promise<ApiResponse<readonly LocalProjectSummary[]>>;
-  createProject(input: CreateProjectInput): Promise<ApiResponse<LocalProjectSnapshot>>;
+  createProject(input: CreateProjectInput): Promise<ApiResponse<CreateProjectResult>>;
   openProject(input: OpenProjectInput): Promise<ApiResponse<LocalProjectSnapshot>>;
+  openProjectFolder(): Promise<ApiResponse<OpenProjectFolderResult>>;
   deleteProject(input: DeleteProjectInput): Promise<ApiResponse<{ readonly deleted: boolean }>>;
+  renameProject(input: { readonly projectId: string; readonly name: string }): Promise<ApiResponse<LocalProjectSnapshot>>;
   importProjectAssets(input: ImportProjectAssetsInput): Promise<ApiResponse<ImportProjectAssetsResult>>;
   importRecordingResultAsset(input: ImportRecordingResultAssetInput): Promise<ApiResponse<ImportProjectAssetsResult>>;
-  importTtsResultAsset(input: ImportTtsResultAssetInput): Promise<ApiResponse<ImportProjectAssetsResult>>;
+  importAiResultAsset(input: { projectId: string; jobId: string }): Promise<ApiResponse<ImportProjectAssetsResult>>;
   updateAssetMetadata(input: UpdateAssetMetadataInput): Promise<ApiResponse<MediaAsset>>;
   getAssetPlaybackUrl(input: GetAssetPlaybackUrlInput): Promise<ApiResponse<AssetPlaybackUrl>>;
   saveTimeline(input: SaveTimelineInput): Promise<ApiResponse<LocalProjectSnapshot>>;
+  getFfmpegRuntimeStatus(): Promise<ApiResponse<LocalFfmpegRuntimeStatus>>;
   startExportJob(input: StartExportJobInput): Promise<ApiResponse<LocalExportJob>>;
   getExportJob(input: ExportJobActionInput): Promise<ApiResponse<LocalExportJob>>;
   cancelExportJob(input: ExportJobActionInput): Promise<ApiResponse<{ readonly cancelled: boolean }>>;
   openExportResult(input: ExportJobActionInput): Promise<ApiResponse<{ readonly opened: boolean }>>;
   revealExportResult(input: ExportJobActionInput): Promise<ApiResponse<{ readonly revealed: boolean }>>;
+  aiGenerateVideo(request: VideoGenerationRequest): Promise<ApiResponse<VideoGenerationJob>>;
+  aiSelectReferenceImage(): Promise<ApiResponse<ReferenceImageSelection | null>>;
+  aiGetVideoJob(jobId: string): Promise<ApiResponse<VideoGenerationJob>>;
+  aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;
+  aiGetSpeechJob(jobId: string): Promise<ApiResponse<TextToSpeechJob>>;
+  getProviderCredentialStatus(): Promise<ApiResponse<Record<string, boolean>>>;
+  setProviderCredential(provider: string, apiKey: string): Promise<ApiResponse<{ readonly updated: boolean }>>;
+  getChatGptOAuthStatus(): Promise<ApiResponse<ChatGptOAuthStatus>>;
+  startChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
+  cancelChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
+  logoutChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
+  executeLlmPrompt(request: {
+    modelId: string;
+    prompt: string;
+    systemPrompt?: string;
+    ollamaBaseUrl?: string;
+    openAiAuthMode?: OpenAiAuthMode;
+  }): Promise<ApiResponse<{ ok: boolean; modelId: string; providerId: string; completion?: string; error?: string }>>;
+  mcpGetTools(): Promise<ApiResponse<unknown>>;
+  mcpExecuteTool(toolName: string, params: unknown): Promise<ApiResponse<unknown>>;
+  agentChatSend(input: AgentChatSendInput): Promise<ApiResponse<AgentChatTurnState>>;
+  agentChatApprove(input: AgentChatApprovalInput): Promise<ApiResponse<AgentChatTurnState>>;
+  agentChatReset(input: AgentChatResetInput): Promise<ApiResponse<AgentChatTurnState>>;
+  agentChatCompact(input: AgentChatCompactInput): Promise<ApiResponse<AgentChatTurnState>>;
+  agentChatHistoryList(): Promise<ApiResponse<readonly AgentChatHistoryEntry[]>>;
+  agentChatHistoryGet(input: AgentChatHistoryGetInput): Promise<ApiResponse<AgentChatStoredConversation | null>>;
+  agentChatHistoryDelete(input: AgentChatHistoryGetInput): Promise<ApiResponse<boolean>>;
 }
 
 const videoTool: VideoToolApi = {
@@ -105,6 +126,14 @@ const videoTool: VideoToolApi = {
     };
     ipcRenderer.on(IPC_CHANNELS.timelineMenuCommand, subscription);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.timelineMenuCommand, subscription);
+  },
+  onProjectTimelineChanged: (listener) => {
+    const subscription = (_event: IpcRendererEvent, payload: unknown): void => {
+      const projectId = (payload as { projectId?: unknown } | null)?.projectId;
+      if (typeof projectId === 'string' && projectId.length > 0) listener(projectId);
+    };
+    ipcRenderer.on(IPC_CHANNELS.projectTimelineChanged, subscription);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.projectTimelineChanged, subscription);
   },
   updateTimelineMenuState: (state) => ipcRenderer.send(IPC_CHANNELS.timelineMenuState, state),
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getSettings) as Promise<ApiResponse<AppSettings>>,
@@ -121,38 +150,24 @@ const videoTool: VideoToolApi = {
     ipcRenderer.invoke(IPC_CHANNELS.abortRecording, input) as Promise<ApiResponse<{ aborted: boolean }>>,
   openResult: (input) => ipcRenderer.invoke(IPC_CHANNELS.openResult, input) as Promise<ApiResponse<{ opened: boolean }>>,
   revealResult: (input) => ipcRenderer.invoke(IPC_CHANNELS.revealResult, input) as Promise<ApiResponse<{ revealed: boolean }>>,
-  listVoiceProfiles: () => ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesList) as Promise<ApiResponse<VoiceProfile[]>>,
-  startVoiceProfile: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesStart, input) as Promise<ApiResponse<VoiceProfileSampleSession>>,
-  appendVoiceProfile: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesAppend, input) as Promise<ApiResponse<ChunkAck>>,
-  finalizeVoiceProfile: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesFinalize, input) as Promise<ApiResponse<VoiceProfile>>,
-  discardVoiceProfile: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesDiscard, input) as Promise<ApiResponse<{ discarded: boolean }>>,
-  deleteVoiceProfile: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.voiceProfilesDelete, input) as Promise<ApiResponse<{ deleted: boolean }>>,
-  getTtsRuntimeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getTtsRuntimeStatus) as Promise<ApiResponse<LocalTtsRuntimeStatus>>,
-  startTtsJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.startTtsJob, input) as Promise<ApiResponse<LocalTtsJob>>,
-  getTtsJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.getTtsJob, input) as Promise<ApiResponse<LocalTtsJob>>,
-  openTtsResult: (input) => ipcRenderer.invoke(IPC_CHANNELS.openTtsResult, input) as Promise<ApiResponse<{ opened: boolean }>>,
-  revealTtsResult: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.revealTtsResult, input) as Promise<ApiResponse<{ revealed: boolean }>>,
   listProjects: () => ipcRenderer.invoke(IPC_CHANNELS.projectsList) as Promise<ApiResponse<readonly LocalProjectSummary[]>>,
-  createProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectsCreate, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
+  createProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectsCreate, input) as Promise<ApiResponse<CreateProjectResult>>,
   openProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectsOpen, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
+  openProjectFolder: () => ipcRenderer.invoke(IPC_CHANNELS.projectsOpenFolder) as Promise<ApiResponse<OpenProjectFolderResult>>,
   deleteProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectsDelete, input) as Promise<ApiResponse<{ readonly deleted: boolean }>>,
+  renameProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectsRename, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
   importProjectAssets: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetsImport, input) as Promise<ApiResponse<ImportProjectAssetsResult>>,
   importRecordingResultAsset: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectRecordingResultImport, input) as Promise<ApiResponse<ImportProjectAssetsResult>>,
-  importTtsResultAsset: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.projectTtsResultImport, input) as Promise<ApiResponse<ImportProjectAssetsResult>>,
+  importAiResultAsset: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.projectAiResultImport, input) as Promise<ApiResponse<ImportProjectAssetsResult>>,
   updateAssetMetadata: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetMetadataUpdate, input) as Promise<ApiResponse<MediaAsset>>,
   getAssetPlaybackUrl: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetPlaybackUrl, input) as Promise<ApiResponse<AssetPlaybackUrl>>,
   saveTimeline: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectTimelineSave, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
+  getFfmpegRuntimeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getFfmpegRuntimeStatus) as Promise<ApiResponse<LocalFfmpegRuntimeStatus>>,
   startExportJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.startExportJob, input) as Promise<ApiResponse<LocalExportJob>>,
   getExportJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.getExportJob, input) as Promise<ApiResponse<LocalExportJob>>,
   cancelExportJob: (input) =>
@@ -160,7 +175,42 @@ const videoTool: VideoToolApi = {
   openExportResult: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.openExportResult, input) as Promise<ApiResponse<{ readonly opened: boolean }>>,
   revealExportResult: (input) =>
-    ipcRenderer.invoke(IPC_CHANNELS.revealExportResult, input) as Promise<ApiResponse<{ readonly revealed: boolean }>>
+    ipcRenderer.invoke(IPC_CHANNELS.revealExportResult, input) as Promise<ApiResponse<{ readonly revealed: boolean }>>,
+  aiGenerateVideo: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateVideo, request) as Promise<ApiResponse<VideoGenerationJob>>,
+  aiSelectReferenceImage: () => ipcRenderer.invoke(IPC_CHANNELS.aiSelectReferenceImage) as Promise<ApiResponse<ReferenceImageSelection | null>>,
+  aiGetVideoJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetVideoJob, jobId) as Promise<ApiResponse<VideoGenerationJob>>,
+  aiGenerateSpeech: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateSpeech, request) as Promise<ApiResponse<TextToSpeechJob>>,
+  aiGetSpeechJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetSpeechJob, jobId) as Promise<ApiResponse<TextToSpeechJob>>,
+  getProviderCredentialStatus: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getProviderCredentials) as Promise<ApiResponse<Record<string, boolean>>>,
+  setProviderCredential: (provider, apiKey) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setProviderCredential, provider, apiKey) as Promise<ApiResponse<{ readonly updated: boolean }>>,
+  getChatGptOAuthStatus: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getChatGptOAuthStatus) as Promise<ApiResponse<ChatGptOAuthStatus>>,
+  startChatGptOAuth: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.startChatGptOAuth) as Promise<ApiResponse<ChatGptOAuthStatus>>,
+  cancelChatGptOAuth: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.cancelChatGptOAuth) as Promise<ApiResponse<ChatGptOAuthStatus>>,
+  logoutChatGptOAuth: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.logoutChatGptOAuth) as Promise<ApiResponse<ChatGptOAuthStatus>>,
+  executeLlmPrompt: (request) =>
+    ipcRenderer.invoke(IPC_CHANNELS.executeLlmPrompt, request) as Promise<
+      ApiResponse<{ ok: boolean; modelId: string; providerId: string; completion?: string; error?: string }>
+    >,
+  mcpGetTools: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetTools) as Promise<ApiResponse<unknown>>,
+  mcpExecuteTool: (toolName: string, params: unknown) =>
+    ipcRenderer.invoke(IPC_CHANNELS.mcpExecuteTool, toolName, params) as Promise<ApiResponse<unknown>>,
+  agentChatSend: (input) => ipcRenderer.invoke(IPC_CHANNELS.agentChatSend, input) as Promise<ApiResponse<AgentChatTurnState>>,
+  agentChatApprove: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.agentChatApprove, input) as Promise<ApiResponse<AgentChatTurnState>>,
+  agentChatReset: (input) => ipcRenderer.invoke(IPC_CHANNELS.agentChatReset, input) as Promise<ApiResponse<AgentChatTurnState>>,
+  agentChatCompact: (input) => ipcRenderer.invoke(IPC_CHANNELS.agentChatCompact, input) as Promise<ApiResponse<AgentChatTurnState>>,
+  agentChatHistoryList: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.agentChatHistoryList) as Promise<ApiResponse<readonly AgentChatHistoryEntry[]>>,
+  agentChatHistoryGet: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.agentChatHistoryGet, input) as Promise<ApiResponse<AgentChatStoredConversation | null>>,
+  agentChatHistoryDelete: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.agentChatHistoryDelete, input) as Promise<ApiResponse<boolean>>
 };
 
 contextBridge.exposeInMainWorld('videoTool', videoTool);

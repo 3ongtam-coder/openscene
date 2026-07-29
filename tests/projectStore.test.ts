@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { ProjectLocationRegistry } from '../src/main/projectLocations';
 import { ProjectStore } from '../src/main/projectStore';
 import { createInitialTimeline, updateClipEffects } from '../src/shared/timelineLogic';
 import { DEFAULT_AUDIO_TRACK_MIX, DEFAULT_CLIP_EFFECTS } from '../src/shared/timelineTypes';
@@ -163,7 +164,8 @@ describe('project store', () => {
           id: created.id,
           name: created.name,
           createdAt: created.createdAt,
-          updatedAt: created.updatedAt
+          updatedAt: created.updatedAt,
+          storage: 'internal'
         }
       ]);
       expect(persisted).toEqual(created);
@@ -313,6 +315,152 @@ describe('project store', () => {
 
       // When / Then
       await expect(new ProjectStore(root).open(created.id)).resolves.toBeNull();
+    });
+  });
+});
+
+describe('folder-backed project store', () => {
+  function folderStore(directory: string): ProjectStore {
+    return new ProjectStore(join(directory, 'projects'), new ProjectLocationRegistry(join(directory, 'project-locations.json')));
+  }
+
+  it('given a picked parent folder, when a project is created, then it lives in a named real folder and lists as external', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const store = folderStore(directory);
+
+      const created = await store.createInFolder({ name: 'My Cutdown', parentDirectory: workspace });
+
+      await expect(readFile(join(workspace, 'My Cutdown', 'project.json'), 'utf8')).resolves.toContain(created.id);
+      await expect(store.open(created.id)).resolves.toEqual(created);
+      const summaries = await store.list();
+      expect(summaries).toEqual([
+        {
+          id: created.id,
+          name: 'My Cutdown',
+          createdAt: created.createdAt,
+          updatedAt: created.updatedAt,
+          storage: 'external',
+          folderName: 'My Cutdown'
+        }
+      ]);
+    });
+  });
+
+  it('given a name collision in the parent folder, when created, then a numbered sibling folder is used', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const store = folderStore(directory);
+
+      await store.createInFolder({ name: 'Cut', parentDirectory: workspace });
+      const second = await store.createInFolder({ name: 'Cut', parentDirectory: workspace });
+
+      await expect(readFile(join(workspace, 'Cut 2', 'project.json'), 'utf8')).resolves.toContain(second.id);
+    });
+  });
+
+  it('given an external project, when deleted, then it is only removed from the list and the real folder survives', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const store = folderStore(directory);
+      const created = await store.createInFolder({ name: 'Keep Files', parentDirectory: workspace });
+
+      await expect(store.delete(created.id)).resolves.toBe(true);
+
+      expect(await store.list()).toEqual([]);
+      await expect(readFile(join(workspace, 'Keep Files', 'project.json'), 'utf8')).resolves.toContain(created.id);
+    });
+  });
+
+  it('given a folder that contains a project, when opened from folder, then the location is re-registered and edits persist there', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const store = folderStore(directory);
+      const created = await store.createInFolder({ name: 'Reopen', parentDirectory: workspace });
+      await store.delete(created.id);
+
+      const reopened = await store.openFromFolder(join(workspace, 'Reopen'));
+
+      expect(reopened?.id).toBe(created.id);
+      const saved = await store.saveTimeline(created.id, createInitialTimeline());
+      expect(saved.id).toBe(created.id);
+      await expect(readFile(join(workspace, 'Reopen', 'project.json'), 'utf8')).resolves.toContain(saved.updatedAt);
+    });
+  });
+
+  it('given a folder without a project file, when opened from folder, then null is returned and nothing is registered', async () => {
+    await withTempDirectory(async (directory) => {
+      const emptyFolder = join(directory, 'empty');
+      await mkdir(emptyFolder);
+      const store = folderStore(directory);
+
+      await expect(store.openFromFolder(emptyFolder)).resolves.toBeNull();
+      expect(await store.list()).toEqual([]);
+    });
+  });
+
+  it('given an empty folder, when opened-or-initialized, then a project named after the folder is created there', async () => {
+    await withTempDirectory(async (directory) => {
+      const picked = join(directory, 'Summer Reel');
+      await mkdir(picked);
+      await writeFile(join(picked, '.DS_Store'), 'hidden files do not count');
+      const store = folderStore(directory);
+
+      const result = await store.openOrInitializeFolder(picked);
+
+      expect(result?.created).toBe(true);
+      expect(result?.project.name).toBe('Summer Reel');
+      await expect(readFile(join(picked, 'project.json'), 'utf8')).resolves.toContain(result?.project.id);
+      expect((await store.list()).map((summary) => summary.folderName)).toEqual(['Summer Reel']);
+    });
+  });
+
+  it('given a folder that already holds a project, when opened-or-initialized, then the existing project opens without being recreated', async () => {
+    await withTempDirectory(async (directory) => {
+      const workspace = join(directory, 'workspace');
+      await mkdir(workspace);
+      const store = folderStore(directory);
+      const created = await store.createInFolder({ name: 'Reuse', parentDirectory: workspace });
+      await store.delete(created.id);
+
+      const result = await store.openOrInitializeFolder(join(workspace, 'Reuse'));
+
+      expect(result?.created).toBe(false);
+      expect(result?.project.id).toBe(created.id);
+    });
+  });
+
+  it('given a folder with unrelated files, when opened-or-initialized, then a project is created there and the files are untouched', async () => {
+    await withTempDirectory(async (directory) => {
+      const cluttered = join(directory, 'Clips Folder');
+      await mkdir(cluttered);
+      await writeFile(join(cluttered, 'take-1.mp4'), 'keep me');
+      const store = folderStore(directory);
+
+      const result = await store.openOrInitializeFolder(cluttered);
+
+      expect(result?.created).toBe(true);
+      expect(result?.project.name).toBe('Clips Folder');
+      expect((await readdir(cluttered)).sort()).toEqual(['project.json', 'take-1.mp4']);
+      await expect(readFile(join(cluttered, 'take-1.mp4'), 'utf8')).resolves.toBe('keep me');
+    });
+  });
+
+  it('given a folder whose project file cannot be read, when opened-or-initialized, then null is returned and the file is never overwritten', async () => {
+    await withTempDirectory(async (directory) => {
+      const corrupt = join(directory, 'corrupt');
+      await mkdir(corrupt);
+      await writeFile(join(corrupt, 'project.json'), '{not valid json', 'utf8');
+      const store = folderStore(directory);
+
+      await expect(store.openOrInitializeFolder(corrupt)).resolves.toBeNull();
+
+      await expect(readFile(join(corrupt, 'project.json'), 'utf8')).resolves.toBe('{not valid json');
+      expect(await store.list()).toEqual([]);
     });
   });
 });

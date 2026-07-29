@@ -1,4 +1,5 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell, systemPreferences } from 'electron';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AssetLibraryStore } from './assetLibraryStore';
@@ -9,43 +10,65 @@ import { registerCaptureIpcHandlers } from './captureIpcHandlers';
 import { ExportIpcService } from './exportIpcService';
 import { registerExportIpcHandlers } from './exportIpcHandlers';
 import { ExportJobStore } from './exportJobStore';
-import { LocalTtsJobStore } from './localTtsJobStore';
+import { ProjectLocationRegistry } from './projectLocations';
 import { ProjectStore } from './projectStore';
 import { RecordingFileStore } from './recordingStore';
 import { registerResultAssetImportHandlers } from './resultAssetImportHandlers';
+import { REFERENCE_IMAGE_EXTENSIONS, selectReferenceImage } from './referenceImagePicker';
 import { ResultAssetImportService } from './resultAssetImportService';
 import { registerTimelineAssetProtocol, registerTimelineAssetScheme } from './timelineAssetProtocol';
 import { registerTimelineIpcHandlers } from './timelineIpcHandlers';
 import { TimelineIpcService } from './timelineIpcService';
-import { registerVoiceTtsIpcHandlers } from './voiceTtsIpcHandlers';
-import { VoiceProfileStore } from './voiceProfileStore';
-import { VoiceTtsIpcService } from './voiceTtsIpcService';
 import { resolvePreloadScriptPath } from './preloadPath';
+import { fail, ok } from './ipcResponses';
+import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
+
+import { createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getSpeechGenerationJob, getVideoGenerationJob, setAiJobManagerCredentialStore } from './aiJobManager';
+import { CredentialStore } from './credentialStore';
+import { LlmExecutionAdapter } from './llmAdapter';
+import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from './openVideoMcpServer';
+import { AGENT_CHAT_MUTATING_TOOL_NAMES, createAgentChatTools } from './agentChatTools';
+import { buildAgentChatGraph } from './agentChatGraph';
+import { AgentChatSessionManager } from './agentChatSession';
+import { createAgentChatModel } from './agentChatModel';
+import { registerAgentChatIpcHandlers } from './agentChatIpcHandlers';
+import { AgentChatHistoryStore } from './agentChatHistoryStore';
+import { ChatGptOAuthService } from './chatGptOAuthService';
+import { registerChatGptOAuthIpcHandlers } from './registerChatGptOAuthIpcHandlers';
+import { ChatGptCodexAdapter } from './chatGptCodexAdapter';
+import { LlmPromptRouter } from './llmPromptRouter';
+import { registerLlmPromptIpcHandler } from './registerLlmPromptIpcHandler';
 
 registerTimelineAssetScheme();
 
 const sourceCatalog = new SourceCatalog();
 const recordingStore = new RecordingFileStore(resolveRecordingsDirectory());
-const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'));
+const projectLocations = new ProjectLocationRegistry(join(app.getPath('userData'), 'project-locations.json'));
+const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'), projectLocations);
 const assetLibraryStore = new AssetLibraryStore(join(app.getPath('userData'), 'projects'), projectStore);
-const voiceProfileStore = new VoiceProfileStore(join(app.getPath('userData'), 'voice-profiles'));
-const ttsJobStore = new LocalTtsJobStore();
 const exportJobStore = new ExportJobStore();
+const credentialStore = new CredentialStore(app.getPath('userData'));
+const chatGptOAuthService = new ChatGptOAuthService(app.getPath('userData'), {
+  openExternal: (url) => shell.openExternal(url)
+});
+const llmExecutionAdapter = new LlmExecutionAdapter(credentialStore);
+const llmPromptRouter = new LlmPromptRouter({
+  apiKeyAdapter: llmExecutionAdapter,
+  chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
+});
+setAiJobManagerCredentialStore(credentialStore);
 const timelineIpcService = new TimelineIpcService({
   projects: projectStore,
   assets: assetLibraryStore,
   selectMediaFiles: ({ acceptedKinds, extensions }) => dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
     filters: dialogFilters(acceptedKinds, extensions)
+  }),
+  selectProjectDirectory: () => dialog.showOpenDialog({
+    title: 'Choose a project folder',
+    properties: ['openDirectory', 'createDirectory']
   })
-});
-const voiceTtsService = new VoiceTtsIpcService({
-  voiceProfiles: voiceProfileStore,
-  ttsJobs: ttsJobStore,
-  audioRoot: join(app.getPath('userData'), 'tts-audio'),
-  openPath: (path) => shell.openPath(path),
-  revealPath: (path) => shell.showItemInFolder(path)
 });
 const resultAssetImportService = new ResultAssetImportService({
   assets: assetLibraryStore,
@@ -55,7 +78,7 @@ const resultAssetImportService = new ResultAssetImportService({
       ? null
       : { sourcePath: result.outputPath, displayName: result.fileName, kind: 'video', mimeType: 'video/webm' };
   },
-  resolveTtsSource: (jobId) => voiceTtsService.getCompletedAudioSource(jobId)
+  resolveAiSource: (jobId) => getCompletedAiSource(jobId)
 });
 const exportIpcService = new ExportIpcService({
   projects: projectStore,
@@ -93,15 +116,36 @@ function getScreenPermissionStatus(): string {
   return systemPreferences.getMediaAccessStatus('screen');
 }
 
+/**
+ * Application identity set in code rather than inferred from package metadata.
+ * macOS reads the application-menu title from the running bundle, so a dev run
+ * still shows Electron; this is what a packaged build and the About panel use.
+ */
+const APP_NAME = 'OpenVideo';
+
+/** Window icon for platforms that take one; macOS uses the bundle icon. */
+function appIconPath(): string | undefined {
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(__dirname, '../../resources/icon.png');
+  return existsSync(iconPath) ? iconPath : undefined;
+}
+
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1220,
     height: 820,
     minWidth: 980,
     minHeight: 680,
-    title: 'OpenVideo',
+    title: APP_NAME,
+    ...(appIconPath() === undefined ? {} : { icon: appIconPath() as string }),
     backgroundColor: '#10100f',
     show: false,
+    // macOS: hide the native titlebar so the renderer's product chrome acts as
+    // the draggable top bar; traffic lights are repositioned to center in it.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 15 } }
+      : {}),
     webPreferences: {
       preload: resolvePreloadScriptPath(__dirname),
       contextIsolation: true,
@@ -189,7 +233,7 @@ function installDisplayMediaHandler(): void {
   });
 }
 
-function installIpcHandlers(): void {
+async function installIpcHandlers(): Promise<void> {
   registerCaptureIpcHandlers({
     ipcMain,
     shell,
@@ -203,17 +247,148 @@ function installIpcHandlers(): void {
     listWindowSources,
     isSourceStillAvailable
   });
-  registerVoiceTtsIpcHandlers(ipcMain, voiceTtsService);
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
+
+  ipcMain.handle(IPC_CHANNELS.aiSelectReferenceImage, () =>
+    selectReferenceImage(() => dialog.showOpenDialog({
+      title: 'Choose a reference image',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: [...REFERENCE_IMAGE_EXTENSIONS] }]
+    }))
+  );
   registerExportIpcHandlers(ipcMain, exportIpcService);
+  registerChatGptOAuthIpcHandlers({
+    service: chatGptOAuthService,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
+  registerLlmPromptIpcHandler({
+    router: llmPromptRouter,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGenerateVideo, async (_event, request) => {
+    try {
+      const job = await createVideoGenerationJob(request);
+      return ok(job);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create video job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGetVideoJob, async (_event, jobId: string) => {
+    const job = getVideoGenerationJob(jobId);
+    if (job === null) {
+      return fail('JOB_NOT_FOUND', 'Video generation job was not found.');
+    }
+    return ok(job);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGenerateSpeech, async (_event, request) => {
+    try {
+      const job = await createSpeechGenerationJob(request);
+      return ok(job);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create speech job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGetSpeechJob, async (_event, jobId: string) => {
+    const job = getSpeechGenerationJob(jobId);
+    if (job === null) {
+      return fail('JOB_NOT_FOUND', 'Speech generation job was not found.');
+    }
+    return ok(job);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.getProviderCredentials, async () => {
+    try {
+      const status = await credentialStore.getCredentialStatus();
+      return ok(status);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to retrieve credential status');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.setProviderCredential, async (_event, provider: any, apiKey: string) => {
+    try {
+      await credentialStore.setCredential(provider, apiKey);
+      return ok({ updated: true });
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to save credential');
+    }
+  });
+
+  const mcpServerInstance = new OpenVideoMcpServer();
+  mcpServerInstance.setServices(projectStore, exportIpcService);
+  mcpServerInstance.setResultImportService(resultAssetImportService);
+  // Agent tools write the project straight to disk; tell open editors to reload
+  // so the change shows up on the timeline instead of being silently shadowed.
+  mcpServerInstance.setProjectTimelineChangeNotifier((projectId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(IPC_CHANNELS.projectTimelineChanged, { projectId });
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.mcpGetTools, async () => {
+    try {
+      const definition = getOpenVideoMcpDefinition();
+      return ok(definition);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to inspect MCP tools');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.mcpExecuteTool, async (_event, toolName: string, params: unknown) => {
+    try {
+      if (toolName === 'createVideoJob') {
+        const result = await mcpServerInstance.createVideoJob(params as any);
+        return ok(result);
+      }
+      if (toolName === 'createSpeechJob') {
+        const result = await mcpServerInstance.createSpeechJob(params as any);
+        return ok(result);
+      }
+      if (toolName === 'getJobStatus') {
+        const result = await mcpServerInstance.getJobStatus(params as any);
+        return ok(result);
+      }
+      if (toolName === 'addClipToTimeline') {
+        const result = await mcpServerInstance.addClipToTimeline(params as any);
+        return ok(result);
+      }
+      if (toolName === 'exportProjectVideo') {
+        const result = await mcpServerInstance.exportProjectVideo(params as any);
+        return ok(result);
+      }
+      return fail('INVALID_INPUT', `MCP tool ${toolName} is not recognized.`);
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : `Failed to execute MCP tool ${toolName}`);
+    }
+  });
+
+  const agentChatTools = await createAgentChatTools(mcpServerInstance);
+  const agentChatGraphBundle = buildAgentChatGraph({
+    tools: agentChatTools,
+    mutatingToolNames: AGENT_CHAT_MUTATING_TOOL_NAMES,
+    createModel: createAgentChatModel(agentChatTools, credentialStore, chatGptOAuthService)
+  });
+  const agentChatSessions = new AgentChatSessionManager(agentChatGraphBundle);
+  registerAgentChatIpcHandlers(ipcMain, agentChatSessions, new AgentChatHistoryStore(projectStore));
 }
 
-app.whenReady().then(() => {
+app.setName(APP_NAME);
+app.setAboutPanelOptions({
+  applicationName: APP_NAME,
+  applicationVersion: app.getVersion(),
+  copyright: 'Open source under the MIT License'
+});
+
+app.whenReady().then(async () => {
   installApplicationMenu();
   installDisplayMediaHandler();
   registerTimelineAssetProtocol(timelineIpcService);
-  installIpcHandlers();
+  await installIpcHandlers();
   createWindow();
 
   app.on('activate', () => {

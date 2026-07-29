@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { bootstrapRendererTheme, ThemeProvider } from './ThemeProvider';
+import { LlmProvider } from './LlmProviderContext';
+import { AiDomainModelProvider } from './AiDomainModelContext';
+import { ModelVisibilityProvider } from './ModelVisibilityContext';
+import { ChatGptAuthProvider } from './ChatGptAuthContext';
 import './styles.css';
 
 const rootElement = document.getElementById('root');
@@ -13,10 +17,22 @@ if (rootElement === null) {
 
 bootstrapRendererTheme();
 
+// Platform flag for titlebar layout: macOS reserves room for the traffic lights
+// inside the product chrome when the native titlebar is hidden.
+document.documentElement.dataset.platform = navigator.platform.toLowerCase().includes('mac') ? 'darwin' : 'other';
+
 createRoot(rootElement).render(
   <React.StrictMode>
     <ThemeProvider>
-      <App />
+      <LlmProvider>
+        <ChatGptAuthProvider>
+          <AiDomainModelProvider>
+            <ModelVisibilityProvider>
+              <App />
+            </ModelVisibilityProvider>
+          </AiDomainModelProvider>
+        </ChatGptAuthProvider>
+      </LlmProvider>
     </ThemeProvider>
   </React.StrictMode>
 );
