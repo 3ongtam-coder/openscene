@@ -10,10 +10,13 @@ import type {
   AgentToolCallProposal
 } from '../shared/agentChat';
 import type { EditAgentContextAsset, EditAgentProjectContext } from '../shared/editAgentContext';
+import type { OpenAiAuthMode, ReasoningEffort } from '../shared/openAiAuth';
 import { isAiLike, isHumanMessage, isToolMessage, type AgentChatGraphBundle } from './agentChatGraph';
 
 interface ConversationConfig {
   readonly modelId: string;
+  readonly openAiAuthMode: OpenAiAuthMode | undefined;
+  readonly reasoningEffort: ReasoningEffort | undefined;
   readonly ollamaBaseUrl: string | undefined;
   readonly contextAssets: readonly EditAgentContextAsset[];
   readonly activeProject: EditAgentProjectContext | null;
@@ -32,6 +35,8 @@ export class AgentChatSessionManager {
   async sendMessage(input: AgentChatSendInput): Promise<AgentChatTurnState> {
     this.conversationConfigs.set(input.conversationId, {
       modelId: input.modelId,
+      openAiAuthMode: input.openAiAuthMode,
+      reasoningEffort: input.reasoningEffort,
       ollamaBaseUrl: input.ollamaBaseUrl,
       contextAssets: input.contextAssets ?? [],
       activeProject: input.activeProject ?? null
@@ -112,6 +117,8 @@ export class AgentChatSessionManager {
       configurable: {
         thread_id: conversationId,
         modelId: stored?.modelId,
+        openAiAuthMode: stored?.openAiAuthMode,
+        reasoningEffort: stored?.reasoningEffort,
         ollamaBaseUrl: stored?.ollamaBaseUrl,
         editAssetContext: JSON.stringify(stored?.contextAssets ?? []),
         editProjectContext: JSON.stringify(stored?.activeProject ?? null)
@@ -141,10 +148,17 @@ export class AgentChatSessionManager {
     };
   }
 
-  private errorState(conversationId: string, err: unknown): AgentChatTurnState {
+  /**
+   * A failed turn reports the error over the conversation that already exists —
+   * returning an empty transcript here made the panel blank the whole chat, so
+   * a single provider error looked like the conversation was lost.
+   */
+  private async errorState(conversationId: string, err: unknown): Promise<AgentChatTurnState> {
+    const snapshot = await this.graph.getState(this.runnableConfig(conversationId)).catch(() => null);
+    const messages = ((snapshot?.values as { messages?: BaseMessage[] } | undefined)?.messages ?? []) as BaseMessage[];
     return {
       conversationId,
-      messages: [],
+      messages: toDisplayMessages(messages),
       pendingApproval: null,
       status: 'error',
       error: err instanceof Error ? err.message : 'Agent chat failed unexpectedly.'

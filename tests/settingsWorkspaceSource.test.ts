@@ -38,7 +38,7 @@ describe('Settings workspace source contract', () => {
     expect(dialog).not.toContain('localStorage');
   });
 
-  it('splits providers into opencode-style Connected and Popular lists with a connect dialog', async () => {
+  it('splits providers into Connected and Popular lists with a connect dialog', async () => {
     const source = await readFile(SETTINGS_SOURCE_URL, 'utf8');
 
     expect(source).toContain("from '../../shared/llmProviders'");
@@ -51,11 +51,13 @@ describe('Settings workspace source contract', () => {
     expect(source).toContain('id="ollama-base-url"');
     expect(source).toContain('Media providers');
     expect(source).toContain('MEDIA_PROVIDERS.map');
-    expect(source).toContain('OPENAI_CODEX_PROVIDER');
-    expect(source).toContain('Sign in — not supported yet');
+    // OpenAI stays one unified entry, now advertising both login methods.
+    expect(source).toContain('Connect with an API key for the public API, or sign in with ChatGPT Pro/Plus to run Codex-family models.');
+    expect(source).not.toContain('OPENAI_CODEX_PROVIDER');
+    expect(source).not.toContain('Sign in — not supported yet');
   });
 
-  it('renders an opencode-style Models section with search and per-model visibility switches', async () => {
+  it('renders a Models section with search and per-model visibility switches', async () => {
     const source = await readFile(SETTINGS_SOURCE_URL, 'utf8');
 
     expect(source).toContain('settings-model-search');

@@ -13,14 +13,19 @@ import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { Annotation, END, MemorySaver, START, StateGraph, interrupt } from '@langchain/langgraph';
 import type { AgentToolCallProposal, AgentToolApprovalDecision } from '../shared/agentChat';
 import { parseEditAgentProjectContext, type EditAgentContextAsset, type EditAgentProjectContext } from '../shared/editAgentContext';
+import type { OpenAiAuthMode, ReasoningEffort } from '../shared/openAiAuth';
 
 const AGENT_CHAT_SYSTEM_PROMPT =
-  'You are the OpenVideo in-app agent. You can call the provided tools to check AI job status, ' +
-  'start local AI video/speech generation, add a clip to a project timeline, or start an FFmpeg export. ' +
+  'You are the OpenVideo in-app agent. You drive the whole editor through the provided tools: read a ' +
+  'project timeline, add and trim clips, adjust clip effects, and start an FFmpeg export. ' +
+  'You also own generation end to end. To add generated media: call createVideoJob or createSpeechJob, ' +
+  'poll getJobStatus until it reports completed, call importGeneratedResult to bring the result into the ' +
+  'project as an asset, then place that assetId with addClipToTimeline. Do not ask the user to do those ' +
+  'steps by hand. Generation runs against the cloud provider connected in Settings and fails with an ' +
+  'explicit error when none is connected — report that error rather than claiming a provider works. ' +
   'You can also watch a project video with the watchProjectVideo tool: sampled frames arrive attached to ' +
   'the conversation as images with timestamps — use them to describe or reason about the footage ' +
   '(a vision-capable model is required to actually see them). ' +
-  'Only local generation runners are available in this build; never claim an unimplemented provider works. ' +
   'Keep replies short, and say what you are about to do before calling a tool.';
 
 // isAIMessage narrows on `_getType() === 'ai'`, which is also true for the AIMessageChunk that
@@ -127,7 +132,12 @@ export interface AgentChatModelHandle {
   invoke(messages: BaseMessage[]): Promise<AIMessage>;
 }
 
-export type AgentChatModelFactory = (config: { modelId: string; ollamaBaseUrl: string | undefined }) => AgentChatModelHandle;
+export type AgentChatModelFactory = (config: {
+  readonly modelId: string;
+  readonly openAiAuthMode: OpenAiAuthMode | undefined;
+  readonly reasoningEffort: ReasoningEffort | undefined;
+  readonly ollamaBaseUrl: string | undefined;
+}) => AgentChatModelHandle;
 
 const AgentChatState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -151,12 +161,17 @@ export function buildAgentChatGraph(options: BuildAgentChatGraphOptions) {
 
   const builder = new StateGraph(AgentChatState)
     .addNode('agent', async (state, config) => {
-      const configurable = (config?.configurable ?? {}) as { modelId?: string; ollamaBaseUrl?: string; editAssetContext?: string; editProjectContext?: string };
+      const configurable = (config?.configurable ?? {}) as { modelId?: string; openAiAuthMode?: OpenAiAuthMode; reasoningEffort?: ReasoningEffort; ollamaBaseUrl?: string; editAssetContext?: string; editProjectContext?: string };
       if (!configurable.modelId) {
         throw new Error('agentChatGraph: a modelId must be provided via config.configurable.');
       }
 
-      const model = options.createModel({ modelId: configurable.modelId, ollamaBaseUrl: configurable.ollamaBaseUrl });
+      const model = options.createModel({
+        modelId: configurable.modelId,
+        openAiAuthMode: configurable.openAiAuthMode,
+        reasoningEffort: configurable.reasoningEffort,
+        ollamaBaseUrl: configurable.ollamaBaseUrl
+      });
       const hasSystemPrompt = state.messages.length > 0 && isSystemMessage(state.messages[0]!);
       const messages = hasSystemPrompt
         ? state.messages

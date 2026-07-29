@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Compile the models.dev catalog (the same source opencode uses) into the
+ * Compile the models.dev catalog into the
  * compact generated provider/model catalog at src/shared/llmCatalog.generated.ts.
  *
  * Usage:
@@ -40,10 +40,18 @@ const OPENAI_COMPATIBLE_ENDPOINTS = {
   togetherai: 'https://api.together.xyz/v1',
   cerebras: 'https://api.cerebras.ai/v1',
   perplexity: 'https://api.perplexity.ai',
-  deepinfra: 'https://api.deepinfra.com/v1/openai'
+  deepinfra: 'https://api.deepinfra.com/v1/openai',
+  vercel: 'https://ai-gateway.vercel.sh/v1'
 };
 
 const POPULAR_ORDER = ['anthropic', 'openai', 'google_gemini', 'openrouter', 'deepseek', 'groq', 'xai', 'mistral'];
+
+/** A public https base URL with no unresolved env placeholder. */
+function publicApiBaseUrl(provider) {
+  const api = provider.api;
+  if (typeof api !== 'string' || !api.startsWith('https://') || api.includes('${')) return null;
+  return api.replace(/\/$/, '');
+}
 
 function adapterFor(provider) {
   if (provider.id === 'anthropic') return { adapter: 'anthropic' };
@@ -51,19 +59,32 @@ function adapterFor(provider) {
   if (OPENAI_COMPATIBLE_ENDPOINTS[provider.id] !== undefined) {
     return { adapter: 'openai-compatible', baseUrl: OPENAI_COMPATIBLE_ENDPOINTS[provider.id] };
   }
-  if (provider.npm === '@ai-sdk/openai-compatible' && typeof provider.api === 'string' && provider.api.startsWith('https://')) {
-    return { adapter: 'openai-compatible', baseUrl: provider.api.replace(/\/$/, '') };
+  const baseUrl = publicApiBaseUrl(provider);
+  if (baseUrl === null) return null;
+  // Anything speaking the OpenAI or Anthropic wire format on a public endpoint
+  // is drivable by an adapter we already ship.
+  if (provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai') {
+    return { adapter: 'openai-compatible', baseUrl };
+  }
+  if (provider.npm === '@ai-sdk/anthropic') {
+    return { adapter: 'anthropic', baseUrl };
   }
   return null;
 }
 
 function compactModel(model) {
   const limit = model.limit && Number.isFinite(model.limit.context) ? Math.round(model.limit.context / 1000) : undefined;
+  // Also called "variants": the effort levels a reasoning model accepts.
+  const effortOption = Array.isArray(model.reasoning_options)
+    ? model.reasoning_options.find((option) => option?.type === 'effort' && Array.isArray(option.values))
+    : undefined;
+  const efforts = effortOption?.values.filter((value) => typeof value === 'string');
   return {
     id: model.id,
     label: typeof model.name === 'string' && model.name.length > 0 ? model.name : model.id,
     ...(model.tool_call === true ? { toolCall: true } : {}),
     ...(model.reasoning === true ? { reasoning: true } : {}),
+    ...(efforts !== undefined && efforts.length > 0 ? { efforts } : {}),
     ...(model.attachment === true ? { vision: true } : {}),
     ...(limit !== undefined && limit > 0 ? { contextK: limit } : {})
   };
@@ -109,7 +130,7 @@ providers.sort((a, b) => {
 
 const modelCount = providers.reduce((sum, provider) => sum + provider.models.length, 0);
 const banner =
-  `/* AUTO-GENERATED from the models.dev catalog (the source opencode uses).\n` +
+  `/* AUTO-GENERATED from the models.dev catalog.\n` +
   ` * Do not edit by hand — regenerate with: node scripts/generateLlmCatalog.mjs\n` +
   ` * Providers: ${providers.length} · Models: ${modelCount}\n` +
   ` */\n`;
@@ -121,6 +142,8 @@ const body =
   `  readonly label: string;\n` +
   `  readonly toolCall?: boolean;\n` +
   `  readonly reasoning?: boolean;\n` +
+  `  /** Effort levels this model accepts (its \"variants\"). */\n` +
+  `  readonly efforts?: readonly string[];\n` +
   `  readonly vision?: boolean;\n` +
   `  readonly contextK?: number;\n` +
   `};\n\n` +

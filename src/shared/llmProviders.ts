@@ -1,7 +1,7 @@
 import { LLM_CATALOG, type LlmCatalogProvider } from './llmCatalog.generated';
 
 /**
- * opencode-style provider registry: a provider is a source of models with its
+ * Provider registry: a provider is a source of models with its
  * own connection method. The local Ollama engine is always usable; every cloud
  * provider from the generated models.dev catalog connects by storing an API
  * key in main-process safe storage and stays listed (but disabled) until
@@ -106,8 +106,10 @@ export const MEDIA_PROVIDERS: readonly LlmProviderInfo[] = [
     description: 'Video generation over the Luma Dream Machine API.'
   },
   {
-    id: 'minimax',
-    label: 'MiniMax',
+    // Distinct from the catalog's `minimax` chat provider; both read the same
+    // MiniMax credential slot, so one key connects chat and video.
+    id: 'minimax_hailuo',
+    label: 'MiniMax Hailuo',
     kind: 'cloud',
     auth: 'api-key',
     adapter: 'media',
@@ -116,30 +118,13 @@ export const MEDIA_PROVIDERS: readonly LlmProviderInfo[] = [
   }
 ];
 
-/**
- * OpenAI Codex parity with opencode: in opencode this provider signs in with a
- * ChatGPT Pro/Plus OAuth flow rather than an API key. That flow needs its own
- * reviewed implementation, so the entry is listed honestly as not-yet
- * connectable — the codex model family itself is usable today through the
- * regular OpenAI API-key provider (Responses API routing).
- */
-export const OPENAI_CODEX_PROVIDER: LlmProviderInfo = {
-  id: 'openai-codex',
-  label: 'OpenAI Codex',
-  kind: 'cloud',
-  auth: 'oauth',
-  adapter: 'openai-compatible',
-  description: 'Codex over ChatGPT Pro/Plus sign-in. Sign-in is not supported yet; use the OpenAI API-key provider for codex models.'
-};
-
 export const LLM_PROVIDERS: readonly LlmProviderInfo[] = [
   OLLAMA_PROVIDER,
   ...LLM_CATALOG.map(toProviderInfo),
-  ...MEDIA_PROVIDERS,
-  OPENAI_CODEX_PROVIDER
+  ...MEDIA_PROVIDERS
 ];
 
-/** opencode-style popular shortlist shown before "Show all providers". */
+/** Popular shortlist shown before "Show all providers". */
 export const POPULAR_LLM_PROVIDER_IDS: readonly string[] = [
   'anthropic',
   'openai',

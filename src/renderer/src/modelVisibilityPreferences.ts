@@ -1,5 +1,5 @@
 /**
- * opencode-style per-model visibility: every model is visible by default and
+ * Per-model visibility: every model is visible by default and
  * the Settings → Models switches persist only the hidden set locally. Keys are
  * `providerId:modelId` so the same model id under two providers stays distinct.
  */
@@ -14,7 +14,10 @@ export function parseHiddenModelKeys(raw: string | null | undefined): ReadonlySe
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((entry): entry is string => typeof entry === 'string' && entry.includes(':')));
+    const keys = parsed.filter((entry): entry is string => typeof entry === 'string' && entry.includes(':'));
+    return new Set(
+      keys.map((key) => key.startsWith('openai-codex:') ? `openai:${key.slice('openai-codex:'.length)}` : key)
+    );
   } catch {
     return new Set();
   }

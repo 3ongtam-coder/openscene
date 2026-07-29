@@ -10,8 +10,6 @@ export type AiDomainProvider = {
 
 export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
   { id: 'local_ollama', label: 'Ollama', executionPath: 'local' },
-  { id: 'local_qwen', label: 'Local Engine', executionPath: 'local' },
-  { id: 'local_video', label: 'Local Engine', executionPath: 'local' },
   { id: 'openai', label: 'OpenAI', executionPath: 'api' },
   { id: 'anthropic', label: 'Anthropic', executionPath: 'api' },
   { id: 'google_gemini', label: 'Google Gemini', executionPath: 'api' },
@@ -34,6 +32,10 @@ export type AiDomainModelConfig = {
   readonly availableContexts?: readonly string[];
   readonly precisionBit?: string;
   readonly availablePrecisions?: readonly string[];
+  /** Model supports a reasoning-effort setting. */
+  readonly reasoning?: boolean;
+  /** Effort levels this model accepts (its "variants"). */
+  readonly efforts?: readonly string[];
 };
 
 export type AiDomainModelPreferences = Record<AiDomain, string>;
@@ -41,18 +43,6 @@ export type AiDomainModelPreferences = Record<AiDomain, string>;
 export const AI_DOMAIN_MODEL_STORAGE_KEY = 'openvideo-ai-domain-model-preferences-v1';
 
 const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
-  {
-    id: 'local-qwen-tts',
-    providerId: 'local_qwen',
-    label: 'Qwen Speech Synthesis',
-    providerLabel: 'Local Engine',
-    description: 'User-configured local Qwen speech synthesis runner.',
-    executionPath: 'local',
-    precisionBit: '16-bit',
-    availablePrecisions: ['8-bit', '16-bit', 'FP32'],
-    domains: ['voice-generation'],
-    available: true
-  },
   // ── Voice generation: cloud TTS models. ElevenLabs and OpenAI adapters are
   // implemented; the rest stay honestly unavailable until an adapter lands.
   {
@@ -157,18 +147,6 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     domains: ['voice-generation'],
     available: false,
     unavailableReason: 'Groq PlayAI TTS adapter is not implemented in this build.'
-  },
-  {
-    id: 'local-video-runner',
-    providerId: 'local_video',
-    label: 'Video Synthesis Runner',
-    providerLabel: 'Local Engine',
-    description: 'User-configured local video synthesis runner.',
-    executionPath: 'local',
-    precisionBit: 'FP16',
-    availablePrecisions: ['8-bit (Q8_0)', 'FP16', 'FP32'],
-    domains: ['video-generation'],
-    available: true
   },
   // ── Video generation: cloud models. Veo (Gemini API) and Sora (OpenAI API)
   // adapters are implemented; the rest stay honestly unavailable.
@@ -300,9 +278,9 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   },
   {
     id: 'minimax-hailuo-02',
-    providerId: 'minimax',
+    providerId: 'minimax_hailuo',
     label: 'Hailuo 02',
-    providerLabel: 'MiniMax',
+    providerLabel: 'MiniMax Hailuo',
     description: 'MiniMax Hailuo text/image-to-video.',
     executionPath: 'api',
     domains: ['video-generation'],
@@ -321,7 +299,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     domains: ['edit-agent'],
     available: true
   },
-  // Every tool-calling model from the generated opencode/models.dev catalog is
+  // Every tool-calling model from the generated models.dev catalog is
   // an edit-agent candidate; the picker gates them on provider connection.
   ...LLM_CATALOG.flatMap((provider) =>
     provider.models
@@ -334,6 +312,8 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
         description: `${provider.label} cloud tool-calling model for agentic timeline editing.`,
         executionPath: 'api',
         ...(model.contextK === undefined ? {} : { contextWindow: `${model.contextK}k` }),
+        ...(model.reasoning === true ? { reasoning: true } : {}),
+        ...(model.efforts === undefined ? {} : { efforts: model.efforts }),
         domains: ['edit-agent'],
         available: true
       }))
@@ -343,7 +323,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
 const AI_DOMAINS: readonly AiDomain[] = ['voice-generation', 'video-generation', 'edit-agent'];
 
 export function formatAiModelOptionLabel(model: AiDomainModelConfig): string {
-  const isZen = model.id === 'qwen2.5-coder' || model.id === 'local-video-runner' || model.id === 'local-qwen-tts';
+  const isZen = model.id === 'qwen2.5-coder';
   const prefix = isZen ? '★ ' : '';
   const statusSuffix = model.available ? '' : ' (Unavailable)';
   return `${prefix}${model.providerLabel} → ${model.label}${statusSuffix}`;
@@ -373,7 +353,10 @@ export function parseAiDomainModelPreferences(stored: Partial<Record<AiDomain, s
   return Object.fromEntries(
     AI_DOMAINS.map((domain) => {
       const candidate = stored?.[domain];
-      const model = candidate === undefined ? undefined : getDomainModel(domain, candidate);
+      const normalizedCandidate = candidate?.startsWith('openai-codex/')
+        ? `openai/${candidate.slice('openai-codex/'.length)}`
+        : candidate;
+      const model = normalizedCandidate === undefined ? undefined : getDomainModel(domain, normalizedCandidate);
       return [domain, model?.available ? model.id : getDefaultDomainModelId(domain)];
     })
   ) as AiDomainModelPreferences;

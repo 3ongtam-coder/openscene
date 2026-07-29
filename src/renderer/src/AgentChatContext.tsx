@@ -1,8 +1,19 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import type { AgentChatDisplayMessage, AgentChatStatus, AgentToolCallProposal } from '../../shared/agentChat';
+import type { AgentChatDisplayMessage, AgentChatHistoryEntry, AgentChatStatus, AgentToolCallProposal } from '../../shared/agentChat';
 import type { EditAgentProjectContext } from '../../shared/editAgentContext';
 import type { AiDomainModelConfig } from '../../shared/aiDomainModels';
 import { isProviderConnected } from '../../shared/llmProviders';
+import { resolveOpenAiAuthMode, type ReasoningEffort } from '../../shared/openAiAuth';
+import {
+  REASONING_EFFORT_STORAGE_KEY,
+  parseReasoningEfforts,
+  resolveReasoningEffort,
+  serializeReasoningEfforts,
+  withReasoningEffort
+} from './reasoningEffortPreferences';
+import { buildAgentChatSessionRows, type AgentChatSessionRow } from './agentChatSessions';
+import { mergePendingUserMessage } from './agentChatTranscript';
+import { useChatGptAuth } from './ChatGptAuthContext';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { useLlmModel } from './LlmProviderContext';
 
@@ -18,6 +29,9 @@ interface AgentChatController {
   readonly isLocalModel: boolean;
   /** True when the selected model's provider is usable: local, or cloud with a stored key. */
   readonly modelReady: boolean;
+  /** Thinking effort chosen for the active model (undefined = provider default). */
+  readonly reasoningEffort: ReasoningEffort | undefined;
+  readonly setReasoningEffort: (effort: ReasoningEffort | undefined) => void;
   readonly input: string;
   readonly setInput: (value: string) => void;
   readonly messages: readonly AgentChatDisplayMessage[];
@@ -26,6 +40,10 @@ interface AgentChatController {
   readonly error: string | undefined;
   readonly isBusy: boolean;
   readonly activeProject: EditAgentProjectContext | null;
+  /** Saved conversations for this project, plus the one currently open. */
+  readonly sessions: readonly AgentChatSessionRow[];
+  readonly startNewSession: () => void;
+  readonly switchSession: (conversationId: string) => Promise<void>;
   readonly sendMessage: (text: string) => Promise<void>;
   readonly respondToApproval: (decision: 'approve' | 'deny') => Promise<void>;
   readonly resetConversation: () => Promise<void>;
@@ -48,6 +66,7 @@ type AgentChatProviderProps = {
 
 export function AgentChatProvider({ activeProject, restoreRequest = null, onRestoreHandled, children }: AgentChatProviderProps): ReactElement {
   const { providerConfig, credentialStatus } = useLlmModel();
+  const chatGptAuth = useChatGptAuth();
   const { selectedModel: getSelectedDomainModel } = useAiDomainModel();
   const selectedModel = getSelectedDomainModel('edit-agent');
   const conversationIdRef = useRef<string>(createConversationId());
@@ -58,16 +77,51 @@ export function AgentChatProvider({ activeProject, restoreRequest = null, onRest
   const [status, setStatus] = useState<AgentChatStatus>('idle');
   const [error, setError] = useState<string | undefined>(undefined);
   const [isBusy, setIsBusy] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<readonly AgentChatHistoryEntry[]>([]);
+  // Re-read after each turn so a session that just got its title shows it.
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [activeConversationId, setActiveConversationId] = useState(conversationIdRef.current);
   // Transcript restored from history: sent along with the next message so the
   // main process can re-seed an empty (e.g. post-relaunch) conversation thread.
   const restoredSeedRef = useRef<readonly AgentChatDisplayMessage[] | null>(null);
+  // Effort is stored per model, so switching models keeps each choice.
+  const [reasoningEfforts, setReasoningEfforts] = useState<Readonly<Record<string, ReasoningEffort>>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      return parseReasoningEfforts(window.localStorage.getItem(REASONING_EFFORT_STORAGE_KEY));
+    } catch {
+      return {};
+    }
+  });
 
   const isLocalModel = selectedModel.executionPath === 'local';
-  const modelReady = isLocalModel || isProviderConnected(selectedModel.providerId, credentialStatus);
+  // OpenAI has two connection methods: a stored API key, or ChatGPT sign-in for
+  // Codex-family models. Either one makes the model runnable.
+  const openAiAuthMode = resolveOpenAiAuthMode(selectedModel.id, chatGptAuth.isConnected);
+  const reasoningEffort = resolveReasoningEffort(reasoningEfforts, selectedModel);
+
+  const setReasoningEffort = (effort: ReasoningEffort | undefined): void => {
+    setReasoningEfforts((current) => {
+      const next = withReasoningEffort(current, selectedModel.id, effort);
+      if (next !== current) {
+        try {
+          window.localStorage.setItem(REASONING_EFFORT_STORAGE_KEY, serializeReasoningEfforts(next));
+        } catch {
+          // The in-memory choice stays usable when local storage is unavailable.
+        }
+      }
+      return next;
+    });
+  };
+  const modelReady =
+    isLocalModel ||
+    openAiAuthMode === 'chatgpt' ||
+    isProviderConnected(selectedModel.providerId, credentialStatus);
 
   useEffect(() => {
     if (restoreRequest === null) return;
     conversationIdRef.current = restoreRequest.conversationId;
+    setActiveConversationId(restoreRequest.conversationId);
     restoredSeedRef.current = restoreRequest.messages;
     setMessages(restoreRequest.messages);
     setPendingApproval(null);
@@ -77,9 +131,72 @@ export function AgentChatProvider({ activeProject, restoreRequest = null, onRest
     onRestoreHandled?.();
   }, [restoreRequest, onRestoreHandled]);
 
+  const projectId = activeProject?.projectId ?? null;
+
+  useEffect(() => {
+    if (projectId === null) {
+      setHistoryEntries([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const response = await window.videoTool.agentChatHistoryList();
+      if (!cancelled && response.ok) setHistoryEntries(response.value);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, historyRevision]);
+
+  const sessions = buildAgentChatSessionRows({ entries: historyEntries, projectId, activeConversationId });
+
+  const startNewSession = (): void => {
+    if (isBusy) return;
+    // The previous session stays in the project's saved history; only the
+    // thread this panel points at changes.
+    conversationIdRef.current = createConversationId();
+    setActiveConversationId(conversationIdRef.current);
+    restoredSeedRef.current = null;
+    setMessages([]);
+    setPendingApproval(null);
+    setStatus('idle');
+    setError(undefined);
+    setInput('');
+    setHistoryRevision((revision) => revision + 1);
+  };
+
+  const switchSession = async (conversationId: string): Promise<void> => {
+    if (isBusy || projectId === null || conversationId === conversationIdRef.current) return;
+    const response = await window.videoTool.agentChatHistoryGet({ projectId, conversationId });
+    if (!response.ok || response.value === null) {
+      setStatus('error');
+      setError(response.ok ? 'That conversation is no longer in this project.' : response.error.message);
+      return;
+    }
+    conversationIdRef.current = conversationId;
+    setActiveConversationId(conversationId);
+    // Seed the main-process thread from the stored transcript, the same path
+    // the home screen uses when reopening a conversation.
+    restoredSeedRef.current = response.value.messages;
+    setMessages(response.value.messages);
+    setPendingApproval(null);
+    setStatus('idle');
+    setError(undefined);
+    setInput('');
+  };
+
   const sendMessage = async (text: string): Promise<void> => {
     if (text.trim().length === 0 || isBusy || !modelReady) return;
 
+    // Echo the turn immediately. The main-process round trip takes as long as
+    // the model does, so waiting for it leaves the panel looking like the
+    // message was dropped.
+    const pendingUserMessage: AgentChatDisplayMessage = {
+      id: `pending-user-${createConversationId()}`,
+      role: 'user',
+      text
+    };
+    setMessages((current) => [...current, pendingUserMessage]);
     setIsBusy(true);
     setError(undefined);
     setStatus('thinking');
@@ -92,16 +209,24 @@ export function AgentChatProvider({ activeProject, restoreRequest = null, onRest
         modelId: selectedModel.id,
         ollamaBaseUrl: providerConfig.ollamaBaseUrl,
         activeProject: activeProject ?? undefined,
+        openAiAuthMode,
+        reasoningEffort,
         restoredMessages: restoredSeedRef.current ?? undefined
       });
 
       if (response.ok) {
         restoredSeedRef.current = null;
-        setMessages(response.value.messages);
+        setHistoryRevision((revision) => revision + 1);
+        setMessages(
+          response.value.status === 'error'
+            ? mergePendingUserMessage(response.value.messages, pendingUserMessage)
+            : response.value.messages
+        );
         setPendingApproval(response.value.pendingApproval);
         setStatus(response.value.status);
         setError(response.value.error);
       } else {
+        // The echoed turn stays on screen so the error reads as a reply to it.
         setStatus('error');
         setError(response.error.message);
       }
@@ -169,6 +294,8 @@ export function AgentChatProvider({ activeProject, restoreRequest = null, onRest
     selectedModel,
     isLocalModel,
     modelReady,
+    reasoningEffort,
+    setReasoningEffort,
     input,
     setInput,
     messages,
@@ -177,6 +304,9 @@ export function AgentChatProvider({ activeProject, restoreRequest = null, onRest
     error,
     isBusy,
     activeProject,
+    sessions,
+    startNewSession,
+    switchSession,
     sendMessage,
     respondToApproval,
     resetConversation
