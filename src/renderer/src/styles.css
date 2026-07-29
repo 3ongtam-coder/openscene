@@ -5384,6 +5384,80 @@ button {
 
 /* Session switcher: conversations are kept per project so work can be split
    across several and picked up again. */
+/* Context window meter: how much of the model's window this conversation is
+   using, from the newest turn that reported tokens. */
+.agent-chat-context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.agent-chat-context-meter__track {
+  flex: none;
+  width: 56px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-inset);
+}
+
+.agent-chat-context-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+
+.agent-chat-context-meter__label {
+  color: var(--text-weak);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+}
+
+.agent-chat-context-meter--warning .agent-chat-context-meter__fill {
+  background: var(--color-warning, var(--color-primary));
+}
+
+.agent-chat-context-meter--overflow .agent-chat-context-meter__fill {
+  background: var(--color-danger);
+}
+
+/* Shown once the window is nearly, or entirely, spent. */
+.agent-chat-context-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  color: var(--text-weak);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+
+.agent-chat-context-notice--overflow {
+  border-color: var(--color-danger);
+  color: var(--color-text);
+}
+
+.agent-chat-approval__feedback input {
+  width: 100%;
+  min-height: var(--control-compact-min-height);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--surface-inset);
+  font: inherit;
+  font-size: var(--text-caption);
+}
+
 .agent-chat-panel__sessions {
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--line-subtle);
