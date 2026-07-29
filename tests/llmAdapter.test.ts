@@ -111,6 +111,7 @@ describe('LlmExecutionAdapter (main process)', () => {
       await credentialStore.setCredential('openaiApiKey', 'sk-test-valid-openai-key-12345');
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
         expect(url).toBe('https://api.openai.com/v1/chat/completions');
+        expect(url).not.toContain('/v1/responses');
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test-valid-openai-key-12345');
         const body = JSON.parse(init.body as string);
         expect(body.model).toBe('gpt-5');
@@ -156,6 +157,28 @@ describe('LlmExecutionAdapter (main process)', () => {
     }
   });
 
+  it('sends Anthropic-compatible gateway completions to the gateway base URL, not api.anthropic.com', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cred-test-minimax-'));
+    try {
+      const credentialStore = new CredentialStore(tempDir);
+      await credentialStore.setCredential('minimax', 'mm-test-key');
+      const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+        expect(url).toBe('https://api.minimax.io/anthropic/v1/messages');
+        expect((init.headers as Record<string, string>)['x-api-key']).toBe('mm-test-key');
+        expect(JSON.parse(init.body as string).model).toBe('MiniMax-M2');
+        return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), { status: 200 });
+      });
+      const adapter = new LlmExecutionAdapter(credentialStore, { fetchImpl: fetchMock as unknown as typeof fetch });
+
+      const result = await adapter.executeCompletion({ modelId: 'minimax/MiniMax-M2', prompt: 'Hi' });
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('sends Gemini completions with the key in a header — never in the URL — and DeepSeek over the OpenAI-compatible API', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'cred-test-gemini-'));
     try {
@@ -192,6 +215,7 @@ describe('LlmExecutionAdapter (main process)', () => {
       await credentialStore.setCredential('openaiApiKey', 'sk-codex-key');
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
         expect(url).toBe('https://api.openai.com/v1/responses');
+        expect(url).not.toContain('chatgpt.com/backend-api/codex/responses');
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-codex-key');
         const body = JSON.parse(init.body as string);
         expect(body.model).toBe('gpt-5.3-codex');

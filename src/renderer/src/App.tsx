@@ -5,12 +5,19 @@ import type { EditAgentProjectContext } from '../../shared/editAgentContext';
 import { AppShell } from './AppShell';
 import type { AgentChatRestoreRequest } from './AgentChatContext';
 import { FirstRunOnboarding } from './FirstRunOnboarding';
-import { HomePage } from './HomePage';
-import { NarrationPanel } from './NarrationPanel';
 import { ProjectResultImportProvider } from './ProjectResultImportContext';
+import { Tabs } from './ui';
+import { NarrationPanel } from './NarrationPanel';
+import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
+import {
+  WORKSPACE_TAB_IDS,
+  WORKSPACE_TAB_LABELS,
+  WORKSPACE_TAB_STORAGE_KEY,
+  parseWorkspaceTabId,
+  type WorkspaceTabId
+} from './workspaceTabs';
 import { ProjectsPage } from './ProjectsPage';
 import { SettingsWorkspace } from './SettingsWorkspace';
-import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
 import { APP_PAGE_BY_ID, getDefaultAppPageId, isProjectRequiredPageId, isWorkspacePageId } from './appPages';
 import type { AppPageId } from './appPages';
 import { popPageHistory, pushPageHistory } from './appNavigationHistory';
@@ -20,7 +27,7 @@ import { TimelineEditor } from './editor/TimelineEditor';
 import { readFirstRunOnboardingCompletion, resetFirstRunOnboardingCompletion, writeFirstRunOnboardingCompletion } from './firstRunOnboardingPreference';
 import { useTimelineEditor } from './editor/useTimelineEditor';
 
-const [EDIT_WORKSPACE, VOICE_GENERATION_WORKSPACE, VIDEO_GENERATION_WORKSPACE] = APP_WORKSPACES;
+const [EDIT_WORKSPACE] = APP_WORKSPACES;
 
 const APP_WORKSPACE_PANEL_STYLE = {
   height: '100%',
@@ -108,22 +115,6 @@ export function App(): ReactElement {
     navigateToPage(pageId);
   }, [hasActiveProject, navigateToPage]);
 
-  const setActiveWorkspace = useCallback((workspaceId: AppWorkspaceId): void => {
-    if (!hasActiveProject) {
-      navigateToPage('projects');
-      return;
-    }
-
-    if (workspaceId === activeWorkspaceId && activePageId === workspaceId) {
-      focusPagePanel(workspaceId);
-      return;
-    }
-
-    setPageHistory((current) => pushPageHistory(current, activePageId));
-    requestPageFocus(workspaceId);
-    setActiveWorkspaceId(workspaceId);
-    setActivePageId(workspaceId);
-  }, [activePageId, activeWorkspaceId, focusPagePanel, hasActiveProject, navigateToPage, requestPageFocus]);
 
   const completeFirstRunOnboarding = useCallback((): void => {
     writeFirstRunOnboardingCompletion(window.localStorage);
@@ -188,36 +179,35 @@ export function App(): ReactElement {
   }, []);
 
   const workspaceIsVisible = isWorkspacePageId(activePageId);
+  // Which workspace surface is showing; remembered across launches.
+  const [workspaceTabId, setWorkspaceTabId] = useState<WorkspaceTabId>(() =>
+    typeof window === 'undefined' ? 'edit' : parseWorkspaceTabId(window.localStorage.getItem(WORKSPACE_TAB_STORAGE_KEY))
+  );
+
+  const selectWorkspaceTab = (tabId: WorkspaceTabId): void => {
+    setWorkspaceTabId(tabId);
+    try {
+      window.localStorage.setItem(WORKSPACE_TAB_STORAGE_KEY, tabId);
+    } catch {
+      // The in-memory choice stays usable when local storage is unavailable.
+    }
+  };
 
   return (
-    <AppShell
-      activePage={activePage}
-      hasActiveProject={hasActiveProject}
-      onPageChange={setActivePage}
-      activeProjectContext={activeProjectContext}
-      chatRestoreRequest={chatRestoreRequest}
-      onChatRestoreHandled={clearChatRestoreRequest}
-      canNavigateBack={pageHistory.length > 0}
-      onNavigateBack={navigateBack}
-    >
-      <ProjectResultImportProvider editor={editor}>
-        <div className="app-page-stack">
-          <section
-            aria-labelledby="home-page-title"
-            className="app-page app-page--home"
-            hidden={activePageId !== 'home'}
-            id="app-page-panel-home"
-            ref={setPagePanelRef('home')}
-            role="region"
-            tabIndex={-1}
-          >
-            <HomePage
-              onWorkspaceOpen={setActiveWorkspace}
-              workspaces={APP_WORKSPACES}
-              project={editor.project}
-              onGoToProjects={() => setActivePage('projects')}
-            />
-          </section>
+    // The result-import provider wraps the shell, not just the page stack: the
+    // Studio side panel lives in the shell and imports what it generates.
+    <ProjectResultImportProvider editor={editor}>
+      <AppShell
+        activePage={activePage}
+        hasActiveProject={hasActiveProject}
+        onPageChange={setActivePage}
+        activeProjectContext={activeProjectContext}
+        chatRestoreRequest={chatRestoreRequest}
+        onChatRestoreHandled={clearChatRestoreRequest}
+        canNavigateBack={pageHistory.length > 0}
+        onNavigateBack={navigateBack}
+      >
+      <div className="app-page-stack">
           <section
             aria-labelledby="projects-page-title"
             className="app-page app-page--projects"
@@ -233,11 +223,11 @@ export function App(): ReactElement {
               chats={chatHistory}
               onOpenProject={async (projectId) => {
                 const opened = await editor.openProject(projectId);
-                if (opened) navigateToPage('home');
+                if (opened) navigateToPage('edit');
               }}
               onOpenProjectFolder={async () => {
                 const opened = await editor.openProjectFolder();
-                if (opened) navigateToPage('home');
+                if (opened) navigateToPage('edit');
               }}
               onOpenChat={openChatFromHistory}
               errorText={editor.statusMessage.tone === 'danger' ? editor.statusMessage.text : undefined}
@@ -245,10 +235,21 @@ export function App(): ReactElement {
             />
           </section>
           <div className="app-stack local-edit-bay" hidden={!workspaceIsVisible}>
+            {/* Workspace switcher: the editor and the two generation studios
+                share the area, so a generated clip lands on the timeline
+                without leaving the workspace or the agent chat beside it. */}
+            <Tabs
+              activeTabId={workspaceTabId}
+              idBase="workspace"
+              tabs={WORKSPACE_TAB_IDS.map((id) => ({ id, label: WORKSPACE_TAB_LABELS[id] }))}
+              onActiveTabChange={selectWorkspaceTab}
+              className="workspace-tabs"
+              aria-label="Workspace sections"
+            />
             <div className="app-workspace-panel-stack">
               <section
                 aria-labelledby={EDIT_WORKSPACE.navId}
-                hidden={activeWorkspaceId !== EDIT_WORKSPACE.id || !workspaceIsVisible}
+                hidden={workspaceTabId !== 'edit' || activeWorkspaceId !== EDIT_WORKSPACE.id || !workspaceIsVisible}
                 id={EDIT_WORKSPACE.panelId}
                 ref={setPagePanelRef(EDIT_WORKSPACE.id)}
                 role="region"
@@ -259,27 +260,23 @@ export function App(): ReactElement {
                 <TimelineEditor editor={editor} />
               </section>
               <section
-                aria-labelledby={VOICE_GENERATION_WORKSPACE.navId}
-                hidden={activeWorkspaceId !== VOICE_GENERATION_WORKSPACE.id || !workspaceIsVisible}
-                id={VOICE_GENERATION_WORKSPACE.panelId}
-                ref={setPagePanelRef(VOICE_GENERATION_WORKSPACE.id)}
+                aria-label={WORKSPACE_TAB_LABELS.voice}
+                className="workspace-studio-panel"
+                hidden={workspaceTabId !== 'voice' || !workspaceIsVisible}
                 role="region"
                 style={APP_WORKSPACE_PANEL_STYLE}
                 tabIndex={-1}
               >
-                <h2 className="visually-hidden" id={VOICE_GENERATION_WORKSPACE.navId}>{VOICE_GENERATION_WORKSPACE.label}</h2>
                 <NarrationPanel />
               </section>
               <section
-                aria-labelledby={VIDEO_GENERATION_WORKSPACE.navId}
-                hidden={activeWorkspaceId !== VIDEO_GENERATION_WORKSPACE.id || !workspaceIsVisible}
-                id={VIDEO_GENERATION_WORKSPACE.panelId}
-                ref={setPagePanelRef(VIDEO_GENERATION_WORKSPACE.id)}
+                aria-label={WORKSPACE_TAB_LABELS.video}
+                className="workspace-studio-panel"
+                hidden={workspaceTabId !== 'video' || !workspaceIsVisible}
                 role="region"
                 style={APP_WORKSPACE_PANEL_STYLE}
                 tabIndex={-1}
               >
-                <h2 className="visually-hidden" id={VIDEO_GENERATION_WORKSPACE.navId}>{VIDEO_GENERATION_WORKSPACE.label}</h2>
                 <VideoGenerationWorkspace />
               </section>
             </div>
@@ -295,9 +292,9 @@ export function App(): ReactElement {
           >
             <SettingsWorkspace onReplayFirstRunOnboarding={replayFirstRunOnboarding} />
           </section>
-        </div>
-      </ProjectResultImportProvider>
+      </div>
       {showFirstRunOnboarding && <FirstRunOnboarding onComplete={completeFirstRunOnboarding} />}
-    </AppShell>
+      </AppShell>
+    </ProjectResultImportProvider>
   );
 }

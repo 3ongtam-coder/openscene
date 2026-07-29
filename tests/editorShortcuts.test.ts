@@ -12,6 +12,7 @@ import {
   formatEditorShortcutChordForAria,
   formatEditorShortcutChordForDisplay,
   getEditorShortcutBindings,
+  isEditorShortcutBindingMatch,
   isEditorShortcutEventMatch,
   isReservedEditorShortcutChord,
   parseEditorShortcutChord,
@@ -22,6 +23,58 @@ import {
 } from '../src/renderer/src/editor/editorShortcuts';
 
 describe('editor shortcuts', () => {
+  it('Given a Mac delete key, When pressed, Then the default Delete binding still fires', () => {
+    const bindings = getEditorShortcutBindings(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+    const deleteBinding = bindings.find((binding) => binding.actionId === 'deleteSelection')!;
+    const backspace = { altKey: false, ctrlKey: false, key: 'Backspace', metaKey: false, shiftKey: false };
+
+    // Apple keyboards report the main delete key as Backspace.
+    expect(isEditorShortcutBindingMatch(backspace, deleteBinding)).toBe(true);
+    expect(isEditorShortcutBindingMatch({ ...backspace, key: 'Delete' }, deleteBinding)).toBe(true);
+
+    // A custom chord replaces the alternates rather than stacking with them.
+    const remapped = setEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'deleteSelection', { key: 'X', modifiers: ['Meta'] });
+    expect(remapped.ok).toBe(true);
+    const custom = getEditorShortcutBindings(remapped.ok ? remapped.preferences : EDITOR_SHORTCUT_DEFAULT_PREFERENCES)
+      .find((binding) => binding.actionId === 'deleteSelection')!;
+    expect(isEditorShortcutBindingMatch(backspace, custom)).toBe(false);
+  });
+
+  it('Given arrow-key bindings, When parsed and pressed, Then they resolve like any other chord', () => {
+    // Arrows were unparseable before, so playhead and nudge chords could not exist.
+    expect(parseEditorShortcutChord('alt + left')).toEqual({ key: 'ArrowLeft', modifiers: ['Alt'] });
+    const bindings = getEditorShortcutBindings(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
+    const stepForward = bindings.find((binding) => binding.actionId === 'stepForward')!;
+    const nudgeRight = bindings.find((binding) => binding.actionId === 'nudgeSelectionRight')!;
+    const arrowRight = { altKey: false, ctrlKey: false, key: 'ArrowRight', metaKey: false, shiftKey: false };
+
+    expect(isEditorShortcutBindingMatch(arrowRight, stepForward)).toBe(true);
+    expect(isEditorShortcutBindingMatch(arrowRight, nudgeRight)).toBe(false);
+    expect(isEditorShortcutBindingMatch({ ...arrowRight, altKey: true }, nudgeRight)).toBe(true);
+    expect(isEditorShortcutBindingMatch({ ...arrowRight, altKey: true }, stepForward)).toBe(false);
+  });
+
+  it('Given the default bindings, When checked for conflicts, Then no two actions share a chord', () => {
+    expect(findEditorShortcutConflicts(getEditorShortcutBindings(EDITOR_SHORTCUT_DEFAULT_PREFERENCES))).toEqual([]);
+  });
+
+  it('Given a disabled binding, When its chord is pressed, Then nothing matches', () => {
+    const preferences = disableEditorShortcutBindingPreference(EDITOR_SHORTCUT_DEFAULT_PREFERENCES, 'selectAll');
+    const binding = getEditorShortcutBindings(preferences).find((entry) => entry.actionId === 'selectAll')!;
+
+    expect(binding.isEnabled).toBe(false);
+    expect(isEditorShortcutBindingMatch({ altKey: false, ctrlKey: false, key: 'a', metaKey: true, shiftKey: false }, binding)).toBe(false);
+  });
+
+  it('Given the select-all default, When Meta+A is pressed, Then it matches', () => {
+    const binding = getEditorShortcutBindings(EDITOR_SHORTCUT_DEFAULT_PREFERENCES).find((entry) => entry.actionId === 'selectAll')!;
+
+    expect(binding.chord).toEqual({ key: 'A', modifiers: ['Meta'] });
+    expect(isEditorShortcutBindingMatch({ altKey: false, ctrlKey: false, key: 'a', metaKey: true, shiftKey: false }, binding)).toBe(true);
+    // Plain "a" must keep typing normally.
+    expect(isEditorShortcutBindingMatch({ altKey: false, ctrlKey: false, key: 'a', metaKey: false, shiftKey: false }, binding)).toBe(false);
+  });
+
   it('Given no stored shortcut preferences, When parsed, Then the defaults stay stable', () => {
     expect(parseEditorShortcutPreferences(null)).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
     expect(parseEditorShortcutPreferences(undefined)).toEqual(EDITOR_SHORTCUT_DEFAULT_PREFERENCES);
@@ -31,6 +84,16 @@ describe('editor shortcuts', () => {
       'redo',
       'deleteSelection',
       'splitSelection',
+      'selectAll',
+      'clearSelection',
+      'duplicateSelection',
+      'saveTimeline',
+      'stepBackward',
+      'stepForward',
+      'nudgeSelectionLeft',
+      'nudgeSelectionRight',
+      'goToStart',
+      'goToEnd',
       'toggleLeftDock',
       'toggleInspector',
       'resetLayout',

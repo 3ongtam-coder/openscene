@@ -2,9 +2,11 @@ import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 
 import type { LocalFfmpegRuntimeStatus } from '../../shared/exportTypes';
 import { DEFAULT_LLM_MODELS, type LlmProviderId } from '../../shared/llmModels';
-import { LLM_PROVIDERS, MEDIA_PROVIDERS, OPENAI_CODEX_PROVIDER, POPULAR_LLM_PROVIDER_IDS, isProviderConnected, type LlmProviderInfo } from '../../shared/llmProviders';
+import { LLM_PROVIDERS, MEDIA_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, isProviderConnected, type LlmProviderInfo } from '../../shared/llmProviders';
+import { isOpenAiCodexModelKey, resolveOpenAiAuthMode } from '../../shared/openAiAuth';
+import { useChatGptAuth } from './ChatGptAuthContext';
 import { useModelVisibility } from './ModelVisibilityContext';
-import { ProviderConnectDialog } from './ProviderConnectDialog';
+import { ProviderConnectDialog, type ProviderOAuthMethod } from './ProviderConnectDialog';
 import { AiDomainModelSelector } from './AiDomainModelSelector';
 import { TimelineShortcutMap } from './editor/TimelineEditorLayoutControls';
 import { useEditorShortcutPreference } from './editor/useEditorShortcutPreference';
@@ -17,9 +19,9 @@ import { classNames } from './ui/classNames';
 const SETTINGS_SECTIONS = [
   { id: 'appearance', title: 'Appearance', description: 'Theme mode and command desk presets.' },
   { id: 'local-tools', title: 'Local Tools', description: 'Local runtime readiness for desktop capture, narration, and final export.' },
-  { id: 'voice', title: 'Voice', description: 'Voice model preference and consent-based local narration boundaries.' },
+  { id: 'voice', title: 'Voice', description: 'Cloud voice generation boundaries and where its models are managed.' },
   { id: 'video', title: 'Video', description: 'Video model preference and local result import boundaries.' },
-  { id: 'providers', title: 'Providers', description: 'Connected providers and popular providers to connect, opencode-style.' },
+  { id: 'providers', title: 'Providers', description: 'Connected providers, and popular providers to connect.' },
   { id: 'models', title: 'Models', description: 'Search the model catalog and choose which models appear in pickers.' },
   { id: 'edit-agent', title: 'Edit Agent', description: 'Model preference for the persistent right-side agent.' },
   { id: 'shortcuts', title: 'Shortcuts', description: 'Timeline editor keyboard shortcut remapping.' },
@@ -44,7 +46,7 @@ type SettingsWorkspaceProps = {
   readonly onReplayFirstRunOnboarding: () => void;
 };
 
-// Cloud LLM provider rows derive from the shared opencode-style provider
+// Cloud LLM provider rows derive from the shared provider
 // registry; media-generation providers get their own subsection.
 const CLOUD_PROVIDERS: readonly LlmProviderInfo[] = LLM_PROVIDERS.filter(
   (provider) => provider.auth === 'api-key' && provider.credentialKey !== undefined && provider.adapter !== 'media'
@@ -57,7 +59,7 @@ function getSettingsSection(sectionId: SettingsSectionId): SettingsSection {
 const MODEL_ROW_RENDER_CAP = 250;
 
 /**
- * Grouped catalog for the opencode-style Models section. Without a search the
+ * Grouped catalog for the Models section. Without a search the
  * full ~4300-model catalog would swamp the DOM, so the default view shows the
  * local engine plus the popular providers; searching sweeps everything, with
  * rendered rows capped and the overflow reported.
@@ -109,6 +111,7 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('appearance');
   const { isModelVisible, setModelVisibility } = useModelVisibility();
   const [connectTarget, setConnectTarget] = useState<LlmProviderInfo | null>(null);
+  const chatGptAuth = useChatGptAuth();
   const [showAllProviders, setShowAllProviders] = useState(false);
   const [providerFilter, setProviderFilter] = useState('');
   const [disconnectingKey, setDisconnectingKey] = useState<string | null>(null);
@@ -140,6 +143,7 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
     try {
       const response = await window.videoTool.executeLlmPrompt({
         modelId: selectedModelId,
+        openAiAuthMode: resolveOpenAiAuthMode(selectedModelId, chatGptAuth.isConnected),
         prompt: 'Reply with a short one-sentence greeting to confirm you are online.',
         ...(providerConfig.ollamaBaseUrl ? { ollamaBaseUrl: providerConfig.ollamaBaseUrl } : {})
       });
@@ -162,6 +166,19 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
 
   const isProviderKeyStored = (provider: LlmProviderInfo): boolean =>
     provider.credentialKey !== undefined && credentialStatus[provider.credentialKey] === true;
+
+  /** OpenAI is one unified provider with two methods: API key and ChatGPT sign-in. */
+  const isProviderLinked = (provider: LlmProviderInfo): boolean =>
+    isProviderKeyStored(provider) || (provider.id === 'openai' && chatGptAuth.isConnected);
+
+  const chatGptSignInMethod: ProviderOAuthMethod = {
+    label: 'ChatGPT Pro/Plus',
+    description: 'Sign in with your ChatGPT account to run Codex-family models.',
+    isConnecting: chatGptAuth.state === 'connecting',
+    ...(chatGptAuth.error === undefined ? {} : { error: chatGptAuth.error }),
+    onSignIn: chatGptAuth.connect,
+    onCancel: chatGptAuth.cancel
+  };
 
   const renderActiveSection = (): ReactNode => {
     switch (activeSectionId) {
@@ -189,14 +206,14 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
         return (
           <>
             <StatusCard tone={ffmpegView.tone}>{ffmpegView.text}</StatusCard>
-            <MetadataList items={[{ term: 'Screen permission', description: 'Checked by the recorder when capture starts.' }, { term: 'Local Qwen', description: 'User-configured runtime only; no model download is bundled.' }]} />
+            <MetadataList items={[{ term: 'Screen permission', description: 'Checked by the recorder when capture starts.' }, { term: 'Ollama', description: 'The only local engine; it serves the Edit Agent and needs no bundled download.' }]} />
           </>
         );
       case 'voice':
         return (
           <>
             <StatusCard tone="neutral">Voice generation models are managed inside the Voice Generation workspace; connect ElevenLabs or another media provider under Providers to unlock cloud synthesis.</StatusCard>
-            <StatusCard tone="neutral">Voice samples must be user-owned or authorized, stored locally, and deletable from local app storage.</StatusCard>
+            <StatusCard tone="neutral">Scripts are sent to the connected voice provider only when you generate; generated audio is written to local app storage.</StatusCard>
           </>
         );
       case 'video':
@@ -207,13 +224,13 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
           </>
         );
       case 'providers': {
-        const connectedProviders = CLOUD_PROVIDERS.filter((provider) => isProviderKeyStored(provider));
+        const connectedProviders = CLOUD_PROVIDERS.filter((provider) => isProviderLinked(provider));
         const popularProviders = CLOUD_PROVIDERS.filter(
-          (provider) => !isProviderKeyStored(provider) && POPULAR_LLM_PROVIDER_IDS.includes(provider.id)
+          (provider) => !isProviderLinked(provider) && POPULAR_LLM_PROVIDER_IDS.includes(provider.id)
         );
         const providerQuery = providerFilter.trim().toLowerCase();
         const otherProviders = CLOUD_PROVIDERS.filter(
-          (provider) => !isProviderKeyStored(provider) && !POPULAR_LLM_PROVIDER_IDS.includes(provider.id)
+          (provider) => !isProviderLinked(provider) && !POPULAR_LLM_PROVIDER_IDS.includes(provider.id)
         );
         const matchedOtherProviders = otherProviders.filter(
           (provider) => providerQuery.length === 0 || provider.label.toLowerCase().includes(providerQuery) || provider.id.toLowerCase().includes(providerQuery)
@@ -234,17 +251,32 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
                     <input id="ollama-base-url" type="text" value={providerConfig.ollamaBaseUrl ?? ''} placeholder="http://localhost:11434" onChange={(event) => updateProviderConfig({ ollamaBaseUrl: event.target.value })} />
                   </label>
                 </div>
-                {connectedProviders.map((provider) => (
-                  <div key={provider.id} className="settings-list__row">
-                    <div className="settings-list__main">
-                      <span className="settings-list__name">{provider.label}</span>
-                      <span className="settings-tag">API key</span>
+                {connectedProviders.map((provider) => {
+                  const keyStored = isProviderKeyStored(provider);
+                  const chatGptLinked = provider.id === 'openai' && chatGptAuth.isConnected;
+                  return (
+                    <div key={provider.id} className="settings-list__row">
+                      <div className="settings-list__main">
+                        <span className="settings-list__name">{provider.label}</span>
+                        {keyStored && <span className="settings-tag">API key</span>}
+                        {chatGptLinked && <span className="settings-tag">ChatGPT</span>}
+                      </div>
+                      <div className="settings-list__actions">
+                        {provider.id === 'openai' && !chatGptLinked && (
+                          <Button variant="default" onClick={() => setConnectTarget(provider)}>+ Add ChatGPT</Button>
+                        )}
+                        {chatGptLinked && (
+                          <Button variant="ghost" onClick={() => void chatGptAuth.disconnect()}>Sign out of ChatGPT</Button>
+                        )}
+                        {keyStored && (
+                          <Button variant="ghost" onClick={() => void disconnectProvider(provider)} disabled={disconnectingKey === provider.credentialKey}>
+                            {disconnectingKey === provider.credentialKey ? 'Disconnecting…' : 'Disconnect key'}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <Button variant="ghost" onClick={() => void disconnectProvider(provider)} disabled={disconnectingKey === provider.credentialKey}>
-                      {disconnectingKey === provider.credentialKey ? 'Disconnecting…' : 'Disconnect'}
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -258,21 +290,16 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
                     <div key={provider.id} className="settings-list__row">
                       <div className="settings-list__main settings-list__main--stacked">
                         <span className="settings-list__name">{provider.label}</span>
-                        <span className="settings-list__note">{provider.description}</span>
+                        <span className="settings-list__note">
+                          {provider.id === 'openai'
+                            ? 'Connect with an API key for the public API, or sign in with ChatGPT Pro/Plus to run Codex-family models.'
+                            : provider.description}
+                        </span>
                       </div>
                       <Button variant="default" onClick={() => setConnectTarget(provider)}>+ Connect</Button>
                     </div>
                   ))
                 )}
-                {/* opencode parity: Codex signs in with ChatGPT OAuth, which is
-                    not implemented yet — listed honestly instead of pretending. */}
-                <div className="settings-list__row">
-                  <div className="settings-list__main settings-list__main--stacked">
-                    <span className="settings-list__name">{OPENAI_CODEX_PROVIDER.label}</span>
-                    <span className="settings-list__note">{OPENAI_CODEX_PROVIDER.description}</span>
-                  </div>
-                  <Button variant="default" disabled title="ChatGPT sign-in is not supported yet">Sign in — not supported yet</Button>
-                </div>
               </div>
             </div>
 
@@ -347,6 +374,7 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
                 provider={connectTarget}
                 onConnect={(apiKey) => saveProviderCredential(connectTarget.credentialKey as LlmCredentialKey, apiKey)}
                 onClose={() => setConnectTarget(null)}
+                {...(connectTarget.id === 'openai' ? { oauthMethod: chatGptSignInMethod } : {})}
               />
             )}
           </>
@@ -414,7 +442,7 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
             {truncatedCount > 0 && (
               <p className="settings-list__note">{truncatedCount} more matching models — refine your search.</p>
             )}
-            <StatusCard tone="neutral">Switches control picker visibility only — a model becomes usable once its provider is connected in Settings → Providers. Without a search the local engine and popular providers are shown; searching sweeps the full opencode/models.dev catalog. The active selection always stays listed.</StatusCard>
+            <StatusCard tone="neutral">Switches control picker visibility only — a model becomes usable once its provider is connected in Settings → Providers. Without a search the local engine and popular providers are shown; searching sweeps the full models.dev catalog. The active selection always stays listed.</StatusCard>
           </>
         );
       }
@@ -427,7 +455,9 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
               {DEFAULT_LLM_MODELS
                 .filter((model) =>
                   model.id === selectedModelId ||
-                  ((model.providerId === 'local_ollama' || isProviderConnected(model.providerId, credentialStatus)) &&
+                  ((model.providerId === 'local_ollama' ||
+                    isProviderConnected(model.providerId, credentialStatus) ||
+                    (chatGptAuth.isConnected && isOpenAiCodexModelKey(model.id))) &&
                     isModelVisible(model.providerId, model.id)))
                 .map((model) => <option key={model.id} value={model.id}>{model.label} ({model.providerLabel}) - [{model.badge}]</option>)}
             </select>

@@ -7,6 +7,16 @@ export const EDITOR_SHORTCUT_ACTION_IDS = [
   'redo',
   'deleteSelection',
   'splitSelection',
+  'selectAll',
+  'clearSelection',
+  'duplicateSelection',
+  'saveTimeline',
+  'stepBackward',
+  'stepForward',
+  'nudgeSelectionLeft',
+  'nudgeSelectionRight',
+  'goToStart',
+  'goToEnd',
   'toggleLeftDock',
   'toggleInspector',
   'resetLayout',
@@ -26,6 +36,12 @@ export type EditorShortcutDefinition = {
   readonly label: string;
   readonly ariaLabel: string;
   readonly defaultChord: EditorShortcutChord;
+  /**
+   * Extra chords the default binding also answers to, for keys that differ by
+   * keyboard. They apply only while the binding is at its default — a custom
+   * chord replaces them — and never take part in conflict detection.
+   */
+  readonly alternateChords?: readonly EditorShortcutChord[];
 };
 
 export type EditorShortcutPreferences = {
@@ -65,7 +81,15 @@ const MODIFIER_TOKENS: Readonly<Record<string, EditorShortcutModifier>> = {
 };
 
 const KEY_TOKENS: Readonly<Record<string, string>> = {
+  arrowdown: 'ArrowDown',
+  arrowleft: 'ArrowLeft',
+  arrowright: 'ArrowRight',
+  arrowup: 'ArrowUp',
   backspace: 'Backspace',
+  down: 'ArrowDown',
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  up: 'ArrowUp',
   delete: 'Delete',
   end: 'End',
   enter: 'Enter',
@@ -117,6 +141,9 @@ export const EDITOR_SHORTCUT_DEFINITIONS: readonly EditorShortcutDefinition[] = 
     actionId: 'deleteSelection',
     ariaLabel: 'Delete the current selection',
     defaultChord: { key: 'Delete', modifiers: [] },
+    // The main delete key on Apple keyboards reports Backspace, so binding only
+    // Delete left the shortcut dead on a Mac.
+    alternateChords: [{ key: 'Backspace', modifiers: [] }],
     label: 'Delete'
   },
   {
@@ -124,6 +151,66 @@ export const EDITOR_SHORTCUT_DEFINITIONS: readonly EditorShortcutDefinition[] = 
     ariaLabel: 'Split the selected clip',
     defaultChord: { key: 'S', modifiers: [] },
     label: 'Split'
+  },
+  {
+    actionId: 'selectAll',
+    ariaLabel: 'Select every clip on the timeline',
+    defaultChord: { key: 'A', modifiers: ['Meta'] },
+    label: 'Select all clips'
+  },
+  {
+    actionId: 'clearSelection',
+    ariaLabel: 'Clear the current selection',
+    defaultChord: { key: 'Escape', modifiers: [] },
+    label: 'Clear selection'
+  },
+  {
+    actionId: 'duplicateSelection',
+    ariaLabel: 'Duplicate the selected clip',
+    defaultChord: { key: 'D', modifiers: ['Meta'] },
+    label: 'Duplicate clip'
+  },
+  {
+    actionId: 'saveTimeline',
+    ariaLabel: 'Save the timeline to the project folder',
+    defaultChord: { key: 'S', modifiers: ['Meta'] },
+    label: 'Save timeline'
+  },
+  {
+    actionId: 'stepBackward',
+    ariaLabel: 'Move the playhead back one step',
+    defaultChord: { key: 'ArrowLeft', modifiers: [] },
+    label: 'Step back'
+  },
+  {
+    actionId: 'stepForward',
+    ariaLabel: 'Move the playhead forward one step',
+    defaultChord: { key: 'ArrowRight', modifiers: [] },
+    label: 'Step forward'
+  },
+  {
+    actionId: 'nudgeSelectionLeft',
+    ariaLabel: 'Nudge the selected clip earlier',
+    defaultChord: { key: 'ArrowLeft', modifiers: ['Alt'] },
+    label: 'Nudge clip earlier'
+  },
+  {
+    actionId: 'nudgeSelectionRight',
+    ariaLabel: 'Nudge the selected clip later',
+    defaultChord: { key: 'ArrowRight', modifiers: ['Alt'] },
+    label: 'Nudge clip later'
+  },
+  {
+    actionId: 'goToStart',
+    ariaLabel: 'Move the playhead to the start of the timeline',
+    defaultChord: { key: 'Home', modifiers: [] },
+    label: 'Go to start'
+  },
+  {
+    actionId: 'goToEnd',
+    ariaLabel: 'Move the playhead to the end of the timeline',
+    defaultChord: { key: 'End', modifiers: [] },
+    label: 'Go to end'
   },
   {
     actionId: 'toggleLeftDock',
@@ -320,6 +407,14 @@ export function resetEditorShortcutBindingPreference(preferences: EditorShortcut
     overrides: withoutEditorShortcutOverride(preferences, actionId),
     schemaVersion: EDITOR_SHORTCUT_SCHEMA_VERSION
   };
+}
+
+/** True when the event fires this binding, including its default alternates. */
+export function isEditorShortcutBindingMatch(event: EditorShortcutKeyboardEvent, binding: EditorShortcutBinding): boolean {
+  if (!binding.isEnabled || binding.chord === null) return false;
+  if (isEditorShortcutEventMatch(event, binding.chord)) return true;
+  if (!binding.isDefault) return false;
+  return (binding.alternateChords ?? []).some((chord) => isEditorShortcutEventMatch(event, chord));
 }
 
 export function isEditorShortcutEventMatch(event: EditorShortcutKeyboardEvent, chord: EditorShortcutChord): boolean {

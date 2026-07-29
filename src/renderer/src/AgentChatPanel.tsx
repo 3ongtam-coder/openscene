@@ -1,6 +1,8 @@
 import { useEffect, useRef, type CSSProperties, type FormEvent, type ReactElement } from 'react';
 
 import { useAgentChat } from './AgentChatContext';
+import { AgentChatMessageView } from './AgentChatMessageView';
+import { AgentChatSessionPicker } from './AgentChatSessionPicker';
 import { AgentModelPicker } from './AgentModelPicker';
 import { Button } from './ui';
 
@@ -25,6 +27,8 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
     status,
     error,
     isBusy,
+    reasoningEffort,
+    setReasoningEffort,
     activeProject,
     sendMessage,
     respondToApproval,
@@ -71,6 +75,11 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
           </div>
         </div>
 
+        {/* Sessions are per project, so work can be split across conversations. */}
+        <div className="agent-chat-panel__sessions">
+          <AgentChatSessionPicker />
+        </div>
+
         {/* Project scope: every conversation operates on the active project. */}
         <div className="agent-chat-project-scope">
           {activeProject === null ? (
@@ -107,12 +116,7 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
           )}
 
           {messages.map((message) => (
-            <div key={message.id} className={`agent-chat-message agent-chat-message--${message.role}`}>
-              <span className="agent-chat-message__role">
-                {message.role === 'tool' ? `Tool · ${message.toolName}` : message.role}
-              </span>
-              <p className="agent-chat-message__text">{message.text}</p>
-            </div>
+            <AgentChatMessageView key={message.id} message={message} />
           ))}
 
           {pendingApproval && (
@@ -162,7 +166,7 @@ export function AgentChatPanel({ width, onCollapse }: AgentChatPanelProps): Reac
             />
             <div className="agent-chat-prompt-card__toolbar">
               <div className="agent-chat-prompt-card__meta">
-                <AgentModelPicker />
+                <AgentModelPicker reasoningEffort={reasoningEffort} onReasoningEffortChange={setReasoningEffort} />
               </div>
               <Button
                 type="submit"

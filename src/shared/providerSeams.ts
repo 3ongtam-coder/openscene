@@ -1,7 +1,8 @@
-export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'local_video';
-export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts' | 'local_qwen';
+export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo';
+export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts';
 export type ProviderJobStatus = 'queued' | 'running' | 'completed' | 'failed';
-export type ProviderExecutionMode = 'local' | 'api';
+/** Media generation runs against cloud provider APIs; Ollama is the only local engine and serves chat, not media. */
+export type ProviderExecutionMode = 'api';
 
 export interface ProviderApiConfig {
   geminiApiKey?: string;
@@ -12,8 +13,17 @@ export interface ProviderApiConfig {
   elevenlabsApiKey?: string;
 }
 
+/** A picked reference image, carried inline so no path reaches the renderer. */
+export interface ReferenceImageSelection {
+  readonly displayName: string;
+  readonly mimeType: string;
+  readonly base64: string;
+}
+
 export interface VideoGenerationRequest {
   prompt: string;
+  /** Optional image-to-video seed. */
+  referenceImage?: ReferenceImageSelection;
   aspectRatio: '16:9' | '9:16' | '1:1';
   durationSeconds: number;
   stylePreset?: string;

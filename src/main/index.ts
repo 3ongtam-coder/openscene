@@ -9,18 +9,15 @@ import { registerCaptureIpcHandlers } from './captureIpcHandlers';
 import { ExportIpcService } from './exportIpcService';
 import { registerExportIpcHandlers } from './exportIpcHandlers';
 import { ExportJobStore } from './exportJobStore';
-import { LocalTtsJobStore } from './localTtsJobStore';
 import { ProjectLocationRegistry } from './projectLocations';
 import { ProjectStore } from './projectStore';
 import { RecordingFileStore } from './recordingStore';
 import { registerResultAssetImportHandlers } from './resultAssetImportHandlers';
+import { REFERENCE_IMAGE_EXTENSIONS, selectReferenceImage } from './referenceImagePicker';
 import { ResultAssetImportService } from './resultAssetImportService';
 import { registerTimelineAssetProtocol, registerTimelineAssetScheme } from './timelineAssetProtocol';
 import { registerTimelineIpcHandlers } from './timelineIpcHandlers';
 import { TimelineIpcService } from './timelineIpcService';
-import { registerVoiceTtsIpcHandlers } from './voiceTtsIpcHandlers';
-import { VoiceProfileStore } from './voiceProfileStore';
-import { VoiceTtsIpcService } from './voiceTtsIpcService';
 import { resolvePreloadScriptPath } from './preloadPath';
 import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
@@ -36,6 +33,11 @@ import { AgentChatSessionManager } from './agentChatSession';
 import { createAgentChatModel } from './agentChatModel';
 import { registerAgentChatIpcHandlers } from './agentChatIpcHandlers';
 import { AgentChatHistoryStore } from './agentChatHistoryStore';
+import { ChatGptOAuthService } from './chatGptOAuthService';
+import { registerChatGptOAuthIpcHandlers } from './registerChatGptOAuthIpcHandlers';
+import { ChatGptCodexAdapter } from './chatGptCodexAdapter';
+import { LlmPromptRouter } from './llmPromptRouter';
+import { registerLlmPromptIpcHandler } from './registerLlmPromptIpcHandler';
 
 registerTimelineAssetScheme();
 
@@ -44,11 +46,16 @@ const recordingStore = new RecordingFileStore(resolveRecordingsDirectory());
 const projectLocations = new ProjectLocationRegistry(join(app.getPath('userData'), 'project-locations.json'));
 const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'), projectLocations);
 const assetLibraryStore = new AssetLibraryStore(join(app.getPath('userData'), 'projects'), projectStore);
-const voiceProfileStore = new VoiceProfileStore(join(app.getPath('userData'), 'voice-profiles'));
-const ttsJobStore = new LocalTtsJobStore();
 const exportJobStore = new ExportJobStore();
 const credentialStore = new CredentialStore(app.getPath('userData'));
+const chatGptOAuthService = new ChatGptOAuthService(app.getPath('userData'), {
+  openExternal: (url) => shell.openExternal(url)
+});
 const llmExecutionAdapter = new LlmExecutionAdapter(credentialStore);
+const llmPromptRouter = new LlmPromptRouter({
+  apiKeyAdapter: llmExecutionAdapter,
+  chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
+});
 setAiJobManagerCredentialStore(credentialStore);
 const timelineIpcService = new TimelineIpcService({
   projects: projectStore,
@@ -62,13 +69,6 @@ const timelineIpcService = new TimelineIpcService({
     properties: ['openDirectory', 'createDirectory']
   })
 });
-const voiceTtsService = new VoiceTtsIpcService({
-  voiceProfiles: voiceProfileStore,
-  ttsJobs: ttsJobStore,
-  audioRoot: join(app.getPath('userData'), 'tts-audio'),
-  openPath: (path) => shell.openPath(path),
-  revealPath: (path) => shell.showItemInFolder(path)
-});
 const resultAssetImportService = new ResultAssetImportService({
   assets: assetLibraryStore,
   resolveRecordingSource: (sessionId) => {
@@ -77,7 +77,7 @@ const resultAssetImportService = new ResultAssetImportService({
       ? null
       : { sourcePath: result.outputPath, displayName: result.fileName, kind: 'video', mimeType: 'video/webm' };
   },
-  resolveTtsSource: (jobId) => voiceTtsService.getCompletedAudioSource(jobId) ?? getCompletedAiSource(jobId)
+  resolveAiSource: (jobId) => getCompletedAiSource(jobId)
 });
 const exportIpcService = new ExportIpcService({
   projects: projectStore,
@@ -230,10 +230,25 @@ async function installIpcHandlers(): Promise<void> {
     listWindowSources,
     isSourceStillAvailable
   });
-  registerVoiceTtsIpcHandlers(ipcMain, voiceTtsService);
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
+
+  ipcMain.handle(IPC_CHANNELS.aiSelectReferenceImage, () =>
+    selectReferenceImage(() => dialog.showOpenDialog({
+      title: 'Choose a reference image',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: [...REFERENCE_IMAGE_EXTENSIONS] }]
+    }))
+  );
   registerExportIpcHandlers(ipcMain, exportIpcService);
+  registerChatGptOAuthIpcHandlers({
+    service: chatGptOAuthService,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
+  registerLlmPromptIpcHandler({
+    router: llmPromptRouter,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
 
   ipcMain.handle(IPC_CHANNELS.aiGenerateVideo, async (_event, request) => {
     try {
@@ -287,20 +302,16 @@ async function installIpcHandlers(): Promise<void> {
     }
   });
 
-  ipcMain.handle(
-    IPC_CHANNELS.executeLlmPrompt,
-    async (_event, request: { modelId: string; prompt: string; systemPrompt?: string }) => {
-      try {
-        const result = await llmExecutionAdapter.executeCompletion(request);
-        return ok(result);
-      } catch (err) {
-        return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to execute LLM prompt');
-      }
-    }
-  );
-
   const mcpServerInstance = new OpenVideoMcpServer();
   mcpServerInstance.setServices(projectStore, exportIpcService);
+  mcpServerInstance.setResultImportService(resultAssetImportService);
+  // Agent tools write the project straight to disk; tell open editors to reload
+  // so the change shows up on the timeline instead of being silently shadowed.
+  mcpServerInstance.setProjectTimelineChangeNotifier((projectId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(IPC_CHANNELS.projectTimelineChanged, { projectId });
+    }
+  });
 
   ipcMain.handle(IPC_CHANNELS.mcpGetTools, async () => {
     try {
@@ -343,7 +354,7 @@ async function installIpcHandlers(): Promise<void> {
   const agentChatGraphBundle = buildAgentChatGraph({
     tools: agentChatTools,
     mutatingToolNames: AGENT_CHAT_MUTATING_TOOL_NAMES,
-    createModel: createAgentChatModel(agentChatTools, credentialStore)
+    createModel: createAgentChatModel(agentChatTools, credentialStore, chatGptOAuthService)
   });
   const agentChatSessions = new AgentChatSessionManager(agentChatGraphBundle);
   registerAgentChatIpcHandlers(ipcMain, agentChatSessions, new AgentChatHistoryStore(projectStore));

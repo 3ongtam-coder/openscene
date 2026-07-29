@@ -7,6 +7,18 @@ import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from '../src/main/openV
 import { ProjectStore } from '../src/main/projectStore';
 import type { MediaAsset } from '../src/shared/timelineTypes';
 
+const videoAsset = (): MediaAsset => ({
+  id: 'asset-placement-000000001',
+  displayName: 'clip.mp4',
+  projectRelativePath: 'assets/asset-placement-000000001/original.mp4',
+  kind: 'video',
+  mimeType: 'video/mp4',
+  byteLength: 2048,
+  createdAt: '2026-07-24T12:00:00.000Z',
+  updatedAt: '2026-07-24T12:00:00.000Z',
+  metadata: { durationMs: 10_000, width: 1920, height: 1080 }
+});
+
 describe('OpenVideo TypeMCP Server and Tool declarations', () => {
   let tempDir: string;
   let projectStore: ProjectStore;
@@ -35,63 +47,95 @@ describe('OpenVideo TypeMCP Server and Tool declarations', () => {
     expect(toolNames).toContain('trimTimelineClip');
     expect(toolNames).toContain('updateClipEffects');
     expect(toolNames).toContain('addClipToTimeline');
+    expect(toolNames).toContain('importGeneratedResult');
     expect(toolNames).toContain('exportProjectVideo');
   });
 
-  it('executes createVideoJob MCP tool and returns job metadata', async () => {
+  it('imports a completed generation job as a project asset and tells open editors to reload', async () => {
+    const server = new OpenVideoMcpServer();
+    const changed: string[] = [];
+    server.setProjectTimelineChangeNotifier((projectId) => changed.push(projectId));
+
+    // Without the service the tool refuses instead of pretending to import.
+    expect(await server.importGeneratedResult({ projectId: 'p1', jobId: 'job-1' })).toMatchObject({
+      success: false,
+      error: 'Result import service is not available.'
+    });
+
+    server.setResultImportService({
+      importAiResult: async () => ok({
+        assets: [{
+          id: 'asset-generated',
+          displayName: 'narration.wav',
+          kind: 'audio',
+          mimeType: 'audio/wav',
+          projectRelativePath: 'assets/asset-generated/original.wav',
+          byteLength: 2048,
+          metadata: { durationMs: 4_000 },
+          createdAt: '2026-07-29T00:00:00.000Z',
+          updatedAt: '2026-07-29T00:00:00.000Z'
+        }]
+      })
+    } as unknown as Parameters<OpenVideoMcpServer['setResultImportService']>[0]);
+
+    const imported = await server.importGeneratedResult({ projectId: 'p1', jobId: 'job-1' });
+
+    expect(imported).toMatchObject({ success: true, projectId: 'p1', jobId: 'job-1' });
+    expect(imported.assets).toEqual([{ id: 'asset-generated', displayName: 'narration.wav', kind: 'audio', durationMs: 4_000 }]);
+    expect(changed).toEqual(['p1']);
+  });
+
+  it('reports an import failure instead of claiming the asset landed', async () => {
+    const server = new OpenVideoMcpServer();
+    server.setResultImportService({
+      importAiResult: async () => fail('TTS_RESULT_UNAVAILABLE', 'The completed AI generation result is not available.')
+    } as unknown as Parameters<OpenVideoMcpServer['setResultImportService']>[0]);
+
+    expect(await server.importGeneratedResult({ projectId: 'p1', jobId: 'missing' })).toEqual({
+      success: false,
+      error: 'The completed AI generation result is not available.'
+    });
+  });
+
+  it('executes createVideoJob MCP tool against the selected cloud model', async () => {
     const server = new OpenVideoMcpServer();
     const result = await server.createVideoJob({
       prompt: 'Cinematic intro shot of Seoul skyline',
       aspectRatio: '16:9',
       durationSeconds: 5,
-      mode: 'local'
+      modelId: 'sora-2'
     });
 
     expect(result.success).toBe(true);
     const okResult = result as { success: true; jobId: string; mode: string; provider: string };
     expect(okResult.jobId.length).toBeGreaterThan(0);
-    expect(okResult.mode).toBe('local');
-    expect(okResult.provider).toBe('local_video');
+    // Media generation is cloud-only; Ollama is the app's only local engine.
+    expect(okResult.mode).toBe('api');
+    expect(okResult.provider).toBe('openai_sora');
   });
 
-  it('rejects createVideoJob with api mode and returns not-implemented error', async () => {
+  it('rejects a video model whose adapter is not implemented', async () => {
     const server = new OpenVideoMcpServer();
-    const result = await server.createVideoJob({
+
+    await expect(server.createVideoJob({
       prompt: 'Cinematic intro shot of Seoul skyline',
-      mode: 'api',
-      apiKey: 'sk-test-valid-key-12345'
-    });
-
-    expect(result.success).toBe(false);
-    const errResult = result as { success: false; error: string };
-    expect(errResult.error).toContain('not yet implemented');
+      modelId: 'gen4_turbo'
+    })).rejects.toThrow('is not available for video-generation');
   });
 
-  it('rejects createSpeechJob with api mode and returns not-implemented error', async () => {
-    const server = new OpenVideoMcpServer();
-    const result = await server.createSpeechJob({
-      script: 'Hello from cloud speech',
-      mode: 'api',
-      apiKey: 'el-test-key-12345'
-    });
-
-    expect(result.success).toBe(false);
-    const errResult = result as { success: false; error: string };
-    expect(errResult.error).toContain('not yet implemented');
-  });
-
-  it('executes createSpeechJob MCP tool and returns speech job metadata', async () => {
+  it('executes createSpeechJob MCP tool against the selected cloud model', async () => {
     const server = new OpenVideoMcpServer();
     const result = await server.createSpeechJob({
       script: 'Welcome to OpenVideo desktop suite',
-      voiceId: 'qwen-narrator',
-      mode: 'local'
+      voiceId: '',
+      modelId: 'eleven_multilingual_v2'
     });
 
     expect(result.success).toBe(true);
-    const okResult = result as { success: true; jobId: string; mode: string };
+    const okResult = result as { success: true; jobId: string; mode: string; provider: string };
     expect(okResult.jobId.length).toBeGreaterThan(0);
-    expect(okResult.mode).toBe('local');
+    expect(okResult.mode).toBe('api');
+    expect(okResult.provider).toBe('elevenlabs');
   });
 
   it('returns a path-free read-only timeline summary only for an existing project', async () => {
@@ -233,28 +277,62 @@ describe('OpenVideo TypeMCP Server and Tool declarations', () => {
     // Create a real project
     const project = await projectStore.create({ name: 'Test MCP Project' });
 
-    // 3. Missing track
-    const noTrackResult = await server.addClipToTimeline({
-      projectId: project.id,
-      trackId: 'track-invalid',
-      assetId: 'asset-123',
-      startOffsetSeconds: 0,
-      durationSeconds: 5
-    });
-    expect(noTrackResult.success).toBe(false);
-    expect(noTrackResult.error).toContain('Track track-invalid not found');
-
-    // 4. Missing asset
-    const validTrackId = project.timeline.tracks[0]!.id;
+    // 3. Missing asset — resolved before the track, because the track is chosen
+    //    from the asset kind when the caller does not name one.
     const noAssetResult = await server.addClipToTimeline({
       projectId: project.id,
-      trackId: validTrackId,
       assetId: 'asset-invalid',
       startOffsetSeconds: 0,
       durationSeconds: 5
     });
     expect(noAssetResult.success).toBe(false);
     expect(noAssetResult.error).toContain('Asset asset-invalid not found');
+
+    // 4. Missing track, named explicitly. The error names the tracks that exist
+    //    so the agent can retry instead of guessing again.
+    await projectStore.registerAsset(project.id, videoAsset());
+    const noTrackResult = await server.addClipToTimeline({
+      projectId: project.id,
+      trackId: 'track-invalid',
+      assetId: videoAsset().id,
+      startOffsetSeconds: 0,
+      durationSeconds: 5
+    });
+    expect(noTrackResult.success).toBe(false);
+    expect(noTrackResult.error).toContain('Track track-invalid not found');
+    expect(noTrackResult.error).toContain('video-track-1 (video)');
+  });
+
+  it('places an added clip without a track id or offset: first matching track, appended after the last clip', async () => {
+    const server = new OpenVideoMcpServer();
+    const changed: string[] = [];
+    server.setServices(projectStore);
+    server.setProjectTimelineChangeNotifier((projectId) => changed.push(projectId));
+
+    const project = await projectStore.create({ name: 'Placement Project' });
+    await projectStore.registerAsset(project.id, videoAsset());
+
+    // No trackId and no offset: the video asset lands at 0 on the video track.
+    const first = await server.addClipToTimeline({ projectId: project.id, assetId: videoAsset().id });
+    expect(first).toMatchObject({ success: true, trackId: 'video-track-1', startOffsetSeconds: 0 });
+    // The whole asset, not an arbitrary default length.
+    expect(first.durationSeconds).toBe(10);
+
+    // The next one appends after it rather than overlapping at 0.
+    const second = await server.addClipToTimeline({ projectId: project.id, assetId: videoAsset().id });
+    expect(second).toMatchObject({ success: true, startOffsetSeconds: 10 });
+
+    // An explicit overlapping offset is refused, matching the editor's rules.
+    const overlapping = await server.addClipToTimeline({
+      projectId: project.id,
+      assetId: videoAsset().id,
+      startOffsetSeconds: 5
+    });
+    expect(overlapping.success).toBe(false);
+    expect(overlapping.error).toContain('overlap');
+
+    // Every successful write tells open editors to reload.
+    expect(changed).toEqual([project.id, project.id]);
   });
 
   it('successfully adds clip to timeline and persists project when project, track, and asset exist', async () => {
@@ -354,7 +432,7 @@ describe('OpenVideo TypeMCP Server and Tool declarations', () => {
       prompt: 'Cinematic intro shot',
       aspectRatio: '16:9',
       durationSeconds: 5,
-      mode: 'local'
+      modelId: 'sora-2'
     });
     expect(jobResult.success).toBe(true);
     const okJobResult = jobResult as { success: true; jobId: string };

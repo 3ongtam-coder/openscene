@@ -39,6 +39,14 @@ describe('model visibility preferences', () => {
     expect(parseHiddenModelKeys('[1,2,"no-colon","openai:gpt-5"]')).toEqual(new Set(['openai:gpt-5']));
   });
 
+  it('normalizes only legacy OpenAI Codex provider keys to the canonical OpenAI provider', () => {
+    const canonicalCodexKey = modelVisibilityKey('openai', 'openai/gpt-5.3-codex');
+
+    expect(
+      parseHiddenModelKeys('["openai-codex:openai/gpt-5.3-codex","openai:openai/gpt-5.3-codex","other-openai-codex:model"]')
+    ).toEqual(new Set([canonicalCodexKey, 'other-openai-codex:model']));
+  });
+
   it('uses a versioned non-secret storage key', () => {
     expect(MODEL_VISIBILITY_STORAGE_KEY).toBe('openvideo-model-visibility-v1');
   });
