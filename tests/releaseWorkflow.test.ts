@@ -53,12 +53,28 @@ describe('release workflow', () => {
     expect(workflow).toContain('artifacts/*');
   });
 
-  it('states plainly that the builds are unsigned instead of leaving it to be discovered', () => {
-    expect(workflow).toContain('CSC_IDENTITY_AUTO_DISCOVERY: false');
-    expect(workflow).toMatch(/builds are unsigned/);
-    expect(workflow).toMatch(/unidentified developer/);
+  it('signs, hardens, and notarizes macOS rather than shipping what Gatekeeper calls damaged', () => {
+    // An unsigned app plus the download quarantine attribute is what produced
+    // "OpenVideo is damaged and can't be opened" on v0.1.0.
+    expect(builderConfig).toContain('hardenedRuntime: true');
+    expect(builderConfig).toContain('notarize: true');
+    expect(builderConfig).toContain('entitlements: build/entitlements.mac.plist');
+    expect(builderConfig).not.toContain('identity: null');
+  });
+
+  it('fails the macOS build rather than publishing one that was silently left unnotarized', () => {
+    // electron-builder logs "skipped macOS notarization" and exits 0 when the
+    // credentials are absent. Without this gate a missing secret ships a build
+    // Gatekeeper rejects, under release notes saying it opens normally.
+    expect(workflow).toContain('xcrun stapler validate');
+    expect(workflow).toContain('spctl -a -vvv -t exec');
+    expect(workflow).toContain('codesign --verify --deep --strict');
+  });
+
+  it('describes each platform truthfully instead of calling every build unsigned', () => {
+    expect(workflow).toMatch(/macOS builds are signed[^"]*notarized/);
+    expect(workflow).toMatch(/Windows builds are unsigned/);
     expect(workflow).toMatch(/SmartScreen/);
-    expect(builderConfig).toContain('identity: null');
   });
 
   it('pins actions to immutable commit SHAs', () => {
@@ -118,7 +134,10 @@ describe('release workflow', () => {
     // path no CI run exercises.
     expect(builderConfig).toContain('publish:');
     expect(builderConfig).toContain('provider: github');
-    expect(workflow).toContain('dist/*.yml');
+    // Narrow on purpose: dist/*.yml also matches electron-builder's
+    // builder-debug.yml, which shipped as a public asset on v0.1.0.
+    expect(workflow).toContain('dist/latest*.yml');
+    expect(workflow).not.toContain('dist/*.yml');
     // Blockmaps are what make a Windows update a delta rather than a full
     // re-download; without them electron-updater falls back to the whole file.
     expect(workflow).toContain('dist/*.blockmap');
