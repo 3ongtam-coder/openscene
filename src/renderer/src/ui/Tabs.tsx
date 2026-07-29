@@ -132,7 +132,7 @@ export function Tabs<TabId extends string>({
             {...tabButtonProps}
             onClick={() => onActiveTabChange(tab.id)}
           >
-            {tab.label}
+            <span>{tab.label}</span>
           </button>
         );
       })}

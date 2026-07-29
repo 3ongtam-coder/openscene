@@ -2,12 +2,35 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { parseThemePreference, resolveThemeMode, shouldToggleThemeOnSwitchKeyDown, toggleThemeMode } from '../src/renderer/src/theme';
+import { parseThemePreference, resolveThemeMode, toggleThemeMode } from '../src/renderer/src/theme';
 
 const rendererStyles = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8');
+const appShellSource = readFileSync(new URL('../src/renderer/src/AppShell.tsx', import.meta.url), 'utf8');
+const settingsWorkspaceSource = readFileSync(new URL('../src/renderer/src/SettingsWorkspace.tsx', import.meta.url), 'utf8');
 const minimumNormalTextContrast = 4.5;
 const minimumExpressiveColorChroma = 24;
 const minimumDistinctSemanticColorDistance = 64;
+const minimumDistinctSurfaceColorDistance = 80;
+const commandDeskPresetTokens = [
+  '--background: #f4efe5;',
+  '--foreground: #1f2933;',
+  '--card: #fdfaf2;',
+  '--primary: #9a4f1f;',
+  '--accent: #047d8a;'
+] as const;
+
+const commandDeskSurfaceSelectors = [
+  '.app-shell',
+  '.app-workspace-panel-stack',
+  '.editor-program-region',
+  '.project-rail',
+  '.asset-bin',
+  '.timeline-panel',
+  '.inspector-panel',
+  '.editor-preview-frame',
+  '.timeline-track__lane',
+  '.timeline-clip'
+] as const;
 
 const themeModes = ['light', 'dark'] as const;
 
@@ -41,7 +64,15 @@ const guardedDesignSurfaceFiles = [
   '../DESIGN.md',
   '../src/renderer/src/styles.css',
   '../src/renderer/src/AppShell.tsx',
-  '../src/renderer/src/AppWorkspaceNavigation.tsx'
+  '../src/renderer/src/App.tsx',
+  '../src/renderer/src/AgentChatPanel.tsx',
+  '../src/renderer/src/SettingsWorkspace.tsx',
+  '../src/renderer/src/theme.ts'
+] as const;
+
+const forbiddenThirdPartyBrandPatterns = [
+  /cohere/i,
+  /hermes/i
 ] as const;
 
 const mutedForegroundContrastCases = themeModes.flatMap((mode) => [
@@ -85,6 +116,17 @@ function getThemeHexCustomProperty(mode: ThemeMode, name: string): string {
   }
 
   return hexValue;
+}
+
+function getResolvedThemeHexCustomProperty(mode: ThemeMode, name: string): string {
+  const value = getThemeCustomPropertyValue(mode, name);
+  const hexValue = /^#[0-9a-fA-F]{6}$/.exec(value)?.[0];
+  if (hexValue !== undefined) return hexValue;
+
+  const referencedToken = /^var\((--[a-z0-9-]+)\)$/.exec(value)?.[1];
+  if (referencedToken !== undefined) return getThemeHexCustomProperty(mode, referencedToken);
+
+  throw new Error(`${name} in ${mode} theme could not be resolved to a static hex declaration.`);
 }
 
 function parseHexColor(hexColor: string): RgbColor {
@@ -165,16 +207,6 @@ describe('renderer theme contract', () => {
     expect(toggledToLight).toBe('light');
   });
 
-  it('Given the theme switch has focus, When Space is pressed, Then the switch key contract requests a toggle', () => {
-    const shouldToggleOnSpace = shouldToggleThemeOnSwitchKeyDown(' ');
-    const shouldToggleOnLegacySpace = shouldToggleThemeOnSwitchKeyDown('Spacebar');
-    const shouldToggleOnEnter = shouldToggleThemeOnSwitchKeyDown('Enter');
-
-    expect(shouldToggleOnSpace).toBe(true);
-    expect(shouldToggleOnLegacySpace).toBe(true);
-    expect(shouldToggleOnEnter).toBe(false);
-  });
-
   it('Given light theme status-card normal text, When contrast is computed, Then it meets WCAG AA normal text contrast', () => {
     const normalStatusText = getThemeHexCustomProperty('light', '--status-normal');
     const statusSurface = getThemeHexCustomProperty('light', '--muted');
@@ -207,6 +239,22 @@ describe('renderer theme contract', () => {
     expect(contrastRatio).toBeGreaterThanOrEqual(minimumNormalTextContrast);
   });
 
+  it.each(themeModes)('Given %s theme base foreground on card, When contrast is computed, Then normal text meets WCAG AA contrast', (mode) => {
+    const foreground = getResolvedThemeHexCustomProperty(mode, '--foreground');
+    const card = getThemeHexCustomProperty(mode, '--card');
+    const contrastRatio = getContrastRatio(foreground, card);
+
+    expect(contrastRatio).toBeGreaterThanOrEqual(minimumNormalTextContrast);
+  });
+
+  it('Given light theme accent foreground tokens, When contrast is computed, Then normal accent text meets WCAG AA contrast', () => {
+    const accent = getThemeHexCustomProperty('light', '--accent');
+    const accentForeground = getThemeHexCustomProperty('light', '--accent-foreground');
+    const contrastRatio = getContrastRatio(accentForeground, accent);
+
+    expect(contrastRatio).toBeGreaterThanOrEqual(minimumNormalTextContrast);
+  });
+
   it.each(mutedForegroundContrastCases)(
     'Given %s theme muted foreground on %s, When contrast is computed against %s, Then it meets WCAG AA normal text contrast',
     (mode, foregroundToken, backgroundToken) => {
@@ -233,9 +281,85 @@ describe('renderer theme contract', () => {
     expect(rendererStyles).toMatch(new RegExp(`${token}:\\s*[^;]+;`));
   });
 
+  it('Given Issue #63 reference design language, When the default light preset is checked, Then it keeps the warm command desk identity', () => {
+    const daylightPresetBlock = /:root\[data-preset="daylight-glass"\]\[data-theme="light"\],\s*:root\[data-preset="daylight-glass"\]\s*\{([\s\S]*?)\}/.exec(
+      rendererStyles
+    )?.[1];
+
+    expect(daylightPresetBlock).toBeDefined();
+    for (const token of commandDeskPresetTokens) {
+      expect(daylightPresetBlock).toContain(token);
+    }
+  });
+
+  it('Given Issue #63 reference design language, When renderer CSS surfaces are checked, Then editor classes are flat card panels with hairline borders', () => {
+    for (const selector of commandDeskSurfaceSelectors) {
+      expect(rendererStyles).toContain(selector);
+    }
+
+    expect(rendererStyles).toMatch(
+      /\.project-rail,\s*\.asset-bin,\s*\.timeline-panel,\s*\.inspector-panel\s*\{[\s\S]*?border: 1px solid var\(--border\);[\s\S]*?background: var\(--card\);/
+    );
+    expect(rendererStyles).not.toContain('linear-gradient(to bottom, #2b2e4a 0%, #171822 100%)');
+    expect(rendererStyles).not.toContain('linear-gradient(to bottom, #103126 0%, #091c16 100%)');
+    expect(rendererStyles).not.toMatch(/linear-gradient\(135deg,\s*rgba\(255, 255, 255, 0\.9\),\s*rgba\((238, 242, 255|236, 253, 245)/);
+    expect(rendererStyles).not.toContain('backdrop-filter: blur(18px)');
+    expect(rendererStyles).toMatch(/\.timeline-clip\s*\{[\s\S]*?color-mix\(in srgb, var\(--primary\) 18%, var\(--card\)\)/);
+    expect(rendererStyles).toMatch(/\.timeline-clip--audio\s*\{[\s\S]*?color-mix\(in srgb, var\(--success\) 16%, var\(--card\)\)/);
+  });
+
+  it('Given Issue #61 distinct operating environments, When root theme tokens are compared, Then light and dark surfaces are structurally different', () => {
+    const comparedTokens = ['--background', '--card', '--muted', '--border', '--input'] as const;
+
+    for (const token of comparedTokens) {
+      const lightColor = getResolvedThemeHexCustomProperty('light', token);
+      const darkColor = getResolvedThemeHexCustomProperty('dark', token);
+
+      expect(getRgbDistance(lightColor, darkColor)).toBeGreaterThanOrEqual(minimumDistinctSurfaceColorDistance);
+    }
+
+    expect(getThemeCustomPropertyValue('light', '--shadow-panel')).not.toBe(getThemeCustomPropertyValue('dark', '--shadow-panel'));
+    expect(getThemeCustomPropertyValue('light', '--surface-control')).not.toBe(getThemeCustomPropertyValue('dark', '--surface-control'));
+  });
+
+  it('Given Issue #84 slim titlebar, When theme controls are checked, Then they live only in Settings Appearance', () => {
+    expect(appShellSource).not.toContain('ThemeSelector');
+    expect(appShellSource).not.toContain('stage-pill');
+    expect(settingsWorkspaceSource).toContain('aria-label="Theme mode"');
+    expect(settingsWorkspaceSource).toContain('aria-pressed={item.id === preset}');
+    expect(settingsWorkspaceSource).not.toContain('style={{ background: item.accentColor }}');
+    expect(rendererStyles).not.toContain('.theme-preset-popover');
+    expect(rendererStyles).toContain('.settings-preset-card[aria-pressed="true"]');
+    expect(rendererStyles).toContain('.preset-swatch--daylight-glass');
+    expect(rendererStyles).toContain('.preset-swatch--dark-zinc');
+  });
+
+  it('Given the agent chat input, When focus-visible CSS is checked, Then it uses the documented ring, offset, and halo', () => {
+    expect(rendererStyles).toMatch(
+      /\.agent-chat-panel__input:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--focus-ring\);[\s\S]*?outline-offset:\s*2px;[\s\S]*?box-shadow:\s*0 0 0 4px var\(--focus-shadow\)/
+    );
+  });
+
+  it('Given the persistent agent chat rail, When renderer CSS is checked, Then only the activity log scrolls inside a viewport-bounded panel', () => {
+    expect(rendererStyles).toMatch(/@media \(max-width:\s*1120px\)\s*\{[\s\S]*?body\s*\{[\s\S]*?overflow:\s*hidden;[\s\S]*?\.app-shell\s*\{[\s\S]*?height:\s*100vh;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;[\s\S]*?#root\s*\{[\s\S]*?height:\s*100vh;/);
+    expect(rendererStyles).toMatch(/\.app-shell__body\s*\{[\s\S]*?height:\s*100%;[\s\S]*?max-height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
+    expect(rendererStyles).toMatch(/\.agent-chat-panel-shell\s*\{[\s\S]*?align-self:\s*stretch;[\s\S]*?height:\s*100%;[\s\S]*?max-height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
+    expect(rendererStyles).toMatch(/\.agent-chat-panel\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto;[\s\S]*?max-height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
+    expect(rendererStyles).toMatch(/\.agent-chat-log\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;/);
+  });
+
+  it('Given sidebar-free workspace panels, When renderer CSS is checked, Then obsolete workspace nav styles are absent', () => {
+    expect(rendererStyles).toContain('.app-workspace-panel-stack');
+    expect(rendererStyles).toContain('.visually-hidden');
+    expect(rendererStyles).not.toContain('.workspace-nav');
+    expect(rendererStyles).not.toContain('nav[aria-label="Application workspaces"]');
+  });
+
   it.each(guardedDesignSurfaceFiles)('Given %s, When brand source text is checked, Then third-party brand copy is absent', (filePath) => {
     const sourceText = readFileSync(new URL(filePath, import.meta.url), 'utf8');
 
-    expect(sourceText).not.toMatch(/cohere/i);
+    for (const pattern of forbiddenThirdPartyBrandPatterns) {
+      expect(sourceText).not.toMatch(pattern);
+    }
   });
 });

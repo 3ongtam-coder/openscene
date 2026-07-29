@@ -3,10 +3,12 @@ import { extname, basename } from 'node:path';
 import type { ApiResponse } from '../shared/models';
 import type {
   CreateProjectInput,
+  CreateProjectResult,
   LocalProjectSnapshot,
   LocalProjectSummary,
   MediaAsset,
-  MediaKind
+  MediaKind,
+  OpenProjectFolderResult
 } from '../shared/timelineTypes';
 import {
   parseCreateProjectInput,
@@ -39,6 +41,7 @@ type TimelineIpcServiceDependencies = {
   readonly projects: ProjectStore;
   readonly assets: AssetLibraryStore;
   readonly selectMediaFiles?: (input: ImportProjectAssetsDialogInput) => Promise<NativeFileDialogResult>;
+  readonly selectProjectDirectory?: () => Promise<NativeFileDialogResult>;
 };
 
 type ImportProjectAssetsDialogInput = {
@@ -64,9 +67,11 @@ function safeProjectError<T>(error: unknown, code: 'UNKNOWN_ERROR' | 'FILE_WRITE
 
 export class TimelineIpcService {
   private readonly selectMediaFiles: (input: ImportProjectAssetsDialogInput) => Promise<NativeFileDialogResult>;
+  private readonly selectProjectDirectory: () => Promise<NativeFileDialogResult>;
 
   constructor(private readonly dependencies: TimelineIpcServiceDependencies) {
     this.selectMediaFiles = dependencies.selectMediaFiles ?? (async () => ({ canceled: true, filePaths: [] }));
+    this.selectProjectDirectory = dependencies.selectProjectDirectory ?? (async () => ({ canceled: true, filePaths: [] }));
   }
 
   async listProjects(payload: unknown): Promise<ApiResponse<readonly LocalProjectSummary[]>> {
@@ -80,15 +85,41 @@ export class TimelineIpcService {
     }
   }
 
-  async createProject(payload: unknown): Promise<ApiResponse<LocalProjectSnapshot>> {
+  async createProject(payload: unknown): Promise<ApiResponse<CreateProjectResult>> {
     const input: CreateProjectInput | null = parseCreateProjectInput(payload);
     if (input === null) {
       return fail('INVALID_INPUT', 'The project creation payload was not valid.');
     }
     try {
-      return ok(await this.dependencies.projects.create(input));
+      const dialogResult = await this.selectProjectDirectory();
+      const parentDirectory = dialogResult.filePaths[0];
+      if (dialogResult.canceled || parentDirectory === undefined) {
+        return ok({ cancelled: true });
+      }
+      const project = await this.dependencies.projects.createInFolder({ name: input.name, parentDirectory });
+      return ok({ cancelled: false, project });
     } catch (error: unknown) {
       return safeProjectError(error, 'FILE_WRITE_FAILED', 'The project could not be created.');
+    }
+  }
+
+  async openProjectFolder(payload: unknown): Promise<ApiResponse<OpenProjectFolderResult>> {
+    if (payload !== undefined && (typeof payload !== 'object' || payload === null)) {
+      return fail('INVALID_INPUT', 'The project folder payload was not valid.');
+    }
+    try {
+      const dialogResult = await this.selectProjectDirectory();
+      const directory = dialogResult.filePaths[0];
+      if (dialogResult.canceled || directory === undefined) {
+        return ok({ cancelled: true });
+      }
+      const result = await this.dependencies.projects.openOrInitializeFolder(directory);
+      if (result === null) {
+        return fail('INVALID_INPUT', 'The selected folder has a project file that could not be read, so it was left untouched.');
+      }
+      return ok({ cancelled: false, created: result.created, project: result.project });
+    } catch (error: unknown) {
+      return safeProjectError(error, 'UNKNOWN_ERROR', 'The project folder could not be opened.');
     }
   }
 
@@ -114,6 +145,18 @@ export class TimelineIpcService {
       return ok({ deleted: await this.dependencies.projects.delete(input.projectId) });
     } catch (error: unknown) {
       return safeProjectError(error, 'UNKNOWN_ERROR', 'The project could not be deleted.');
+    }
+  }
+
+  async renameProject(payload: unknown): Promise<ApiResponse<LocalProjectSnapshot>> {
+    const input = payload as { projectId?: unknown; name?: unknown } | undefined;
+    if (typeof input?.projectId !== 'string' || typeof input.name !== 'string') {
+      return fail('INVALID_INPUT', 'The project rename payload was not valid.');
+    }
+    try {
+      return ok(await this.dependencies.projects.rename(input.projectId, input.name));
+    } catch (error: unknown) {
+      return safeProjectError(error, 'UNKNOWN_ERROR', 'The project could not be renamed.');
     }
   }
 

@@ -28,12 +28,13 @@ import { ProgramMonitor } from './ProgramMonitor';
 import { ProjectRail } from './ProjectRail';
 import { TimelineCanvas } from './TimelineCanvas';
 import { TimelineEditorLeftDock } from './TimelineEditorLeftDock';
-import { EditorInspectorSplitter, EditorLeftDockSplitter, EditorProgramSplitter, TimelineShortcutMap } from './TimelineEditorLayoutControls';
+import { EditorInspectorSplitter, EditorLeftDockSplitter, EditorProgramSplitter } from './TimelineEditorLayoutControls';
 import { useEditorLayoutPreference } from './useEditorLayoutPreference';
 import { useEditorNativeMenuCommands } from './useEditorNativeMenuCommands';
 import { useEditorShortcutPreference } from './useEditorShortcutPreference';
 import type { TimelineEditorController } from './useTimelineEditor';
 import { useTimelineShortcuts } from './useTimelineShortcuts';
+import { useAgentChat } from '../AgentChatContext';
 import type { TabDefinition } from '../ui';
 
 export type InspectorTabId = (typeof EDITOR_INSPECTOR_DOCK_TAB_IDS)[number];
@@ -44,7 +45,6 @@ type TimelineEditorProps = {
 
 const INSPECTOR_TAB_LABELS: Readonly<Record<InspectorTabId, string>> = {
   asset: 'Asset',
-  project: 'Project',
   selection: 'Selection'
 };
 
@@ -54,7 +54,8 @@ function getInspectorTabs(editor: TimelineEditorController): readonly TabDefinit
   return EDITOR_INSPECTOR_DOCK_TAB_IDS.map((tabId) => {
     const dockTab = dockTabs?.find((tab) => tab.id === tabId);
     const label = dockTab?.label ?? INSPECTOR_TAB_LABELS[tabId];
-    const disabled = editor.project === null ? tabId !== 'project' : dockTab?.disabled === true;
+    // Without a project there is nothing to inspect at all.
+    const disabled = editor.project === null ? true : dockTab?.disabled === true;
 
     return disabled ? { id: tabId, label, disabled: true } : { id: tabId, label };
   });
@@ -86,16 +87,16 @@ type FloatingPanelRenderInput = {
 };
 
 function getDefaultInspectorTabId({ selectedAssetId, selectedClipId }: InspectorIdentityInput): InspectorTabId {
-  if (selectedClipId.length > 0) return 'selection';
-  if (selectedAssetId.length > 0) return 'asset';
-  return 'project';
+  if (selectedAssetId.length > 0 && selectedClipId.length === 0) return 'asset';
+  return 'selection';
 }
 
 export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
+  const { isBusy: isAgentBusy } = useAgentChat();
   const [leftDockTabId, setLeftDockTabId] = useState<EditorLeftDockTabId>('project');
-  const [inspectorTabId, setInspectorTabId] = useState<InspectorTabId>('project');
+  const [inspectorTabId, setInspectorTabId] = useState<InspectorTabId>('selection');
   const { layoutPreference, updateLayoutPreference } = useEditorLayoutPreference();
-  const { shortcutPreferences, updateShortcutPreferences } = useEditorShortcutPreference();
+  const { shortcutPreferences } = useEditorShortcutPreference();
   const inspectorTabs = getInspectorTabs(editor);
   const projectIdentity = editor.project?.id ?? '';
   const selectedAssetIdentity = editor.selectedAsset?.id ?? '';
@@ -177,9 +178,18 @@ export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
 
   useTimelineShortcuts({
     canSplit: editor.selectedClip !== null,
+    isLocked: isAgentBusy,
+    clearSelection: editor.clearSelection,
     deleteSelectedClip: editor.deleteSelectedClip,
+    duplicateSelectedClip: editor.duplicateSelectedClip,
+    goToTimelineEnd: editor.goToTimelineEnd,
+    goToTimelineStart: editor.goToTimelineStart,
+    moveSelectedClip: editor.moveSelectedClip,
+    saveTimeline: () => { void editor.saveTimeline(); },
+    stepPlayhead: editor.stepPlayhead,
     redoTimeline: editor.redoTimeline,
     resetLayout,
+    selectAllClips: editor.selectAllClips,
     setIsPlaying: editor.setIsPlaying,
     shortcutPreferences,
     splitAtPlayhead: editor.splitAtPlayhead,
@@ -190,6 +200,7 @@ export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
 
   useEditorNativeMenuCommands({
     editor,
+    isAgentBusy,
     layoutPreference,
     onApplyFloatingPreset: applyFloatingPreset,
     onResetLayout: resetLayout,
@@ -201,7 +212,7 @@ export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
 
   return (
     <section className={workspaceClassName} style={workspaceStyle} aria-labelledby="timeline-editor-title">
-      <TimelineEditorLeftDock activeTabId={leftDockTabId} editor={editor} floatingProjectVisible={floatingProjectVisible} leftDockVisible={layoutPreference.leftDockVisible} onActiveTabChange={setLeftDockTabId} />
+      <TimelineEditorLeftDock editor={editor} leftDockVisible={layoutPreference.leftDockVisible} />
 
       <EditorLeftDockSplitter leftDockVisible={layoutPreference.leftDockVisible} leftDockWidth={layoutPreference.leftDockWidth} onLeftDockWidthChange={setLeftDockWidth} />
 
@@ -214,16 +225,14 @@ export function TimelineEditor({ editor }: TimelineEditorProps): ReactElement {
       />
 
       <main className="editor-program-region" id="editor-program-panel" aria-labelledby="timeline-editor-title">
-        <div className="panel-heading editor-program-region__heading">
-          <div>
-            <p className="section-kicker">Local studio</p>
-            <h1 id="timeline-editor-title">OpenVideo</h1>
-            <span className="editor-program-region__subtitle">Timeline editor</span>
-          </div>
-          <TimelineShortcutMap shortcutPreferences={shortcutPreferences} onShortcutPreferencesChange={updateShortcutPreferences} />
+        {/* Branding stays for accessibility and region labeling but is no longer visible chrome. */}
+        <div className="visually-hidden">
+          <p className="section-kicker">Local studio</p>
+          <h1 id="timeline-editor-title">OpenVideo</h1>
+          <span className="editor-program-region__subtitle">Timeline editor</span>
         </div>
-        {floatingProgramVisible ? <div className="empty-slate">Program Monitor is floating above the workspace.</div> : <ProgramMonitor editor={editor} />}
-        {floatingExportVisible ? <div className="empty-slate">Export controls are floating above the workspace.</div> : <ExportPanel editor={editor} />}
+        {floatingProgramVisible ? <div className="empty-slate">Program Monitor is floating above the workspace.</div> : <ProgramMonitor editor={editor} exportControl={floatingExportVisible ? null : <ExportPanel editor={editor} />} />}
+        {floatingProgramVisible && !floatingExportVisible && <ExportPanel editor={editor} />}
       </main>
 
       <EditorProgramSplitter programPercent={layoutPreference.programPercent} onProgramPercentChange={setProgramPercent} />

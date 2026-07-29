@@ -4,8 +4,10 @@ import {
   addTrack,
   deleteClip,
   moveClip,
+  placeClip,
   splitClip,
   trimClipLeft,
+  timelineDurationMs,
   trimClipRight,
   updateClipEffects
 } from '../../../shared/timelineLogic';
@@ -29,6 +31,9 @@ export function useTimelineEditor() {
   const [newProjectName, setNewProjectName] = useState('Untitled cutdown');
   const [selectedAssetId, setSelectedAssetId] = useState('');
   const [selectedClipId, setSelectedClipId] = useState('');
+  // Multi-selection for bulk actions (select all, delete). The single
+  // selectedClipId stays the primary selection that drives the Inspector.
+  const [selectedClipIds, setSelectedClipIds] = useState<readonly string[]>([]);
   const [timelineHistory, setTimelineHistory] = useState<TimelineHistory | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [hasUnsavedTimeline, setHasUnsavedTimeline] = useState(false);
@@ -48,6 +53,7 @@ export function useTimelineEditor() {
 
   const setLoadedProject = useCallback((snapshot: LocalProjectSnapshot | null) => {
     setProject(snapshot);
+    setSelectedClipIds([]);
     setTimelineHistory(snapshot === null ? null : createTimelineHistory(snapshot.timeline));
     playback.resetPlayback();
   }, [playback]);
@@ -88,7 +94,7 @@ export function useTimelineEditor() {
     setMetadataProbeRetryRevisionsByAssetId((current) => ({ ...current, [assetId]: (current[assetId] ?? 0) + 1 }));
   }, [clearMetadataProbeFailure]);
 
-  const openProject = useCallback(async (projectId: string) => {
+  const openProject = useCallback(async (projectId: string): Promise<boolean> => {
     setIsBusy(true);
     const response = await window.videoTool.openProject({ projectId });
     setIsBusy(false);
@@ -97,27 +103,56 @@ export function useTimelineEditor() {
       setSelectedAssetId(response.value.assets[0]?.id ?? '');
       setSelectedClipId('');
       setHasUnsavedTimeline(false);
-      setStatusMessage({ tone: 'success', text: `Opened ${response.value.name}.` });
-      return;
+      setStatusMessage({ tone: 'neutral', text: '' });
+      return true;
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+    return false;
   }, []);
 
-  const createProject = useCallback(async () => {
+  const createProject = useCallback(async (): Promise<boolean> => {
     setIsBusy(true);
     const response = await window.videoTool.createProject({ name: newProjectName });
     setIsBusy(false);
     if (response.ok) {
-      setLoadedProject(response.value);
+      if (response.value.cancelled) {
+        return false;
+      }
+      const project = response.value.project;
+      setLoadedProject(project);
       setSelectedAssetId('');
       setSelectedClipId('');
       setHasUnsavedTimeline(false);
       await refreshProjects();
-      setStatusMessage({ tone: 'success', text: `Created ${response.value.name}.` });
-      return;
+      setStatusMessage({ tone: 'success', text: `Created ${project.name} in its own folder.` });
+      return true;
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+    return false;
   }, [newProjectName, refreshProjects]);
+
+  const openProjectFolder = useCallback(async (): Promise<boolean> => {
+    setIsBusy(true);
+    const response = await window.videoTool.openProjectFolder();
+    setIsBusy(false);
+    if (response.ok) {
+      if (response.value.cancelled) {
+        return false;
+      }
+      const project = response.value.project;
+      setLoadedProject(project);
+      setSelectedAssetId(project.assets[0]?.id ?? '');
+      setSelectedClipId('');
+      setHasUnsavedTimeline(false);
+      await refreshProjects();
+      setStatusMessage(response.value.created
+        ? { tone: 'success', text: `Created ${project.name} in the selected folder.` }
+        : { tone: 'neutral', text: '' });
+      return true;
+    }
+    setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+    return false;
+  }, [refreshProjects]);
 
   const deleteCurrentProject = useCallback(async () => {
     if (project === null) return;
@@ -136,7 +171,7 @@ export function useTimelineEditor() {
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
   }, [project, refreshProjects, setLoadedProject]);
 
-  const { importAssets, importRecordingResult, importTtsResult } = useProjectAssetImports({ project, setIsBusy, setProject, setSelectedAssetId, setStatusMessage });
+  const { importAssets, importRecordingResult, importAiResult } = useProjectAssetImports({ project, setIsBusy, setProject, setSelectedAssetId, setStatusMessage });
 
   const replaceTimeline = useCallback((update: TimelineUpdate, successText: string): TimelineDocument | null => {
     if (project === null) return null;
@@ -182,11 +217,50 @@ export function useTimelineEditor() {
     replaceTimeline((timeline) => addTrack(timeline, { id: createOpaqueId(`${kind}-track`), kind, name: nextTrackName(timeline, kind) }), `Added a ${kind} track.`);
   }, [replaceTimeline]);
 
+  const selectClip = useCallback((clipId: string) => {
+    setSelectedClipId(clipId);
+    setSelectedClipIds(clipId.length === 0 ? [] : [clipId]);
+  }, []);
+
+  const selectAllClips = useCallback(() => {
+    if (project === null) return;
+    const clipIds = project.timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.id));
+    setSelectedClipIds(clipIds);
+    // The Inspector needs one clip; keep the current one when it is still there.
+    setSelectedClipId((current) => (clipIds.includes(current) ? current : clipIds[0] ?? ''));
+    setStatusMessage({
+      tone: 'neutral',
+      text: clipIds.length === 0 ? 'No clips on the timeline to select.' : `Selected ${clipIds.length} clips.`
+    });
+  }, [project]);
+
+  const clearSelection = useCallback(() => {
+    selectClip('');
+  }, [selectClip]);
+
+  const stepPlayhead = useCallback((deltaMs: number) => {
+    playback.setPlayheadMs(Math.max(0, playback.playheadMs + deltaMs), project?.timeline);
+  }, [playback, project]);
+
+  const goToTimelineStart = useCallback(() => {
+    playback.setPlayheadMs(0, project?.timeline);
+  }, [playback, project]);
+
+  const goToTimelineEnd = useCallback(() => {
+    if (project === null) return;
+    playback.setPlayheadMs(timelineDurationMs(project.timeline), project.timeline);
+  }, [playback, project]);
+
   const deleteSelectedClip = useCallback(() => {
-    if (selectedClip === null) return;
-    replaceTimeline((timeline) => deleteClip(timeline, selectedClip.clip.id), 'Deleted selected clip.');
+    const clipIds = selectedClipIds.length > 0 ? selectedClipIds : selectedClip === null ? [] : [selectedClip.clip.id];
+    if (clipIds.length === 0) return;
+    replaceTimeline(
+      (timeline) => clipIds.reduce<TimelineDocument | null>((next, clipId) => next === null ? null : deleteClip(next, clipId), timeline),
+      clipIds.length === 1 ? 'Deleted selected clip.' : `Deleted ${clipIds.length} clips.`
+    );
     setSelectedClipId('');
-  }, [replaceTimeline, selectedClip]);
+    setSelectedClipIds([]);
+  }, [replaceTimeline, selectedClip, selectedClipIds]);
 
   const moveSelectedClip = useCallback((deltaMs: number) => {
     if (selectedClip === null) return;
@@ -223,6 +297,24 @@ export function useTimelineEditor() {
     if (selectedClip === null) return;
     replaceTimeline((timeline) => splitClip(timeline, { clipId: selectedClip.clip.id, atMs: playback.playheadMs, rightClipId: createOpaqueId('clip') }), 'Split selected clip at the playhead.');
   }, [playback.playheadMs, replaceTimeline, selectedClip]);
+
+  const splitClipAt = useCallback((clipId: string, atMs: number) => {
+    replaceTimeline((timeline) => splitClip(timeline, { clipId, atMs, rightClipId: createOpaqueId('clip') }), 'Split clip with the razor tool.');
+  }, [replaceTimeline]);
+
+  const duplicateSelectedClip = useCallback(() => {
+    if (selectedClip === null) return;
+    const source = selectedClip.clip;
+    const duplicatedStartMs = source.timelineStartMs + (source.sourceEndMs - source.sourceStartMs);
+    const timeline = replaceTimeline(
+      (current) => placeClip(current, {
+        trackId: selectedClip.track.id,
+        clip: { ...source, id: createOpaqueId('clip'), timelineStartMs: duplicatedStartMs }
+      }),
+      'Duplicated the selected clip after itself.'
+    );
+    if (timeline === null) return;
+  }, [replaceTimeline, selectedClip]);
 
   const updateSelectedClipEffects = useCallback((effects: Partial<ClipEffects>) => {
     if (selectedClip === null) return;
@@ -263,6 +355,54 @@ export function useTimelineEditor() {
     return false;
   }, [clearMetadataProbeFailure, project]);
 
+  // The Edit Agent writes the project on disk from the main process, so an open
+  // editor must reload — otherwise the change is invisible and the next local
+  // save silently overwrites it. The edit always lands: it was asked for. Local
+  // unsaved work is not discarded but pushed onto the undo stack, because
+  // refusing to load left the agent's result invisible after any local edit.
+  useEffect(() => {
+    const openProjectId = project?.id;
+    if (openProjectId === undefined) return;
+    return window.videoTool.onProjectTimelineChanged((changedProjectId) => {
+      if (changedProjectId !== openProjectId) return;
+      void (async () => {
+        const response = await window.videoTool.openProject({ projectId: openProjectId });
+        if (!response.ok) {
+          setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+          return;
+        }
+        const snapshot = response.value;
+        if (!hasUnsavedTimeline) {
+          setLoadedProject(snapshot);
+          setStatusMessage({ tone: 'success', text: 'Timeline updated by the Edit Agent.' });
+          return;
+        }
+        setProject(snapshot);
+        setTimelineHistory((current) => current === null
+          ? createTimelineHistory(snapshot.timeline)
+          : pushTimelineHistory(current, snapshot.timeline));
+        playback.clampToTimeline(snapshot.timeline);
+        // In memory now matches disk; undo restores the local work.
+        setHasUnsavedTimeline(false);
+        setStatusMessage({ tone: 'warning', text: 'Loaded the Edit Agent timeline. Your unsaved edits are one undo away.' });
+      })();
+    });
+  }, [hasUnsavedTimeline, playback, project?.id, setLoadedProject]);
+
+  const renameProject = useCallback(async (name: string): Promise<boolean> => {
+    if (project === null) return false;
+    const response = await window.videoTool.renameProject({ projectId: project.id, name });
+    if (!response.ok) {
+      setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+      return false;
+    }
+    // Only the label changes; the timeline and history in memory stay as they are.
+    setProject((current) => current === null ? current : { ...current, name: response.value.name, updatedAt: response.value.updatedAt });
+    await refreshProjects();
+    setStatusMessage({ tone: 'success', text: `Renamed to ${response.value.name}.` });
+    return true;
+  }, [project, refreshProjects]);
+
   const saveTimeline = useCallback(async () => {
     if (project === null) return;
     setIsBusy(true);
@@ -278,15 +418,16 @@ export function useTimelineEditor() {
   }, [project, setLoadedProject]);
 
   return {
-    addTimelineTrack, createProject, deleteCurrentProject, deleteSelectedClip, hasUnsavedTimeline, importAssets,
-    importRecordingResult, importTtsResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
-    openProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline,
-    selectedAsset, selectedAssetId, selectedClip, selectedClipId, setNewProjectName, setSelectedAssetId, setSelectedClipId,
+    addTimelineTrack, createProject, deleteCurrentProject, deleteSelectedClip, duplicateSelectedClip, hasUnsavedTimeline, importAssets,
+    importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
+    openProject, openProjectFolder, renameProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline,
+    clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
+    setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,
     splitSelectedClip, statusMessage, trimSelectedClip, updateAssetMetadata, updateSelectedClipEffects,
     activePlaybackClip: playback.activePlaybackClip, canRedoTimeline: (timelineHistory?.future.length ?? 0) > 0,
     canUndoTimeline: (timelineHistory?.past.length ?? 0) > 0, isPlaying: playback.isPlaying, moveClipToTrack,
     placeAssetOnTrack, playheadMs: playback.playheadMs, redoTimeline, setIsPlaying: playback.setIsPlaying,
-    setPlayheadMs: playback.setPlayheadMs, splitAtPlayhead, trimClipTo, undoTimeline
+    setPlayheadMs: playback.setPlayheadMs, splitAtPlayhead, stepPlayhead, splitClipAt, trimClipTo, undoTimeline
   };
 }
 

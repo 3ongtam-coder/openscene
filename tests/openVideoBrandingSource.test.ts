@@ -6,8 +6,7 @@ const PACKAGE_SOURCE_URL = new URL('../package.json', import.meta.url);
 const INDEX_HTML_SOURCE_URL = new URL('../index.html', import.meta.url);
 const MAIN_INDEX_SOURCE_URL = new URL('../src/main/index.ts', import.meta.url);
 const TIMELINE_EDITOR_SOURCE_URL = new URL('../src/renderer/src/editor/TimelineEditor.tsx', import.meta.url);
-const CAPTURE_WORKSPACE_SOURCE_URL = new URL('../src/renderer/src/CaptureWorkspace.tsx', import.meta.url);
-const NARRATION_LOGIC_SOURCE_URL = new URL('../src/shared/narrationLogic.ts', import.meta.url);
+const VIDEO_GENERATION_WORKSPACE_SOURCE_URL = new URL('../src/renderer/src/VideoGenerationWorkspace.tsx', import.meta.url);
 const DESIGN_SOURCE_URL = new URL('../DESIGN.md', import.meta.url);
 const THEME_SOURCE_URL = new URL('../src/renderer/src/theme.ts', import.meta.url);
 const EDITOR_LAYOUT_SOURCE_URL = new URL('../src/renderer/src/editor/editorLayoutPreferences.ts', import.meta.url);
@@ -20,25 +19,28 @@ const PROVIDER_SEAMS_SOURCE_URL = new URL('../src/shared/providerSeams.ts', impo
 
 describe('OpenVideo branding source contract', () => {
   it('Given visible application metadata and UI copy, When source files are read, Then they use OpenVideo branding', async () => {
-    const [packageSource, indexHtmlSource, mainIndexSource, timelineEditorSource, captureWorkspaceSource, narrationLogicSource, designSource] = await Promise.all([
+    const [packageSource, indexHtmlSource, mainIndexSource, timelineEditorSource, videoGenWorkspaceSource, designSource] = await Promise.all([
       readFile(PACKAGE_SOURCE_URL, 'utf8'),
       readFile(INDEX_HTML_SOURCE_URL, 'utf8'),
       readFile(MAIN_INDEX_SOURCE_URL, 'utf8'),
       readFile(TIMELINE_EDITOR_SOURCE_URL, 'utf8'),
-      readFile(CAPTURE_WORKSPACE_SOURCE_URL, 'utf8'),
-      readFile(NARRATION_LOGIC_SOURCE_URL, 'utf8'),
+      readFile(VIDEO_GENERATION_WORKSPACE_SOURCE_URL, 'utf8'),
       readFile(DESIGN_SOURCE_URL, 'utf8')
     ]);
 
     expect(packageSource).toContain('"productName": "OpenVideo"');
     expect(packageSource).toContain('"description": "OpenVideo secure Electron MVP for selected-window preview and local WebM recording."');
     expect(indexHtmlSource).toContain('<title>OpenVideo</title>');
-    expect(mainIndexSource).toContain("title: 'OpenVideo'");
+    // The name is a constant now, so the window title and the About panel and
+    // app.setName() cannot drift apart.
+    expect(mainIndexSource).toContain("const APP_NAME = 'OpenVideo'");
+    expect(mainIndexSource).toContain('app.setName(APP_NAME)');
+    expect(mainIndexSource).toContain('title: APP_NAME');
     expect(timelineEditorSource).toContain('<h1 id="timeline-editor-title">OpenVideo</h1>');
-    expect(captureWorkspaceSource).toContain('Recordings stay local and are managed by OpenVideo.');
-    expect(narrationLogicSource).toContain('This is my local narration reference for OpenVideo.');
+    // The studio headings dropped the "AI" prefix with the chat-style redesign.
+    expect(videoGenWorkspaceSource).toContain('id="video-generation-title">Video Generation<');
     expect(designSource).toContain('# OpenVideo Design System');
-    expect(designSource).toContain('The Program header owns `Local studio`, `OpenVideo`, and the visible `Timeline editor` subtitle.');
+    expect(designSource).toContain('The Edit workspace keeps `Local studio`, `OpenVideo`, and the `Timeline editor` subtitle as visually hidden region labels for accessibility;');
   });
 
   it('Given compatibility-sensitive contracts, When source files are read, Then the rebrand keeps persisted and bridge identifiers unchanged', async () => {
@@ -62,6 +64,9 @@ describe('OpenVideo branding source contract', () => {
     expect(timelineCanvasSource).toContain("'application/x-window-loom-timeline'");
     expect(preloadSource).toContain("exposeInMainWorld('videoTool', videoTool)");
     expect(captureRecorderSource).toContain('window.videoTool');
-    expect(providerSeamsSource).toContain("'local_qwen'");
+    // Media generation is cloud-only; Ollama is the app's only local engine.
+    expect(providerSeamsSource).toContain("'elevenlabs'");
+    expect(providerSeamsSource).not.toContain("'local_qwen'");
+    expect(providerSeamsSource).not.toContain("'local_video'");
   });
 });

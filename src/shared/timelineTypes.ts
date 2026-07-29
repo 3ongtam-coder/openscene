@@ -137,11 +137,24 @@ export type LocalProjectSnapshot = {
   readonly timeline: TimelineDocument;
 };
 
+/** Folder-picker backed results: the user can cancel the native dialog. */
+export type CreateProjectResult =
+  | { readonly cancelled: true }
+  | { readonly cancelled: false; readonly project: LocalProjectSnapshot };
+
+export type OpenProjectFolderResult =
+  | { readonly cancelled: true }
+  | { readonly cancelled: false; readonly created: boolean; readonly project: LocalProjectSnapshot };
+
 export type LocalProjectSummary = {
   readonly id: string;
   readonly name: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Where the project lives: the private internal store or a user-chosen real folder. */
+  readonly storage?: 'internal' | 'external';
+  /** Folder name (never the full path) for externally stored projects. */
+  readonly folderName?: string;
 };
 
 export type PlaceClipInput = {
@@ -253,4 +266,8 @@ export type SaveTimelineInput = ProjectRequestInput & {
 
 export type GetAssetPlaybackUrlInput = ProjectRequestInput & {
   readonly assetId: string;
+};
+
+export type ImportProjectAssetsResult = {
+  readonly assets: readonly MediaAsset[];
 };
