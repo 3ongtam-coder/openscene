@@ -493,11 +493,112 @@ button {
   -webkit-app-region: no-drag;
 }
 
+/* Open-project tabs, following opencode's titlebar tabs: no borders, a filled
+   background only when active or hovered, dim titles that brighten on the
+   active tab, and a hairline divider between adjacent inactive tabs. */
+.project-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  max-width: 200px;
+  min-width: 0;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-radius: 6px;
+  color: var(--text-weaker);
+}
+
+.project-tab--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+/* Divider sits between two inactive tabs only, never beside the active one. */
+.project-tab:not(:first-child):not(.project-tab--active)::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: calc(var(--space-2) / -2 - 1px);
+  width: 1px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--line-subtle);
+}
+
+.project-tab--active + .project-tab::before {
+  display: none;
+}
+
+.project-tab__select {
+  overflow: hidden;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Always visible: revealing it would need a hover on the tab body, which is the
+   selection target and stays inert. The control keeps its own hover feedback. */
+.project-tab__close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-weaker);
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* The tab body carries role="tab" and aria-selected, so the shared tab rules
+   reach it and paint a second fill around the label on top of the tab's own.
+   The tab owns the fill; the body only carries the text. */
+.project-tab .project-tab__select[role="tab"],
+.project-tab .project-tab__select[role="tab"]:hover,
+.project-tab .project-tab__select[role="tab"][aria-selected="true"] {
+  min-height: 0;
+  padding: 0;
+  border-bottom: none;
+  color: inherit;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  /* Project names are user text: shown as typed, not shouted like a section. */
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.project-tab__close:hover {
+  color: var(--color-danger);
+  background: var(--surface-hover);
+}
+
+.product-chrome__empty {
+  color: var(--text-weak);
+  font-size: var(--text-caption);
+}
+
 .product-chrome__context {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
   min-width: 0;
 }
 
@@ -1893,7 +1994,7 @@ button {
 [role="tablist"] > .button--primary,
 [role="tablist"] > .button--primary:hover:not(:disabled) {
   color: var(--text-strong);
-  background: var(--card);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 
 [role="tabpanel"] {
@@ -1978,7 +2079,8 @@ button {
   padding: var(--space-2) var(--space-4);
   border: none;
   border-bottom: 2px solid transparent;
-  border-radius: 0;
+  /* Rounded so the selected fill reads as a cell, not a full-bleed block. */
+  border-radius: 6px;
   color: var(--color-muted);
   background: transparent;
   box-shadow: none;
@@ -2003,10 +2105,11 @@ button {
 }
 
 [role="tab"][aria-selected="true"] {
+  /* Selected reads as a recessed well: darker than the strip, no accent rule
+     underneath it. */
   border: none;
-  border-bottom: 2px solid var(--ring);
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
   box-shadow: none;
   transform: none;
   font-weight: 600;
