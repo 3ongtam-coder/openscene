@@ -1,33 +1,26 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EditScreen } from './src/screens/EditScreen';
-import { ProjectsScreen } from './src/screens/ProjectsScreen';
+import { GenerateSheet, type GenerateTarget } from './src/screens/GenerateSheet';
 import { ImageScreen } from './src/screens/ImageScreen';
 import { PlanScreen } from './src/screens/PlanScreen';
+import { ProjectsScreen } from './src/screens/ProjectsScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { VoiceScreen } from './src/screens/VoiceScreen';
+import { readProject } from './src/lib/projectStore';
+import { timelineDurationMs } from '@openvideo/shared/timelineLogic';
 import { theme } from './src/lib/theme';
 
 /**
- * Bottom tabs rather than the desktop's top strip. The desktop puts its tabs at
- * the top because the window has chrome to hang them from; a phone's reachable
- * area is the bottom, and the thumb is the pointer.
- *
- * Hand-rolled rather than pulling in a navigation library: three sibling screens
- * with no stack, no params, and no deep links do not need one, and the library
- * would be the largest dependency in the app.
+ * Two levels, like every editor of this kind: a project list, and the editor you
+ * enter from it. The generation surfaces are not peers of the project — they are
+ * things you reach for while editing one — so they open over the editor rather
+ * than sitting in a tab bar beside it.
  */
-const TABS = [
-  { id: 'projects', label: 'Projects', glyph: '❑' },
-  { id: 'edit', label: 'Edit', glyph: '▤' },
-  { id: 'plan', label: 'Plan', glyph: '◫' },
-  { id: 'image', label: 'Image', glyph: '◈' },
-  { id: 'settings', label: 'Settings', glyph: '⚙' }
-] as const;
-
-type TabId = (typeof TABS)[number]['id'];
+type Route = { readonly name: 'projects' } | { readonly name: 'editor'; readonly projectId: string };
 
 export default function App() {
   return (
@@ -38,80 +31,104 @@ export default function App() {
 }
 
 function Shell() {
-  const [active, setActive] = useState<TabId>('projects');
-  const [projectId, setProjectId] = useState<string | null>(null);
-  // Hardcoded padding put the title under the Dynamic Island on an iPhone 17
-  // Pro and guessed at the home-indicator height. The insets are the only
-  // numbers that are right on every device.
   const insets = useSafeAreaInsets();
-  const tabBarHeight = 54 + insets.bottom;
+  const [route, setRoute] = useState<Route>({ name: 'projects' });
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [modal, setModal] = useState<GenerateTarget | 'settings' | null>(null);
+
+  const projectId = route.name === 'editor' ? route.projectId : null;
+  // The voice screen sizes a script against the picture, so it needs the cut's
+  // length rather than a number typed twice.
+  const pictureSeconds =
+    projectId === null ? 0 : timelineDurationMs(readProject(projectId)?.timeline ?? { schemaVersion: 3, tracks: [], transitions: [] }) / 1000;
 
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
-      {/* Every screen stays mounted so switching tabs does not throw away a
-          typed prompt or a generated image. */}
-      {TABS.map(({ id }) => (
-        <View
-          key={id}
-          style={[styles.page, { bottom: tabBarHeight }, id !== active && styles.pageHidden]}
-          pointerEvents={id === active ? 'auto' : 'none'}
-        >
-          {id === 'projects' && (
-            <ProjectsScreen
-              topInset={insets.top}
-              activeProjectId={projectId}
-              onOpen={(next) => {
-                setProjectId(next);
-                setActive('edit');
-              }}
-            />
-          )}
-          {id === 'edit' && <EditScreen topInset={insets.top} projectId={projectId} />}
-          {id === 'plan' && <PlanScreen topInset={insets.top} />}
-          {id === 'image' && <ImageScreen topInset={insets.top} />}
-          {id === 'settings' && <SettingsScreen topInset={insets.top} />}
-        </View>
-      ))}
 
-      <View style={[styles.tabBar, { height: tabBarHeight, paddingBottom: insets.bottom }]}>
-        {TABS.map(({ id, label, glyph }) => {
-          const selected = id === active;
-          return (
-            <Pressable
-              key={id}
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-              accessibilityLabel={label}
-              onPress={() => setActive(id)}
-              style={styles.tab}
-            >
-              <Text style={[styles.tabGlyph, selected && styles.tabOn]}>{glyph}</Text>
-              <Text style={[styles.tabLabel, selected && styles.tabOn]}>{label}</Text>
+      {route.name === 'projects' ? (
+        <ProjectsScreen
+          topInset={insets.top}
+          activeProjectId={null}
+          onOpen={(id) => setRoute({ name: 'editor', projectId: id })}
+          onOpenSettings={() => setModal('settings')}
+        />
+      ) : (
+        <View style={styles.editor}>
+          <View style={[styles.bar, { paddingTop: insets.top + 8 }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Back to projects" onPress={() => setRoute({ name: 'projects' })} style={styles.barButton}>
+              <Text style={styles.barIcon}>‹</Text>
             </Pressable>
-          );
-        })}
-      </View>
+            <Text style={styles.barTitle} numberOfLines={1}>
+              {readProject(route.projectId)?.name ?? 'Project'}
+            </Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={() => setModal('settings')} style={styles.barButton}>
+              <Text style={styles.barIcon}>⚙</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.editorBody}>
+            <EditScreen topInset={0} projectId={route.projectId} />
+          </View>
+
+          <View style={[styles.dock, { paddingBottom: insets.bottom + 10 }]}>
+            <Pressable accessibilityRole="button" onPress={() => setSheetOpen(true)} style={styles.generate}>
+              <Text style={styles.generateText}>✦  Generate</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      <GenerateSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onSelect={setModal} />
+
+      <Modal visible={modal !== null} animationType="slide" onRequestClose={() => setModal(null)}>
+        <View style={styles.root}>
+          {modal === 'video' && <PlanScreen topInset={insets.top} />}
+          {modal === 'image' && <ImageScreen topInset={insets.top} />}
+          {modal === 'voice' && <VoiceScreen topInset={insets.top} targetSeconds={pictureSeconds} />}
+          {modal === 'agent' && <AgentPlaceholder topInset={insets.top} />}
+          {modal === 'settings' && <SettingsScreen topInset={insets.top} />}
+          <Pressable accessibilityRole="button" onPress={() => setModal(null)} style={[styles.close, { bottom: insets.bottom + 16 }]}>
+            <Text style={styles.closeText}>Done</Text>
+          </Pressable>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+/**
+ * Stated rather than stubbed with a chat box that cannot do anything. The
+ * agent's tools read and write a project through the filesystem and a long-lived
+ * process; neither exists here yet.
+ */
+function AgentPlaceholder({ topInset }: { readonly topInset: number }) {
+  return (
+    <View style={[styles.placeholder, { paddingTop: topInset + 40 }]}>
+      <Text style={styles.placeholderTitle}>AI assistant</Text>
+      <Text style={styles.placeholderBody}>
+        Not ported yet. The assistant drives the editor through tools that read and write a project on disk and run in
+        a long-lived process — neither of which the app has. The pieces that did cross are already here: shot planning
+        and pricing under Video, and narration sizing under Voice.
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
-  page: { position: 'absolute', top: 0, left: 0, right: 0 },
-  pageHidden: { opacity: 0, zIndex: -1 },
-  tabBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: theme.line,
-    backgroundColor: theme.surface
-  },
-  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
-  tabGlyph: { color: theme.textWeaker, fontSize: 18, lineHeight: 22 },
-  tabLabel: { color: theme.textWeaker, fontSize: 10, fontWeight: '600' },
-  tabOn: { color: theme.accent }
+  editor: { flex: 1 },
+  bar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.line },
+  barButton: { width: 44, height: 40, alignItems: 'center', justifyContent: 'center' },
+  barIcon: { color: theme.text, fontSize: 22 },
+  barTitle: { flex: 1, color: theme.text, fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  editorBody: { flex: 1 },
+  dock: { paddingHorizontal: 20, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.line, backgroundColor: theme.surface },
+  generate: { paddingVertical: 14, borderRadius: 10, alignItems: 'center', backgroundColor: theme.accent },
+  generateText: { color: theme.bg, fontSize: 15, fontWeight: '700' },
+  close: { position: 'absolute', right: 20, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: theme.accent },
+  closeText: { color: theme.bg, fontSize: 14, fontWeight: '700' },
+  placeholder: { flex: 1, paddingHorizontal: 24, gap: 12 },
+  placeholderTitle: { color: theme.text, fontSize: 24, fontWeight: '700' },
+  placeholderBody: { color: theme.textWeak, fontSize: 14, lineHeight: 21 }
 });

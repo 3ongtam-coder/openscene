@@ -7,11 +7,13 @@ import { theme } from '../lib/theme';
 export function ProjectsScreen({
   topInset,
   activeProjectId,
-  onOpen
+  onOpen,
+  onOpenSettings
 }: {
   readonly topInset: number;
   readonly activeProjectId: string | null;
   readonly onOpen: (projectId: string) => void;
+  readonly onOpenSettings?: () => void;
 }) {
   const [projects, setProjects] = useState<readonly ProjectSummary[]>([]);
   const [draftName, setDraftName] = useState('');
@@ -43,7 +45,14 @@ export function ProjectsScreen({
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingTop: topInset + 16 }]}>
-      <Text style={styles.h1}>Projects</Text>
+      <View style={styles.headRow}>
+        <Text style={styles.h1}>Projects</Text>
+        {onOpenSettings !== undefined && (
+          <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={onOpenSettings} style={styles.iconButton}>
+            <Text style={styles.icon}>⚙</Text>
+          </Pressable>
+        )}
+      </View>
       <Text style={styles.sub}>
         Stored inside the app. Imported clips are copied in, so a project keeps working after the original is deleted
         from your library.
@@ -100,6 +109,7 @@ export function ProjectsScreen({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   content: { padding: 20, paddingBottom: 40, gap: 10 },
+  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   h1: { color: theme.text, fontSize: 26, fontWeight: '700' },
   sub: { color: theme.textWeak, fontSize: 13, lineHeight: 19, marginBottom: 6 },
   newRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
