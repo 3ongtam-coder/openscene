@@ -5,8 +5,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { theme } from '../lib/theme';
 import { useMobileEditor, type EditorAsset } from '../lib/editorState';
 import { assetUri, importAsset, readProject, writeProject } from '../lib/projectStore';
-import { deliverExport, exportTimeline } from '../lib/exportComposition';
-import { isExportAvailable } from '../../modules/video-export';
 
 const TRACK_HEIGHT = { video: 56, audio: 40 } as const;
 const RAIL = 92;
@@ -53,9 +51,6 @@ export function EditScreen({
     );
   }, [projectId, loadProject]);
   const [pxPerSecond, setPxPerSecond] = useState(28);
-  const [exportState, setExportState] = useState<
-    { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; uri: string } | { kind: 'failed'; message: string }
-  >({ kind: 'idle' });
   const laneWidth = useRef(0);
 
   const timelineWidth = useMemo(
@@ -106,23 +101,6 @@ export function EditScreen({
     editor.addAsset(asset);
   };
 
-  const runExport = async (): Promise<void> => {
-    setExportState({ kind: 'running' });
-    const outcome = await exportTimeline({ timeline: editor.timeline, assets: editor.assets });
-    if (!outcome.ok) {
-      setExportState({ kind: 'failed', message: outcome.message });
-      return;
-    }
-    // Rendering and delivering are separate failures: a render that succeeded
-    // must not be reported as failed because the share sheet was dismissed.
-    const delivery = await deliverExport(outcome.uri);
-    setExportState(
-      delivery.ok
-        ? { kind: 'done', uri: delivery.how === 'photos' ? 'your photo library' : 'the app you chose' }
-        : { kind: 'failed', message: delivery.message }
-    );
-  };
-
   return (
     <View style={[styles.root, { paddingTop: topInset + 12 }]}>
       <View style={styles.head}>
@@ -151,11 +129,6 @@ export function EditScreen({
         <Tool label="Redo" onPress={editor.redo} disabled={!editor.canRedo} />
         <Tool label="Zoom +" onPress={() => setPxPerSecond((value) => Math.min(120, value * 1.5))} />
         <Tool label="Zoom −" onPress={() => setPxPerSecond((value) => Math.max(6, value / 1.5))} />
-        <Tool
-          label={exportState.kind === 'running' ? 'Exporting…' : 'Export'}
-          onPress={() => void runExport()}
-          disabled={exportState.kind === 'running' || editor.durationMs <= 0 || !isExportAvailable}
-        />
       </ScrollView>
 
       {editor.message !== null && <Text style={styles.message}>{editor.message}</Text>}
@@ -229,13 +202,6 @@ export function EditScreen({
         )
       )}
 
-      {exportState.kind === 'failed' && <Text style={styles.message}>{exportState.message}</Text>}
-      {exportState.kind === 'done' && <Text style={styles.exported}>Saved to {exportState.uri}.</Text>}
-      <Text style={styles.exportNote}>
-        {isExportAvailable
-          ? 'Export renders with AVFoundation on iOS and saves to your photo library, falling back to the share sheet if you decline that permission. Android is not implemented yet and says so rather than producing a file that is not there.'
-          : 'Export needs a development build — Expo Go cannot load the native video module, so the button is disabled rather than failing when pressed. Editing and projects work here.'}
-      </Text>
     </View>
   );
 }
