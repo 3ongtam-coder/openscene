@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { EditScreen } from './src/screens/EditScreen';
 import { ImageScreen } from './src/screens/ImageScreen';
 import { PlanScreen } from './src/screens/PlanScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
@@ -18,6 +19,7 @@ import { theme } from './src/lib/theme';
  * would be the largest dependency in the app.
  */
 const TABS = [
+  { id: 'edit', label: 'Edit', glyph: '▤', Screen: EditScreen },
   { id: 'plan', label: 'Plan', glyph: '◫', Screen: PlanScreen },
   { id: 'image', label: 'Image', glyph: '◈', Screen: ImageScreen },
   { id: 'settings', label: 'Settings', glyph: '⚙', Screen: SettingsScreen }
@@ -34,7 +36,7 @@ export default function App() {
 }
 
 function Shell() {
-  const [active, setActive] = useState<TabId>('plan');
+  const [active, setActive] = useState<TabId>('edit');
   // Hardcoded padding put the title under the Dynamic Island on an iPhone 17
   // Pro and guessed at the home-indicator height. The insets are the only
   // numbers that are right on every device.
