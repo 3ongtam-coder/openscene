@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { checkNarrationFit } from '@openvideo/shared/narrationTiming';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
-import { ModelPicker } from '../components/ModelPicker';
+import { ModelSelect } from '../components/ModelSelect';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { theme } from '../lib/theme';
 
@@ -47,10 +47,10 @@ export function VoiceScreen({
       </Text>
 
       <Text style={styles.label}>Voice model</Text>
-      <ModelPicker
+      <ModelSelect
         domain="voice-generation"
         selectedId={modelId}
-        connectedSlots={connected}
+        connected={connected}
         onSelect={(next) => setModelId(next.id)}
         onConnectionChange={refreshConnections}
       />

@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { estimateVideoPlanCost, PRICING_AS_OF } from '@openvideo/shared/mediaGenerationPricing';
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
-import { ModelPicker } from '../components/ModelPicker';
+import { ModelSelect } from '../components/ModelSelect';
 import type { VideoAspectRatio, VideoProgressStage } from '@openvideo/shared/videoGeneration';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
@@ -146,10 +146,10 @@ export function PlanScreen({
       <Text style={styles.sub}>Shot lengths and prices come from the same modules the desktop app uses.</Text>
 
       <Text style={styles.label}>Model</Text>
-      <ModelPicker
+      <ModelSelect
         domain="video-generation"
         selectedId={modelId}
-        connectedSlots={connected}
+        connected={connected}
         onSelect={(next) => setPlan(() => setModelId(next.id))}
         onConnectionChange={refreshConnections}
       />

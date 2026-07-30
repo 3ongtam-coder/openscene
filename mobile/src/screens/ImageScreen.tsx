@@ -12,7 +12,7 @@ import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 import { readKey, type ProviderSlot } from '../lib/credentials';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
-import { ModelPicker } from '../components/ModelPicker';
+import { ModelSelect } from '../components/ModelSelect';
 import { SpendPrompt } from '../components/SpendPrompt';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { theme } from '../lib/theme';
@@ -109,10 +109,10 @@ export function ImageScreen({
       <Text style={styles.sub}>Runs against your own provider account, through the shared adapters.</Text>
 
       <Text style={styles.label}>Model</Text>
-      <ModelPicker
+      <ModelSelect
         domain="image-generation"
         selectedId={modelId}
-        connectedSlots={connected}
+        connected={connected}
         onSelect={(next) => setModelId(next.id)}
         onConnectionChange={refreshConnections}
       />
