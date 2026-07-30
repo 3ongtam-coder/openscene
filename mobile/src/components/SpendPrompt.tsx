@@ -11,17 +11,23 @@ const LABEL: Record<SpendFeature, string> = {
 
 /**
  * The desktop's once / always / reject, asked before the charge rather than
- * after it. The cost line is the point of the prompt: the tool name and its
- * arguments say nothing about what the tap will cost.
+ * after it.
+ *
+ * The headline says what the tap does. Where a price is known and worth showing
+ * it is the price; where the screen deliberately does not quote one — video,
+ * whose cost the app now handles internally — it is the work instead. Either
+ * way it is the concrete thing, because "allow?" on its own tells the user
+ * nothing they can weigh.
  */
 export function SpendPrompt({
   feature,
-  cost,
+  headline,
   visible,
   onDecide
 }: {
   readonly feature: SpendFeature;
-  readonly cost: string;
+  /** The price, or what will run — whichever the caller is willing to state. */
+  readonly headline: string;
   readonly visible: boolean;
   readonly onDecide: (decision: Decision) => void;
 }) {
@@ -30,7 +36,7 @@ export function SpendPrompt({
       <View style={styles.scrim}>
         <View style={styles.card}>
           <Text style={styles.title}>Charge your {LABEL[feature].split(' ')[0]} provider?</Text>
-          <Text style={styles.cost}>{cost}</Text>
+          <Text style={styles.headline}>{headline}</Text>
           <Text style={styles.body}>
             This runs against your own account. “Always” applies to {LABEL[feature]} only, and can be cleared in
             Settings.
@@ -54,7 +60,7 @@ const styles = StyleSheet.create({
   scrim: { flex: 1, backgroundColor: '#000000cc', justifyContent: 'center', padding: 26 },
   card: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, gap: 10, borderWidth: 1, borderColor: theme.line },
   title: { color: theme.text, fontSize: 17, fontWeight: '700' },
-  cost: { color: theme.mint, fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  headline: { color: theme.mint, fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
   body: { color: theme.textWeak, fontSize: 12, lineHeight: 18, marginBottom: 4 },
   primary: { paddingVertical: 13, borderRadius: 10, alignItems: 'center', backgroundColor: theme.accent },
   primaryText: { color: theme.bg, fontSize: 14, fontWeight: '700' },

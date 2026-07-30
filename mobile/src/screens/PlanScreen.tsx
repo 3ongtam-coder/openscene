@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { estimateVideoPlanCost, PRICING_AS_OF } from '@openvideo/shared/mediaGenerationPricing';
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelSelect } from '../components/ModelSelect';
@@ -56,10 +55,6 @@ export function PlanScreen({
   const plan = useMemo(
     () => planVideoStoryboard({ totalSeconds, providerId: model.providerId }),
     [totalSeconds, model.providerId]
-  );
-  const cost = useMemo(
-    () => estimateVideoPlanCost(plan.shots.map((shot) => ({ modelId: model.id, durationSeconds: shot.durationSeconds }))),
-    [plan, model.id]
   );
 
   // Changing anything about the plan clears the last run's results. Leaving them
@@ -135,8 +130,14 @@ export function PlanScreen({
     if (decision !== 'reject') void runGeneration();
   };
 
-  const costLine =
-    cost.fullyPriced && cost.totalUsd !== undefined ? `~$${cost.totalUsd.toFixed(2)}` : 'Cost unknown';
+  /**
+   * What the tap will run, in place of what it will cost.
+   *
+   * The estimate is still computed — the agent quotes it, and the desktop shows
+   * it — but this screen no longer puts a price panel in front of a decision the
+   * user already made when they chose the model and the length.
+   */
+  const runLine = `${plan.shots.length} shot${plan.shots.length === 1 ? '' : 's'} · ${plan.totalSeconds}s`;
   const canGenerate =
     projectId !== null && !running && prompt.trim().length > 0 && connected[model?.providerId ?? ''] === true;
 
@@ -219,25 +220,7 @@ export function PlanScreen({
         restated rather than referenced.
       </Text>
 
-      <View style={styles.costCard}>
-        <Text style={styles.costLabel}>Estimated cost</Text>
-        {cost.fullyPriced && cost.totalUsd !== undefined ? (
-          <>
-            <Text style={styles.total}>~${cost.totalUsd.toFixed(2)}</Text>
-            {cost.shots.map((estimate, index) => (
-              <Text key={index} style={styles.estimate}>
-                {String(index + 1).padStart(2, '0')} · ${(estimate.amountUsd ?? 0).toFixed(2)} · {estimate.basis}
-              </Text>
-            ))}
-          </>
-        ) : (
-          <Text style={styles.warn}>
-            At least one shot could not be priced, so no total is shown — a partial sum reads as the whole bill.
-            Confirm you accept an unknown charge before generating.
-          </Text>
-        )}
-        <Text style={styles.footnote}>List price recorded {PRICING_AS_OF}. An estimate, not a quote.</Text>
-
+      <View style={styles.runCard}>
         <Pressable
           accessibilityRole="button"
           disabled={!canGenerate}
@@ -250,7 +233,7 @@ export function PlanScreen({
         </Pressable>
         {projectId === null && <Text style={styles.footnote}>Open a project first — generated shots are saved into it.</Text>}
         {projectId !== null && connected[model?.providerId ?? ''] !== true && (
-          <Text style={styles.footnote}>{model?.providerLabel} is not connected. Add its key in Settings.</Text>
+          <Text style={styles.footnote}>{model?.providerLabel} is not connected. Add its key with ＋ above.</Text>
         )}
         {shotStates.some((state) => state.kind === 'done') && (
           <Text style={styles.footnote}>
@@ -259,7 +242,7 @@ export function PlanScreen({
         )}
       </View>
 
-      <SpendPrompt feature="video-generation" cost={costLine} visible={asking} onDecide={decide} />
+      <SpendPrompt feature="video-generation" headline={runLine} visible={asking} onDecide={decide} />
     </ScrollView>
   );
 }
@@ -311,10 +294,7 @@ const styles = StyleSheet.create({
   shotBody: { color: theme.text, fontSize: 13, flex: 1, fontVariant: ['tabular-nums'] },
   shotLen: { color: theme.textWeak, fontSize: 12, fontVariant: ['tabular-nums'] },
   warn: { color: theme.warn, fontSize: 12, lineHeight: 18, marginTop: 6 },
-  costCard: { marginTop: 24, padding: 16, borderRadius: 12, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 4 },
-  costLabel: { color: theme.textWeak, fontSize: 11, fontWeight: '600', letterSpacing: 0.8 },
-  total: { color: theme.text, fontSize: 32, fontWeight: '700', fontVariant: ['tabular-nums'], marginBottom: 6 },
-  estimate: { color: theme.textWeak, fontSize: 11, fontVariant: ['tabular-nums'] },
+  runCard: { marginTop: 24, padding: 16, borderRadius: 12, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 4 },
   footnote: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, marginTop: 8 },
   input: { minHeight: 84, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 14, textAlignVertical: 'top' },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6 },

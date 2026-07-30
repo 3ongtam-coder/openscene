@@ -305,7 +305,7 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
       )}
 
       {spendTool?.spends != null && (
-        <SpendPrompt feature={spendTool.spends} cost={pending?.cost ?? ''} visible={pending !== null} onDecide={decide} />
+        <SpendPrompt feature={spendTool.spends} headline={pending?.cost ?? ''} visible={pending !== null} onDecide={decide} />
       )}
 
       <View style={styles.composer}>

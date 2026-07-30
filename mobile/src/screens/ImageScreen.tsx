@@ -158,7 +158,7 @@ export function ImageScreen({
         <Text style={styles.ctaText}>{result.kind === 'running' ? 'Generating…' : 'Generate'}</Text>
       </Pressable>
 
-      <SpendPrompt feature="image-generation" cost={costLine} visible={pending !== null} onDecide={decide} />
+      <SpendPrompt feature="image-generation" headline={costLine} visible={pending !== null} onDecide={decide} />
 
       {result.kind === 'running' && <ActivityIndicator color={theme.accent} style={styles.spinner} />}
       {result.kind === 'failed' && <Text style={styles.error}>{result.message}</Text>}
