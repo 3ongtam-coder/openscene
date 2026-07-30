@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 
 import { nextVisualBoundaryMs } from '@openvideo/shared/timelinePlayback';
@@ -16,6 +16,7 @@ import {
 import { PreviewPlayer } from '../components/PreviewPlayer';
 import { TimelineClip } from '../components/TimelineClip';
 import { MediaLibrary } from '../components/MediaLibrary';
+import { TimelineRuler } from '../components/TimelineRuler';
 import { PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from '../components/Icon';
 
 const TRACK_HEIGHT = { video: 56, audio: 40 } as const;
@@ -47,7 +48,16 @@ export function EditScreen({
   const [reloadToken, setReloadToken] = useState(0);
   const [inspecting, setInspecting] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [zooming, setZooming] = useState(false);
+  /** Visible width of the lane area, for the fit-to-window zoom. */
+  const laneWidth = useRef(0);
+  const scroller = useRef<ScrollView>(null);
+  const scrollX = useRef(0);
   const pxPerMs = pxPerSecond / 1000;
+  // The pinch responder is created once, so it reads the live scale through a
+  // ref rather than closing over a stale one.
+  const pxPerSecondRef = useRef(pxPerSecond);
+  pxPerSecondRef.current = pxPerSecond;
 
   // Opening a project replaces the editor's document and its undo history.
   const { loadProject } = editor;
@@ -122,6 +132,51 @@ export function EditScreen({
   useEffect(() => {
     if (playing && editor.playheadMs >= editor.durationMs && editor.durationMs > 0) setPlaying(false);
   }, [playing, editor.playheadMs, editor.durationMs]);
+
+  /**
+   * Pinch to zoom, anchored on the midpoint between the fingers.
+   *
+   * Without the anchor, zooming walks the timeline sideways under you: scaling
+   * alone holds position zero still, so the further right you are the further
+   * the content jumps. Keeping the moment under the fingers fixed is what makes
+   * it feel like zooming rather than rescaling.
+   *
+   * PanResponder rather than a gesture library: two touch points and a distance
+   * is the whole gesture, and the alternative is a native dependency and another
+   * dev-client rebuild.
+   */
+  const pinch = useRef({ distance: 0, pxPerSecond: 0, anchorMs: 0, anchorX: 0 });
+  const zoomResponder = useRef(
+    PanResponder.create({
+      // Two fingers only; one still scrolls the timeline and drags clips.
+      onStartShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onMoveShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onPanResponderGrant: (event) => {
+        const [a, b] = event.nativeEvent.touches;
+        if (a === undefined || b === undefined) return;
+        const centre = (a.pageX + b.pageX) / 2;
+        setZooming(true);
+        pinch.current = {
+          distance: Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY),
+          pxPerSecond: pxPerSecondRef.current,
+          anchorX: centre,
+          anchorMs: (scrollX.current + centre - RAIL) / (pxPerSecondRef.current / 1000)
+        };
+      },
+      onPanResponderMove: (event) => {
+        const [a, b] = event.nativeEvent.touches;
+        if (a === undefined || b === undefined || pinch.current.distance === 0) return;
+        const distance = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+        const next = Math.min(400, Math.max(3, (pinch.current.pxPerSecond * distance) / pinch.current.distance));
+        setPxPerSecond(next);
+        // Put the anchored moment back under the fingers.
+        const target = pinch.current.anchorMs * (next / 1000) - (pinch.current.anchorX - RAIL);
+        scroller.current?.scrollTo({ x: Math.max(0, target), animated: false });
+      },
+      onPanResponderRelease: () => setZooming(false),
+      onPanResponderTerminate: () => setZooming(false)
+    })
+  ).current;
 
   /**
    * Step to the previous or next edit point.
@@ -238,14 +293,31 @@ export function EditScreen({
         </Text>
         <Pressable
           accessibilityRole="button"
-          onPress={() => setPxPerSecond((value) => Math.max(6, value / 1.5))}
+          accessibilityLabel="Zoom out"
+          onPress={() => setPxPerSecond((value) => Math.max(3, value / 1.5))}
           style={styles.small}
         >
           <Text style={styles.smallText}>−</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          onPress={() => setPxPerSecond((value) => Math.min(160, value * 1.5))}
+          accessibilityLabel="Fit the whole timeline"
+          onPress={() => {
+            // Fit is the one zoom a user cannot reach by pinching without
+            // several goes, and it is the one they want after a long edit.
+            if (editor.durationMs > 0 && laneWidth.current > 0) {
+              setPxPerSecond(Math.max(3, (laneWidth.current - 24) / (editor.durationMs / 1000)));
+              scroller.current?.scrollTo({ x: 0, animated: true });
+            }
+          }}
+          style={styles.small}
+        >
+          <Text style={styles.smallText}>⤢</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Zoom in"
+          onPress={() => setPxPerSecond((value) => Math.min(400, value * 1.5))}
           style={styles.small}
         >
           <Text style={styles.smallText}>+</Text>
@@ -313,16 +385,38 @@ export function EditScreen({
         </View>
       )}
 
-      <ScrollView style={styles.timelineVertical}>
+      <ScrollView
+        style={styles.timelineVertical}
+        onLayout={(event) => {
+          laneWidth.current = event.nativeEvent.layout.width - RAIL;
+        }}
+      >
         <ScrollView
+          ref={scroller}
           horizontal
           showsHorizontalScrollIndicator
-          // Frozen while a clip is being dragged, or the scroll view steals the
-          // pan the moment the finger moves sideways.
-          scrollEnabled={!dragging}
+          // Frozen while a clip is being dragged or the timeline is being
+          // pinched, or the scroll view steals the pan the moment a finger
+          // moves sideways.
+          scrollEnabled={!dragging && !zooming}
+          scrollEventThrottle={16}
+          onScroll={(event) => {
+            scrollX.current = event.nativeEvent.contentOffset.x;
+          }}
           contentContainerStyle={{ width: timelineWidth + RAIL }}
         >
-          <View style={styles.tracks}>
+          <View style={styles.tracks} {...zoomResponder.panHandlers}>
+            {/* Scrubbing lives on the ruler because a timeline whose lanes are
+                full of clips has no empty lane left to tap. */}
+            <View style={styles.rulerRow}>
+              <View style={styles.rulerRail} />
+              <Pressable
+                style={styles.rulerLane}
+                onPress={(event) => setPlayheadMs(Math.max(0, event.nativeEvent.locationX / pxPerMs))}
+              >
+                <TimelineRuler durationMs={editor.durationMs} pxPerMs={pxPerMs} width={timelineWidth} />
+              </Pressable>
+            </View>
             {editor.timeline.tracks.map((track) => (
               <View key={track.id} style={[styles.track, { minHeight: TRACK_HEIGHT[track.kind] }]}>
                 <View style={styles.rail}>
@@ -470,6 +564,9 @@ const styles = StyleSheet.create({
   stepperValue: { width: 48, textAlign: 'center', color: theme.textWeak, fontSize: 12, fontVariant: ['tabular-nums'] },
   timelineVertical: { flex: 1 },
   tracks: { position: 'relative', paddingBottom: 8 },
+  rulerRow: { flexDirection: 'row' },
+  rulerRail: { width: RAIL, borderRightWidth: 1, borderRightColor: theme.line },
+  rulerLane: { flex: 1 },
   track: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: theme.line },
   rail: { width: RAIL, paddingHorizontal: 10, justifyContent: 'center', gap: 3, borderRightWidth: 1, borderRightColor: theme.line },
   railName: { color: theme.text, fontSize: 11, fontWeight: '600' },
