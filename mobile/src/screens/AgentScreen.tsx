@@ -12,10 +12,12 @@ import {
 import { LLM_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, getLlmCatalogProvider } from '@openvideo/shared/llmProviders';
 
 import { readSlot } from '../lib/credentials';
+import { customCredentialKey, useCustomProviders } from '../lib/customProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { AGENT_TOOLS, findTool } from '../lib/agentTools';
 import { sendChatTurn, type ChatMessage, type ToolCallProposal } from '../lib/agentChatClient';
 import { SpendPrompt } from '../components/SpendPrompt';
+import { AddCustomProvider } from '../components/AddCustomProvider';
 import { theme } from '../lib/theme';
 
 /**
@@ -37,6 +39,7 @@ type Pending = { readonly proposal: ToolCallProposal; readonly cost: string };
 
 export function AgentScreen({ topInset, projectId }: { readonly topInset: number; readonly projectId: string | null }) {
   const permissions = useSpendPermissions();
+  const { providers: customProviders, refresh: refreshCustom } = useCustomProviders();
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [providerId, setProviderId] = useState('openai');
   const [modelId, setModelId] = useState('');
@@ -54,10 +57,22 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   // 153 in a phone-sized list is a search problem, not a picker.
   const providers = useMemo(() => {
     const wanted = new Set([...POPULAR_LLM_PROVIDER_IDS, ...Object.keys(connected).filter((id) => connected[id])]);
-    return LLM_PROVIDERS.filter((provider) => wanted.has(provider.id));
-  }, [connected]);
+    return [
+      // The user's own endpoints lead: they were added deliberately, which is a
+      // stronger signal of intent than a popularity list.
+      ...customProviders.map((provider) => ({ id: provider.id, label: provider.label, auth: 'api-key' as const })),
+      ...LLM_PROVIDERS.filter((provider) => wanted.has(provider.id))
+    ];
+  }, [connected, customProviders]);
 
   const models = useMemo(() => {
+    const custom = customProviders.find((provider) => provider.id === providerId);
+    // A custom endpoint publishes no catalog, so the models are the ones the
+    // user named and every one is assumed to call tools — the endpoint is the
+    // authority, and it will say so if it does not.
+    if (custom !== undefined) {
+      return custom.models.map((id) => ({ id, label: id, toolCall: true, contextK: undefined }));
+    }
     const catalog = getLlmCatalogProvider(providerId);
     // Only tool-callers: a model that cannot call tools cannot do anything here
     // except talk, and it would look broken rather than limited.
@@ -69,21 +84,24 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
       .filter((model) => model.toolCall === true)
       .slice()
       .sort((a, b) => (b.contextK ?? 0) - (a.contextK ?? 0));
-  }, [providerId]);
+  }, [providerId, customProviders]);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all(
-      LLM_PROVIDERS.filter((provider) => provider.credentialKey !== undefined).map(
+    void Promise.all([
+      ...LLM_PROVIDERS.filter((provider) => provider.credentialKey !== undefined).map(
         async (provider) => [provider.id, (await readSlot(provider.credentialKey as string)) !== null] as const
+      ),
+      ...customProviders.map(
+        async (provider) => [provider.id, (await readSlot(customCredentialKey(provider.id))) !== null] as const
       )
-    ).then((entries) => {
+    ]).then((entries) => {
       if (!cancelled) setConnected(Object.fromEntries(entries));
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [customProviders]);
 
   useEffect(() => {
     if (models.length > 0 && !models.some((model) => model.id === modelId)) setModelId(models[0].id);
@@ -187,7 +205,7 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
     void advance(next);
   };
 
-  const providerLabel = LLM_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? providerId;
+  const providerLabel = providers.find((provider) => provider.id === providerId)?.label ?? providerId;
   const spendTool = pending === null ? undefined : findTool(pending.proposal.name);
 
   return (
@@ -239,6 +257,14 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
           {connected[providerId] !== true && (
             <Text style={styles.note}>{providerLabel} has no key stored — add one in Settings.</Text>
           )}
+          <View style={styles.addCustom}>
+            <AddCustomProvider
+              onAdded={() => {
+                refreshCustom();
+                setPickerOpen(true);
+              }}
+            />
+          </View>
         </View>
       )}
 
@@ -348,6 +374,7 @@ const styles = StyleSheet.create({
   modelRowOn: { backgroundColor: theme.surface },
   modelName: { color: theme.text, fontSize: 12 },
   modelMeta: { color: theme.textWeaker, fontSize: 10, fontVariant: ['tabular-nums'] },
+  addCustom: { paddingHorizontal: 20, paddingTop: 10 },
   note: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, paddingHorizontal: 20, paddingTop: 6 },
   thread: { flex: 1 },
   threadContent: { padding: 16, gap: 10, paddingBottom: 24 },

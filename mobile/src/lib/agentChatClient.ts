@@ -1,5 +1,6 @@
 import { getLlmProvider, type LlmProviderInfo } from '@openvideo/shared/llmProviders';
 import { readSlot } from './credentials';
+import { customCredentialKey, findCustomProvider, isCustomProviderId } from './customProviders';
 
 /**
  * A tool-calling chat turn, spoken directly from the device.
@@ -89,20 +90,29 @@ export async function sendChatTurn(input: {
   readonly messages: readonly ChatMessage[];
   readonly tools: readonly ToolSchema[];
 }): Promise<ChatTurn> {
-  const provider = getLlmProvider(input.providerId);
-  if (provider === undefined) return { ok: false, message: `Unknown provider ${input.providerId}.` };
+  // A custom provider is an OpenAI-compatible endpoint by definition — that is
+  // the only thing the add form can describe — so it needs no adapter lookup,
+  // only its own base URL and key.
+  const custom = isCustomProviderId(input.providerId) ? findCustomProvider(input.providerId) : undefined;
+  const provider = custom === undefined ? getLlmProvider(input.providerId) : undefined;
+  if (custom === undefined && provider === undefined) {
+    return { ok: false, message: `Unknown provider ${input.providerId}.` };
+  }
 
-  const endpoint = endpointFor(provider);
+  const label = custom?.label ?? provider?.label ?? input.providerId;
+  const endpoint =
+    custom !== undefined ? `${custom.baseUrl.replace(/\/$/, '')}/chat/completions` : endpointFor(provider as LlmProviderInfo);
   if (endpoint === null) {
     return {
       ok: false,
-      message: `${provider.label} speaks the ${provider.adapter} API, which the mobile client does not implement yet. Pick an OpenAI-compatible provider.`
+      message: `${label} speaks the ${provider?.adapter ?? 'unknown'} API, which the mobile client does not implement yet. Pick an OpenAI-compatible provider.`
     };
   }
 
-  const apiKey = provider.credentialKey === undefined ? null : await readSlot(provider.credentialKey);
-  if (provider.auth === 'api-key' && apiKey === null) {
-    return { ok: false, message: `${provider.label} has no key stored — add one in Settings.` };
+  const credentialKey = custom !== undefined ? customCredentialKey(custom.id) : provider?.credentialKey;
+  const apiKey = credentialKey === undefined ? null : await readSlot(credentialKey);
+  if (apiKey === null && (custom !== undefined || provider?.auth === 'api-key')) {
+    return { ok: false, message: `${label} has no key stored — add one in Settings.` };
   }
 
   try {
@@ -130,7 +140,7 @@ export async function sendChatTurn(input: {
       const body = await response.text();
       // The provider's own message is more useful than a generic failure, but it
       // can be an entire HTML error page, so it is clipped.
-      return { ok: false, message: `${provider.label} returned ${response.status}: ${body.slice(0, 300)}` };
+      return { ok: false, message: `${label} returned ${response.status}: ${body.slice(0, 300)}` };
     }
 
     const payload: unknown = await response.json();

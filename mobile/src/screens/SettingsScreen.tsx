@@ -5,6 +5,8 @@ import { PROVIDER_KEYS, readSlot } from '../lib/credentials';
 import { SPEND_FEATURES, useSpendPermissions } from '../lib/permissions';
 import { describeProvider, providersForDomain } from '../lib/mediaProviders';
 import { ProviderConnect } from '../components/ProviderConnect';
+import { AddCustomProvider } from '../components/AddCustomProvider';
+import { customCredentialKey, removeCustomProvider, useCustomProviders } from '../lib/customProviders';
 import { LLM_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, getLlmCatalogProvider } from '@openvideo/shared/llmProviders';
 import { theme } from '../lib/theme';
 
@@ -47,12 +49,17 @@ function chatRows(): readonly Row[] {
 export function SettingsScreen({ topInset }: { readonly topInset: number }) {
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const permissions = useSpendPermissions();
+  const { providers: customProviders, refresh: refreshCustom } = useCustomProviders();
 
   const refresh = useCallback(async (): Promise<void> => {
-    const slots = new Set<string>([...PROVIDER_KEYS.map((entry) => entry.slot), ...chatRows().map((row) => row.slot)]);
+    const slots = new Set<string>([
+      ...PROVIDER_KEYS.map((entry) => entry.slot),
+      ...chatRows().map((row) => row.slot),
+      ...customProviders.map((provider) => customCredentialKey(provider.id))
+    ]);
     const entries = await Promise.all([...slots].map(async (slot) => [slot, (await readSlot(slot)) !== null] as const));
     setConnected(Object.fromEntries(entries));
-  }, []);
+  }, [customProviders]);
 
   useEffect(() => {
     void refresh();
@@ -87,6 +94,29 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Assistant</Text>
         <Text style={styles.sectionBlurb}>Models the AI tab can talk to and call tools with.</Text>
+        {customProviders.map((provider) => (
+          <View key={provider.id} style={styles.customRow}>
+            <ProviderConnect
+              slot={customCredentialKey(provider.id)}
+              label={provider.label}
+              hint="API key"
+              meta={`${provider.models.length} model${provider.models.length === 1 ? '' : 's'} · ${provider.baseUrl}`}
+              connected={connected[customCredentialKey(provider.id)] === true}
+              onChange={() => void refresh()}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${provider.label}`}
+              onPress={() => {
+                removeCustomProvider(provider.id);
+                refreshCustom();
+              }}
+              style={styles.removeCustom}
+            >
+              <Text style={styles.removeCustomText}>Remove this provider</Text>
+            </Pressable>
+          </View>
+        ))}
         {chatRows().map((row) => (
           <ProviderConnect
             key={`chat-${row.slot}`}
@@ -98,6 +128,7 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
             onChange={() => void refresh()}
           />
         ))}
+        <AddCustomProvider onAdded={refreshCustom} />
       </View>
 
       <View style={styles.section}>
@@ -134,6 +165,9 @@ const styles = StyleSheet.create({
   section: { marginTop: 22, gap: 10 },
   sectionTitle: { color: theme.text, fontSize: 16, fontWeight: '700' },
   sectionBlurb: { color: theme.textWeak, fontSize: 12, lineHeight: 18, marginBottom: 2 },
+  customRow: { gap: 6 },
+  removeCustom: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: theme.line },
+  removeCustomText: { color: theme.textWeaker, fontSize: 10, fontWeight: '600' },
   permRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.line },
   permLabel: { flex: 1, color: theme.text, fontSize: 13, textTransform: 'capitalize' },
   permValue: { color: theme.textWeak, fontSize: 12 },
