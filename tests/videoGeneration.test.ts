@@ -6,6 +6,7 @@ import {
   requestSoraVideo,
   requestVeoVideo,
   snapSoraSeconds,
+  supportsReferenceImage,
   videoAdapterFor
 } from '../src/shared/videoGeneration';
 
@@ -310,5 +311,76 @@ describe('shared video generation', () => {
         fetchImpl: fetchMock as unknown as typeof fetch
       })
     ).rejects.toThrow(/unsafe prompt/);
+  });
+
+  it('sends a Runway start frame to image_to_video as a data URI', async () => {
+    let seenUrl = '';
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('_to_video')) {
+        seenUrl = url;
+        const body = JSON.parse(init.body as string);
+        // A start frame changes the endpoint, not just the body.
+        expect(body.promptImage).toBe('data:image/jpeg;base64,QUJD');
+        return new Response(JSON.stringify({ id: 't' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: 'SUCCEEDED', output: ['https://cdn/a.mp4'] }), { status: 200 });
+    });
+
+    await requestRunwayVideo({
+      apiKey: 'k',
+      modelId: 'gen4.5',
+      prompt: 'continue',
+      aspectRatio: '16:9',
+      durationSeconds: 5,
+      referenceImage: { mimeType: 'image/jpeg', base64: 'QUJD' },
+      pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(seenUrl).toBe('https://api.dev.runwayml.com/v1/image_to_video');
+  });
+
+  it('still uses text_to_video when there is no start frame', async () => {
+    let seenUrl = '';
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('_to_video')) {
+        seenUrl = url;
+        return new Response(JSON.stringify({ id: 't' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: 'SUCCEEDED', output: ['https://cdn/a.mp4'] }), { status: 200 });
+    });
+    await requestRunwayVideo({
+      apiKey: 'k',
+      modelId: 'gen4.5',
+      prompt: 'p',
+      aspectRatio: '16:9',
+      durationSeconds: 5,
+      pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+    expect(seenUrl).toBe('https://api.dev.runwayml.com/v1/text_to_video');
+  });
+
+  it('refuses a Luma start frame rather than generating an unrelated shot', async () => {
+    await expect(
+      requestLumaVideo({
+        apiKey: 'k',
+        modelId: 'ray-2',
+        prompt: 'p',
+        aspectRatio: '16:9',
+        durationSeconds: 5,
+        referenceImage: { mimeType: 'image/jpeg', base64: 'QUJD' }
+      })
+    ).rejects.toThrow(/hosted image URL/);
+  });
+
+  it('claims continuity only where a frame can actually be sent', () => {
+    expect(supportsReferenceImage('google_gemini')).toBe(true);
+    expect(supportsReferenceImage('runway')).toBe(true);
+    // Sora's reference input is multipart this adapter does not send, and Luma's
+    // needs a hosted URL. Claiming either would drop the frame silently and
+    // produce a cut that does not match.
+    expect(supportsReferenceImage('openai')).toBe(false);
+    expect(supportsReferenceImage('luma')).toBe(false);
   });
 });

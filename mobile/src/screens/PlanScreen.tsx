@@ -4,7 +4,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelSelect } from '../components/ModelSelect';
-import type { VideoAspectRatio, VideoProgressStage } from '@openvideo/shared/videoGeneration';
+import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
+import { isFrameExtractionAvailable } from '../../modules/video-export';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { generateShot } from '../lib/videoGeneration';
@@ -41,6 +42,7 @@ export function PlanScreen({
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
   const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
   const [running, setRunning] = useState(false);
+  const [continuity, setContinuity] = useState(true);
   const [asking, setAsking] = useState(false);
   const permissions = useSpendPermissions();
 
@@ -66,14 +68,19 @@ export function PlanScreen({
   };
 
   /**
-   * Shots run one at a time. In parallel they would multiply the spend before
-   * the first failure could stop it, and every one of these providers rate-limits
-   * concurrent jobs anyway.
+   * Shots run one at a time, each continuing from the last frame of the one
+   * before it.
+   *
+   * Sequential is not only about spend. Every shot is rendered blind, so the
+   * only thing that makes a sequence look like one piece is handing the tail of
+   * each shot to the next as its first frame — and that cannot be done while
+   * they run in parallel, because the frame does not exist yet.
    */
   const runGeneration = async (): Promise<void> => {
     if (projectId === null || model === undefined) return;
     setRunning(true);
     setShotStates(plan.shots.map(() => ({ kind: 'idle' })));
+    let carriedFrame: { base64: string; mimeType: string } | undefined;
 
     for (const [index, shot] of plan.shots.entries()) {
       const mark = (state: ShotState): void =>
@@ -85,9 +92,17 @@ export function PlanScreen({
         modelId: model.id,
         // Each shot is rendered blind, so the continuity keys are restated in
         // every prompt rather than referenced across shots.
-        prompt: `${prompt.trim()} — shot ${shot.index} of ${plan.shots.length}, ${shot.durationSeconds}s. Keep consistent: ${CONTINUITY_KEYS.join(', ')}.`,
+        prompt: `${prompt.trim()} — shot ${shot.index} of ${plan.shots.length}, ${shot.durationSeconds}s. ${
+          carriedFrame === undefined
+            ? `Keep consistent: ${CONTINUITY_KEYS.join(', ')}.`
+            : // With a start frame the model can see the continuity keys rather
+              // than being told them, so the prompt asks it to carry on instead
+              // of re-describing a scene it is already looking at.
+              'Continue directly from the supplied first frame, keeping the same subject, wardrobe, location and lighting.'
+        }`,
         aspectRatio,
         durationSeconds: shot.durationSeconds,
+        ...(carriedFrame === undefined ? {} : { referenceImage: carriedFrame }),
         onProgress: (stage) => mark({ kind: 'running', stage })
       });
 
@@ -97,6 +112,8 @@ export function PlanScreen({
         // sequence the user can no longer assemble as planned.
         break;
       }
+
+      carriedFrame = continuity ? result.tailFrame : undefined;
 
       const project = readProject(projectId);
       if (project === null) {
@@ -137,6 +154,9 @@ export function PlanScreen({
    * it — but this screen no longer puts a price panel in front of a decision the
    * user already made when they chose the model and the length.
    */
+  /** Chaining needs both a provider that accepts a frame and a build that can read one. */
+  const continuityPossible = isFrameExtractionAvailable && supportsReferenceImage(model?.providerId ?? '');
+
   const runLine = `${plan.shots.length} shot${plan.shots.length === 1 ? '' : 's'} · ${plan.totalSeconds}s`;
   const canGenerate =
     projectId !== null && !running && prompt.trim().length > 0 && connected[model?.providerId ?? ''] === true;
@@ -173,6 +193,29 @@ export function PlanScreen({
           <Chip key={ratio} label={ratio} selected={ratio === aspectRatio} onPress={() => setPlan(() => setAspectRatio(ratio))} />
         ))}
       </View>
+
+      {plan.shots.length > 1 && (
+        <>
+          <Text style={styles.label}>Continuity</Text>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: continuity && continuityPossible }}
+            disabled={!continuityPossible}
+            onPress={() => setPlan(() => setContinuity((value) => !value))}
+            style={[styles.toggle, !continuityPossible && styles.toggleOff]}
+          >
+            <View style={[styles.box, continuity && continuityPossible && styles.boxOn]} />
+            <Text style={styles.toggleText}>Start each shot from the last frame of the one before</Text>
+          </Pressable>
+          {!continuityPossible && (
+            <Text style={styles.body}>
+              {supportsReferenceImage(model?.providerId ?? '')
+                ? 'This build cannot read a frame out of a clip — rebuild the development client to chain shots.'
+                : `${model?.providerLabel} cannot start from a supplied frame, so shots are generated independently.`}
+            </Text>
+          )}
+        </>
+      )}
 
       <Text style={styles.label}>Prompt · used for every shot</Text>
       <TextInput
@@ -296,6 +339,11 @@ const styles = StyleSheet.create({
   warn: { color: theme.warn, fontSize: 12, lineHeight: 18, marginTop: 6 },
   runCard: { marginTop: 24, padding: 16, borderRadius: 12, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 4 },
   footnote: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, marginTop: 8 },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  toggleOff: { opacity: 0.45 },
+  box: { width: 18, height: 18, borderRadius: 5, borderWidth: 1.5, borderColor: theme.line },
+  boxOn: { backgroundColor: theme.accent, borderColor: theme.accent },
+  toggleText: { flex: 1, color: theme.text, fontSize: 12, lineHeight: 17 },
   input: { minHeight: 84, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 14, textAlignVertical: 'top' },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusText: { color: theme.textWeak, fontSize: 10, fontWeight: '600' },

@@ -253,14 +253,29 @@ export async function requestRunwayVideo(input: VideoRequestInput): Promise<Vide
   const startedAt = Date.now();
   input.onProgress?.('submitting', 0);
 
-  const startResponse = await fetchWithTimeout(fetchImpl, 'https://api.dev.runwayml.com/v1/text_to_video', {
+  // A reference frame changes the endpoint, not just the body: Runway keeps
+  // text-to-video and image-to-video separate, and the latter is what continues
+  // one shot from the end of the last.
+  const seeded = input.referenceImage !== undefined;
+  const endpoint = seeded
+    ? 'https://api.dev.runwayml.com/v1/image_to_video'
+    : 'https://api.dev.runwayml.com/v1/text_to_video';
+
+  const startResponse = await fetchWithTimeout(fetchImpl, endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       model: input.modelId,
       promptText: input.prompt,
       ratio,
-      duration: Math.round(input.durationSeconds)
+      duration: Math.round(input.durationSeconds),
+      ...(input.referenceImage === undefined
+        ? {}
+        : {
+            // Sent inline as a data URI rather than uploaded: it saves a round
+            // trip, and a 720p JPEG is far inside the 5MB encoded limit.
+            promptImage: `data:${input.referenceImage.mimeType};base64,${input.referenceImage.base64}`
+          })
     })
   });
   await expectOk(startResponse, 'Runway');
@@ -304,6 +319,12 @@ export async function requestRunwayVideo(input: VideoRequestInput): Promise<Vide
 
 /** Luma Dream Machine: create → poll the generation → hand back assets.video. */
 export async function requestLumaVideo(input: VideoRequestInput): Promise<VideoDownload> {
+  if (input.referenceImage !== undefined) {
+    // Dream Machine keyframes take a URL, not bytes, so continuing from a local
+    // frame would need somewhere to host it first. Refusing is better than
+    // generating an unrelated shot the user believes is a continuation.
+    throw new Error('Luma needs a hosted image URL for a start frame, which this build cannot provide. Use Runway or Veo to continue from the previous shot.');
+  }
   const fetchImpl = input.fetchImpl ?? fetch;
   const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
   const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
@@ -366,6 +387,19 @@ const VIDEO_ADAPTERS: Readonly<Record<string, (input: VideoRequestInput) => Prom
   runway: requestRunwayVideo,
   luma: requestLumaVideo
 };
+
+/**
+ * Whether a provider can start a shot from a given frame.
+ *
+ * Continuity is only offered where it is real: Veo takes inline bytes and
+ * Runway takes a data URI, while Sora's reference input is multipart this
+ * adapter does not send and Luma's needs a hosted URL. Offering it everywhere
+ * and silently dropping it would produce a cut that does not match and no
+ * indication why.
+ */
+export function supportsReferenceImage(providerId: string): boolean {
+  return providerId === 'google_gemini' || providerId === 'runway';
+}
 
 /** The adapter a provider id resolves to, or undefined when none is ported. */
 export function videoAdapterFor(providerId: string): ((input: VideoRequestInput) => Promise<VideoDownload>) | undefined {

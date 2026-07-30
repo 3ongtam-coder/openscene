@@ -26,9 +26,14 @@ export type NativeExportRequest = {
 
 export type NativeExportResult = { uri: string; durationMs: number };
 
+/** A still pulled from a clip, in the shape the provider APIs accept. */
+export type NativeFrame = { base64: string; mimeType: string; atMs: number };
+
 type VideoExportModuleType = {
   readonly isSupported: boolean;
   exportComposition(request: NativeExportRequest): Promise<NativeExportResult>;
+  /** Negative `atMs` means the last frame. */
+  extractFrame(uri: string, atMs: number): Promise<NativeFrame>;
 };
 
 /**
@@ -41,6 +46,15 @@ const nativeModule = requireOptionalNativeModule<VideoExportModuleType>('VideoEx
 
 export const isExportAvailable = nativeModule !== null;
 
+/**
+ * Frame extraction landed after export, so a dev client built before it has the
+ * module but not the function. Checking for the function itself rather than the
+ * module keeps continuity from failing with a confusing native error on a build
+ * that is otherwise fine.
+ */
+export const isFrameExtractionAvailable =
+  nativeModule !== null && typeof nativeModule.extractFrame === 'function';
+
 export default {
   isSupported: nativeModule?.isSupported ?? false,
   async exportComposition(request: NativeExportRequest): Promise<NativeExportResult> {
@@ -50,5 +64,11 @@ export default {
       );
     }
     return nativeModule.exportComposition(request);
+  },
+  async extractFrame(uri: string, atMs: number): Promise<NativeFrame> {
+    if (nativeModule === null || typeof nativeModule.extractFrame !== 'function') {
+      throw new Error('This build cannot read frames out of a clip. Rebuild the development client.');
+    }
+    return nativeModule.extractFrame(uri, atMs);
   }
 } satisfies VideoExportModuleType;

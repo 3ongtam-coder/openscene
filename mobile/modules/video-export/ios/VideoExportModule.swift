@@ -1,5 +1,6 @@
 import AVFoundation
 import ExpoModulesCore
+import UIKit
 
 /**
  Renders a composition plan with AVFoundation.
@@ -41,6 +42,51 @@ public final class VideoExportModule: Module {
     AsyncFunction("exportComposition") { (request: ExportRequest) -> [String: Any] in
       try await Self.export(request)
     }
+
+    AsyncFunction("extractFrame") { (uri: String, atMs: Double) -> [String: Any] in
+      try await Self.extractFrame(uri: uri, atMs: atMs)
+    }
+  }
+
+  /**
+   Pulls a single frame out of a clip as base64 JPEG.
+
+   Used to hand the tail of one generated shot to the next as its first frame.
+   It comes back as base64 rather than a file because that is what the provider
+   APIs take, and writing a file only to read it straight back would be a
+   round trip for nothing.
+   */
+  private static func extractFrame(uri: String, atMs: Double) async throws -> [String: Any] {
+    guard let url = URL(string: uri) ?? URL(string: "file://\(uri)") else {
+      throw Exception(name: "BadUri", description: "That is not a readable file URL.")
+    }
+    let asset = AVURLAsset(url: url)
+    let generator = AVAssetImageGenerator(asset: asset)
+    generator.appliesPreferredTrackTransform = true
+    // Without a tolerance the generator can fail on a frame that is not a
+    // keyframe; a few hundredths either side of the requested time is
+    // indistinguishable in a still and always succeeds.
+    generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 20)
+    generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 20)
+
+    let duration = try await asset.load(.duration)
+    let requested = atMs < 0
+      // A negative time means "the last frame". Backing off a little from the
+      // exact end matters: the final presentation time often has no decodable
+      // frame at it, and asking for it returns an error rather than a picture.
+      ? CMTimeSubtract(duration, CMTime(value: 1, timescale: 10))
+      : CMTime(value: CMTimeValue(max(0, atMs).rounded()), timescale: 1000)
+
+    let (image, actual) = try await generator.image(at: CMTimeMaximum(requested, .zero))
+    let bitmap = UIImage(cgImage: image)
+    guard let data = bitmap.jpegData(compressionQuality: 0.9) else {
+      throw Exception(name: "EncodeFailed", description: "The frame could not be encoded as JPEG.")
+    }
+    return [
+      "base64": data.base64EncodedString(),
+      "mimeType": "image/jpeg",
+      "atMs": CMTimeGetSeconds(actual) * 1000
+    ]
   }
 
   private static func export(_ request: ExportRequest) async throws -> [String: Any] {

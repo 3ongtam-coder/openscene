@@ -1,10 +1,16 @@
 import { File } from 'expo-file-system';
 
-import { videoAdapterFor, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
+import {
+  supportsReferenceImage,
+  videoAdapterFor,
+  type VideoAspectRatio,
+  type VideoProgressStage
+} from '@openvideo/shared/videoGeneration';
 import { getDomainModel } from '@openvideo/shared/aiDomainModels';
 
 import { readKey, type ProviderSlot } from './credentials';
 import { projectMediaDir, type MobileAsset } from './projectStore';
+import videoExport, { isFrameExtractionAvailable } from '../../modules/video-export';
 
 /**
  * Generates a shot and lands it in the project as an asset.
@@ -28,11 +34,18 @@ export type GenerateShotInput = {
   readonly prompt: string;
   readonly aspectRatio: VideoAspectRatio;
   readonly durationSeconds: number;
+  /** First frame to continue from, usually the tail of the previous shot. */
+  readonly referenceImage?: { readonly base64: string; readonly mimeType: string };
   readonly onProgress?: (stage: VideoProgressStage, elapsedMs: number) => void;
 };
 
 export type GenerateShotResult =
-  | { readonly ok: true; readonly asset: MobileAsset }
+  | {
+      readonly ok: true;
+      readonly asset: MobileAsset;
+      /** The clip's last frame, for the next shot to continue from. */
+      readonly tailFrame?: { readonly base64: string; readonly mimeType: string };
+    }
   | { readonly ok: false; readonly message: string };
 
 export async function generateShot(input: GenerateShotInput): Promise<GenerateShotResult> {
@@ -49,12 +62,21 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
   if (apiKey === null) return { ok: false, message: `${model.providerLabel} is not connected. Add its key in Settings.` };
 
   try {
+    // A reference frame is dropped rather than sent to a provider that cannot
+    // use it: the alternative is an error mid-sequence, after the earlier shots
+    // have already been paid for.
+    const seed =
+      input.referenceImage !== undefined && supportsReferenceImage(model.providerId)
+        ? input.referenceImage
+        : undefined;
+
     const ready = await adapter({
       apiKey,
       modelId: model.id,
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
       durationSeconds: input.durationSeconds,
+      ...(seed === undefined ? {} : { referenceImage: seed }),
       ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress })
     });
 
@@ -73,9 +95,23 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
       return { ok: false, message: 'The provider returned an empty video.' };
     }
 
+    // Read while the file is here, not when the next shot asks for it: the next
+    // request is minutes away and the failure would land in the middle of a run.
+    let tailFrame: { base64: string; mimeType: string } | undefined;
+    if (isFrameExtractionAvailable) {
+      try {
+        const frame = await videoExport.extractFrame(written.uri, -1);
+        tailFrame = { base64: frame.base64, mimeType: frame.mimeType };
+      } catch {
+        // A shot that generated is still a good shot; only the continuity of the
+        // next one is lost, and the caller reports that rather than failing here.
+      }
+    }
+
     const dimensions = DIMENSIONS[input.aspectRatio];
     return {
       ok: true,
+      ...(tailFrame === undefined ? {} : { tailFrame }),
       asset: {
         id,
         displayName: `${model.label} · ${input.durationSeconds}s`,
