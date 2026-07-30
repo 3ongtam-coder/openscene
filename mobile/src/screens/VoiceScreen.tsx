@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { checkNarrationFit } from '@openvideo/shared/narrationTiming';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelPicker } from '../components/ModelPicker';
-import { readConnectedSlots, PROVIDER_KEYS } from '../lib/credentials';
+import { readProviderConnections } from '../lib/mediaProviders';
 import { theme } from '../lib/theme';
 
 /**
@@ -13,24 +13,26 @@ import { theme } from '../lib/theme';
  * before that byte handling was lifted into shared. Rather than a dead button,
  * the screen does the part that works and says which part does not.
  */
-export function VoiceScreen({ topInset, targetSeconds }: { readonly topInset: number; readonly targetSeconds: number }) {
+export function VoiceScreen({
+  topInset,
+  targetSeconds,
+  connectionsVersion
+}: {
+  readonly topInset: number;
+  readonly targetSeconds: number;
+  /** Changes when Settings closes, so stored keys are picked up. */
+  readonly connectionsVersion: number;
+}) {
   const catalog = getDomainModels('voice-generation');
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [script, setScript] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    void readConnectedSlots().then((slots) => {
-      if (cancelled) return;
-      setConnected(
-        Object.fromEntries(PROVIDER_KEYS.map(({ slot, providerId }) => [providerId, slots[slot] === true]))
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
+  const refreshConnections = useCallback((): void => {
+    void readProviderConnections().then(setConnected);
   }, []);
+
+  useEffect(refreshConnections, [refreshConnections, connectionsVersion]);
   const fit = useMemo(
     () => (script.trim().length === 0 ? null : checkNarrationFit({ script, targetSeconds })),
     [script, targetSeconds]
@@ -50,6 +52,7 @@ export function VoiceScreen({ topInset, targetSeconds }: { readonly topInset: nu
         selectedId={modelId}
         connectedSlots={connected}
         onSelect={(next) => setModelId(next.id)}
+        onConnectionChange={refreshConnections}
       />
 
       <Text style={styles.label}>Script · fitting {targetSeconds.toFixed(1)}s of picture</Text>

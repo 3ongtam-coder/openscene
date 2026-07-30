@@ -52,6 +52,18 @@ function Shell() {
   const [route, setRoute] = useState<Route>({ name: 'projects' });
   const [tab, setTab] = useState<ProjectTab>('edit');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * Bumped when Settings closes.
+   *
+   * Settings is a modal, so the screen underneath never unmounts and never
+   * re-reads the keystore — connecting a provider there left the picker still
+   * saying "not connected" until the tab was changed and changed back.
+   */
+  const [connectionsVersion, setConnectionsVersion] = useState(0);
+  const closeSettings = (): void => {
+    setSettingsOpen(false);
+    setConnectionsVersion((version) => version + 1);
+  };
   const [exportState, setExportState] = useState<ExportState>({ kind: 'idle' });
 
   if (route.name === 'projects') {
@@ -68,7 +80,7 @@ function Shell() {
           }}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} topInset={insets.top} bottomInset={insets.bottom} />
+        <SettingsModal open={settingsOpen} onClose={() => closeSettings()} topInset={insets.top} bottomInset={insets.bottom} />
       </View>
     );
   }
@@ -143,9 +155,9 @@ function Shell() {
 
       <View style={styles.body}>
         {tab === 'edit' && <EditScreen topInset={0} projectId={route.projectId} />}
-        {tab === 'video' && <PlanScreen topInset={0} projectId={route.projectId} />}
-        {tab === 'voice' && <VoiceScreen topInset={0} targetSeconds={pictureSeconds} />}
-        {tab === 'image' && <ImageScreen topInset={0} />}
+        {tab === 'video' && <PlanScreen topInset={0} projectId={route.projectId} connectionsVersion={connectionsVersion} />}
+        {tab === 'voice' && <VoiceScreen topInset={0} targetSeconds={pictureSeconds} connectionsVersion={connectionsVersion} />}
+        {tab === 'image' && <ImageScreen topInset={0} connectionsVersion={connectionsVersion} />}
         {tab === 'agent' && <AgentScreen topInset={0} projectId={route.projectId} />}
       </View>
 
@@ -168,7 +180,7 @@ function Shell() {
         })}
       </View>
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} topInset={insets.top} bottomInset={insets.bottom} />
+      <SettingsModal open={settingsOpen} onClose={() => closeSettings()} topInset={insets.top} bottomInset={insets.bottom} />
     </View>
   );
 }

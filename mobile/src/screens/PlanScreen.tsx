@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { estimateVideoPlanCost, PRICING_AS_OF } from '@openvideo/shared/mediaGenerationPricing';
@@ -6,7 +6,7 @@ import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@ope
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelPicker } from '../components/ModelPicker';
 import type { VideoAspectRatio, VideoProgressStage } from '@openvideo/shared/videoGeneration';
-import { readConnectedSlots, PROVIDER_KEYS } from '../lib/credentials';
+import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { generateShot } from '../lib/videoGeneration';
 import { appendAssetToTimeline, readProject } from '../lib/projectStore';
@@ -24,7 +24,16 @@ type ShotState =
 
 const LENGTHS = [8, 16, 30, 45, 60] as const;
 
-export function PlanScreen({ topInset, projectId }: { readonly topInset: number; readonly projectId: string | null }) {
+export function PlanScreen({
+  topInset,
+  projectId,
+  connectionsVersion
+}: {
+  readonly topInset: number;
+  readonly projectId: string | null;
+  /** Changes when Settings closes, so stored keys are picked up. */
+  readonly connectionsVersion: number;
+}) {
   const catalog = getDomainModels('video-generation');
   const [totalSeconds, setTotalSeconds] = useState<number>(30);
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
@@ -37,18 +46,11 @@ export function PlanScreen({ topInset, projectId }: { readonly topInset: number;
   const permissions = useSpendPermissions();
 
   // Connection is reported by provider id, which is what the picker keys on.
-  useEffect(() => {
-    let cancelled = false;
-    void readConnectedSlots().then((slots) => {
-      if (cancelled) return;
-      setConnected(
-        Object.fromEntries(PROVIDER_KEYS.map(({ slot, providerId }) => [providerId, slots[slot] === true]))
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
+  const refreshConnections = useCallback((): void => {
+    void readProviderConnections().then(setConnected);
   }, []);
+
+  useEffect(refreshConnections, [refreshConnections, connectionsVersion]);
 
   const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
   const plan = useMemo(
@@ -149,6 +151,7 @@ export function PlanScreen({ topInset, projectId }: { readonly topInset: number;
         selectedId={modelId}
         connectedSlots={connected}
         onSelect={(next) => setPlan(() => setModelId(next.id))}
+        onConnectionChange={refreshConnections}
       />
 
       <Text style={styles.label}>Length</Text>

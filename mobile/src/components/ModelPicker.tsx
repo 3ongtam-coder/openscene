@@ -1,6 +1,8 @@
 import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
 
 import { getDomainModels, type AiDomain, type AiDomainModelConfig } from '@openvideo/shared/aiDomainModels';
+import { providersForDomain, describeProvider } from '../lib/mediaProviders';
+import { ProviderConnect } from './ProviderConnect';
 import { theme } from '../lib/theme';
 
 /**
@@ -10,17 +12,25 @@ import { theme } from '../lib/theme';
  * gives. Hiding them would make the app look like it supports less than it
  * knows about; offering them would turn a tap into a failure the user cannot
  * act on.
+ *
+ * When the selected model's provider has no key, the connect form appears right
+ * here. Sending the user to Settings for it made the picker report a problem it
+ * could have solved: they had to leave, find one provider among a dozen, and
+ * come back to the screen they were already on.
  */
 export function ModelPicker({
   domain,
   selectedId,
   connectedSlots,
-  onSelect
+  onSelect,
+  onConnectionChange
 }: {
   readonly domain: AiDomain;
   readonly selectedId: string;
   readonly connectedSlots?: Readonly<Record<string, boolean>>;
   readonly onSelect: (model: AiDomainModelConfig) => void;
+  /** Called after a key is stored or removed, so the screen can re-read state. */
+  readonly onConnectionChange?: () => void;
 }) {
   const models = getDomainModels(domain);
   return (
@@ -43,25 +53,47 @@ export function ModelPicker({
           );
         })}
       </ScrollView>
-      <ModelNote model={models.find((entry) => entry.id === selectedId)} connectedSlots={connectedSlots} />
+      <ModelNote
+        model={models.find((entry) => entry.id === selectedId)}
+        connectedSlots={connectedSlots}
+        domain={domain}
+        onConnectionChange={onConnectionChange}
+      />
     </View>
   );
 }
 
 function ModelNote({
   model,
-  connectedSlots
+  connectedSlots,
+  domain,
+  onConnectionChange
 }: {
   readonly model: AiDomainModelConfig | undefined;
   readonly connectedSlots?: Readonly<Record<string, boolean>>;
+  readonly domain: AiDomain;
+  readonly onConnectionChange?: () => void;
 }) {
   if (model === undefined) return null;
   if (!model.available) return <Text style={styles.warn}>{model.unavailableReason}</Text>;
-  const connected = connectedSlots?.[model.providerId];
+  if (connectedSlots?.[model.providerId] !== false) return null;
+
+  const provider = providersForDomain(domain).find((entry) => entry.providerId === model.providerId);
+  if (provider === undefined) {
+    return <Text style={styles.warn}>{model.providerLabel} cannot be connected from this app yet.</Text>;
+  }
   return (
-    <Text style={connected === false ? styles.warn : styles.note}>
-      {connected === false ? `${model.providerLabel} has no key stored — add one in Settings.` : model.description}
-    </Text>
+    <View style={styles.connect}>
+      <ProviderConnect
+        compact
+        slot={provider.slot}
+        label={`Connect ${provider.label}`}
+        hint={provider.hint}
+        meta={describeProvider(provider)}
+        connected={false}
+        onChange={() => onConnectionChange?.()}
+      />
+    </View>
   );
 }
 
@@ -76,5 +108,6 @@ const styles = StyleSheet.create({
   label: { color: theme.text, fontSize: 13, fontWeight: '600', marginTop: 1 },
   textOn: { color: theme.bg },
   note: { color: theme.textWeak, fontSize: 11, lineHeight: 16 },
+  connect: { marginTop: 10 },
   warn: { color: theme.warn, fontSize: 11, lineHeight: 16 }
 });

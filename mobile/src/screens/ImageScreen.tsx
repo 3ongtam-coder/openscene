@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { estimateImageCost } from '@openvideo/shared/mediaGenerationPricing';
@@ -10,6 +10,7 @@ import {
 } from '@openvideo/shared/imageGeneration';
 import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 import { readKey, type ProviderSlot } from '../lib/credentials';
+import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { ModelPicker } from '../components/ModelPicker';
 import { SpendPrompt } from '../components/SpendPrompt';
@@ -31,7 +32,14 @@ type Result =
   | { readonly kind: 'done'; readonly image: GeneratedImageData }
   | { readonly kind: 'failed'; readonly message: string };
 
-export function ImageScreen({ topInset }: { readonly topInset: number }) {
+export function ImageScreen({
+  topInset,
+  connectionsVersion
+}: {
+  readonly topInset: number;
+  /** Changes when Settings closes, so stored keys are picked up. */
+  readonly connectionsVersion: number;
+}) {
   const catalog = getDomainModels('image-generation');
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
   const [connected, setConnectedSlots] = useState<Readonly<Record<string, boolean>>>({});
@@ -48,17 +56,11 @@ export function ImageScreen({ topInset }: { readonly topInset: number }) {
 
   // Connection is reported per provider, so the picker can say which models can
   // actually run rather than only which exist.
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all(
-      Object.entries(PROVIDER_BINDINGS).map(async ([providerId, bound]) => [providerId, (await readKey(bound.slot)) !== null] as const)
-    ).then((entries) => {
-      if (!cancelled) setConnectedSlots(Object.fromEntries(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
+  const refreshConnections = useCallback((): void => {
+    void readProviderConnections().then(setConnectedSlots);
   }, []);
+
+  useEffect(refreshConnections, [refreshConnections, connectionsVersion]);
 
   const doGenerate = async (): Promise<void> => {
     if (model === undefined || binding === undefined) return;
@@ -112,6 +114,7 @@ export function ImageScreen({ topInset }: { readonly topInset: number }) {
         selectedId={modelId}
         connectedSlots={connected}
         onSelect={(next) => setModelId(next.id)}
+        onConnectionChange={refreshConnections}
       />
 
       <Text style={styles.label}>Aspect ratio</Text>
