@@ -1,5 +1,7 @@
 import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
+import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
 import VideoExport from '../../modules/video-export';
 import type { EditorAsset } from './editorState';
 
@@ -69,5 +71,39 @@ export async function exportTimeline(input: {
     return { ok: true, uri: result.uri };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'Export failed.' };
+  }
+}
+
+export type DeliveryOutcome =
+  | { readonly ok: true; readonly how: 'photos' | 'share' }
+  | { readonly ok: false; readonly message: string };
+
+/**
+ * Hands the finished file to the user.
+ *
+ * An export that stops at a temporary path is not an export on a phone — there
+ * is no file manager to go and find it in. Saving to the photo library is the
+ * outcome people expect; the share sheet is the fallback when they decline that
+ * permission, since refusing photo access should not mean losing the render.
+ */
+export async function deliverExport(uri: string): Promise<DeliveryOutcome> {
+  try {
+    const permission = await MediaLibrary.requestPermissionsAsync();
+    if (permission.granted) {
+      await MediaLibrary.saveToLibraryAsync(uri);
+      return { ok: true, how: 'photos' };
+    }
+  } catch {
+    // Fall through to sharing rather than failing: the render exists either way.
+  }
+
+  try {
+    if (!(await Sharing.isAvailableAsync())) {
+      return { ok: false, message: 'The video was rendered but this device offers no way to save or share it.' };
+    }
+    await Sharing.shareAsync(uri, { mimeType: 'video/mp4', UTI: 'public.mpeg-4' });
+    return { ok: true, how: 'share' };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'The video could not be shared.' };
   }
 }

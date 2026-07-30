@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EditScreen } from './src/screens/EditScreen';
+import { ProjectsScreen } from './src/screens/ProjectsScreen';
 import { ImageScreen } from './src/screens/ImageScreen';
 import { PlanScreen } from './src/screens/PlanScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
@@ -19,10 +20,11 @@ import { theme } from './src/lib/theme';
  * would be the largest dependency in the app.
  */
 const TABS = [
-  { id: 'edit', label: 'Edit', glyph: '▤', Screen: EditScreen },
-  { id: 'plan', label: 'Plan', glyph: '◫', Screen: PlanScreen },
-  { id: 'image', label: 'Image', glyph: '◈', Screen: ImageScreen },
-  { id: 'settings', label: 'Settings', glyph: '⚙', Screen: SettingsScreen }
+  { id: 'projects', label: 'Projects', glyph: '❑' },
+  { id: 'edit', label: 'Edit', glyph: '▤' },
+  { id: 'plan', label: 'Plan', glyph: '◫' },
+  { id: 'image', label: 'Image', glyph: '◈' },
+  { id: 'settings', label: 'Settings', glyph: '⚙' }
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -36,7 +38,8 @@ export default function App() {
 }
 
 function Shell() {
-  const [active, setActive] = useState<TabId>('edit');
+  const [active, setActive] = useState<TabId>('projects');
+  const [projectId, setProjectId] = useState<string | null>(null);
   // Hardcoded padding put the title under the Dynamic Island on an iPhone 17
   // Pro and guessed at the home-indicator height. The insets are the only
   // numbers that are right on every device.
@@ -48,13 +51,26 @@ function Shell() {
       <StatusBar style="light" />
       {/* Every screen stays mounted so switching tabs does not throw away a
           typed prompt or a generated image. */}
-      {TABS.map(({ id, Screen }) => (
+      {TABS.map(({ id }) => (
         <View
           key={id}
           style={[styles.page, { bottom: tabBarHeight }, id !== active && styles.pageHidden]}
           pointerEvents={id === active ? 'auto' : 'none'}
         >
-          <Screen topInset={insets.top} />
+          {id === 'projects' && (
+            <ProjectsScreen
+              topInset={insets.top}
+              activeProjectId={projectId}
+              onOpen={(next) => {
+                setProjectId(next);
+                setActive('edit');
+              }}
+            />
+          )}
+          {id === 'edit' && <EditScreen topInset={insets.top} projectId={projectId} />}
+          {id === 'plan' && <PlanScreen topInset={insets.top} />}
+          {id === 'image' && <ImageScreen topInset={insets.top} />}
+          {id === 'settings' && <SettingsScreen topInset={insets.top} />}
         </View>
       ))}
 

@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 
 import { theme } from '../lib/theme';
 import { useMobileEditor, type EditorAsset } from '../lib/editorState';
-import { exportTimeline } from '../lib/exportComposition';
+import { assetUri, importAsset, readProject, writeProject } from '../lib/projectStore';
+import { deliverExport, exportTimeline } from '../lib/exportComposition';
+import { isExportAvailable } from '../../modules/video-export';
 
 const TRACK_HEIGHT = { video: 56, audio: 40 } as const;
 const RAIL = 92;
@@ -15,8 +17,41 @@ function formatMs(ms: number): string {
   return `${minutes}:${(total - minutes * 60).toFixed(1).padStart(4, '0')}`;
 }
 
-export function EditScreen({ topInset }: { readonly topInset: number }) {
-  const editor = useMobileEditor();
+export function EditScreen({
+  topInset,
+  projectId
+}: {
+  readonly topInset: number;
+  readonly projectId: string | null;
+}) {
+  const editor = useMobileEditor((timeline) => {
+    if (projectId === null) return;
+    const project = readProject(projectId);
+    if (project !== null) writeProject({ ...project, timeline });
+  });
+
+  // Opening a project replaces the editor's document and its undo history.
+  const { loadProject } = editor;
+  useEffect(() => {
+    if (projectId === null) return;
+    const project = readProject(projectId);
+    if (project === null) return;
+    loadProject(
+      project.timeline,
+      project.assets.map((asset) => ({
+        id: asset.id,
+        uri: assetUri(project.id, asset),
+        displayName: asset.displayName,
+        kind: asset.kind,
+        mimeType: asset.mimeType,
+        byteLength: 0,
+        projectRelativePath: asset.relativePath,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        metadata: { durationMs: asset.durationMs, width: asset.width, height: asset.height }
+      }))
+    );
+  }, [projectId, loadProject]);
   const [pxPerSecond, setPxPerSecond] = useState(28);
   const [exportState, setExportState] = useState<
     { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; uri: string } | { kind: 'failed'; message: string }
@@ -39,23 +74,34 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
     const file = picked.assets?.[0];
     if (picked.canceled || file === undefined) return;
 
-    const asset: EditorAsset = {
-      id: `asset-${Date.now().toString(36)}`,
-      // The library gives a local URI. It stays in the app, never crossing into
-      // the shared model, which knows only asset ids.
+    if (projectId === null) return;
+    const project = readProject(projectId);
+    if (project === null) return;
+
+    // Copied into the project, not referenced: a photo-library URI stops
+    // resolving when the user deletes the original or revokes access.
+    const stored = importAsset(projectId, {
       uri: file.uri,
       displayName: file.fileName ?? 'Clip',
-      kind: 'video',
       mimeType: file.mimeType ?? 'video/mp4',
-      byteLength: file.fileSize ?? 0,
-      projectRelativePath: '',
-      createdAt: new Date().toISOString(),
+      durationMs: Math.round(file.duration ?? 5_000),
+      width: file.width ?? 1920,
+      height: file.height ?? 1080,
+      kind: 'video'
+    });
+    writeProject({ ...project, assets: [...project.assets, stored] });
+
+    const asset: EditorAsset = {
+      id: stored.id,
+      uri: assetUri(projectId, stored),
+      displayName: stored.displayName,
+      kind: stored.kind,
+      mimeType: stored.mimeType,
+      byteLength: 0,
+      projectRelativePath: stored.relativePath,
+      createdAt: project.createdAt,
       updatedAt: new Date().toISOString(),
-      metadata: {
-        durationMs: Math.round(file.duration ?? 5_000),
-        width: file.width ?? 1920,
-        height: file.height ?? 1080
-      }
+      metadata: { durationMs: stored.durationMs, width: stored.width, height: stored.height }
     };
     editor.addAsset(asset);
   };
@@ -63,7 +109,18 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
   const runExport = async (): Promise<void> => {
     setExportState({ kind: 'running' });
     const outcome = await exportTimeline({ timeline: editor.timeline, assets: editor.assets });
-    setExportState(outcome.ok ? { kind: 'done', uri: outcome.uri } : { kind: 'failed', message: outcome.message });
+    if (!outcome.ok) {
+      setExportState({ kind: 'failed', message: outcome.message });
+      return;
+    }
+    // Rendering and delivering are separate failures: a render that succeeded
+    // must not be reported as failed because the share sheet was dismissed.
+    const delivery = await deliverExport(outcome.uri);
+    setExportState(
+      delivery.ok
+        ? { kind: 'done', uri: delivery.how === 'photos' ? 'your photo library' : 'the app you chose' }
+        : { kind: 'failed', message: delivery.message }
+    );
   };
 
   return (
@@ -83,7 +140,7 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
         style={styles.toolbarScroll}
         contentContainerStyle={styles.toolbar}
       >
-        <Tool label="Import" onPress={() => void importMedia()} />
+        <Tool label="Import" onPress={() => void importMedia()} disabled={projectId === null} />
         <Tool label="Split" onPress={editor.splitAtPlayhead} disabled={editor.selectedClipId === null} />
         <Tool label="−1s" onPress={() => editor.nudgeSelected(-1000)} disabled={editor.selectedClipId === null} />
         <Tool label="+1s" onPress={() => editor.nudgeSelected(1000)} disabled={editor.selectedClipId === null} />
@@ -97,7 +154,7 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
         <Tool
           label={exportState.kind === 'running' ? 'Exporting…' : 'Export'}
           onPress={() => void runExport()}
-          disabled={exportState.kind === 'running' || editor.durationMs <= 0}
+          disabled={exportState.kind === 'running' || editor.durationMs <= 0 || !isExportAvailable}
         />
       </ScrollView>
 
@@ -164,15 +221,20 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
         </View>
       </ScrollView>
 
-      {editor.timeline.tracks.every((track) => track.clips.length === 0) && (
-        <Text style={styles.empty}>Import a clip to start. Tap a clip to select it, then use the tools above.</Text>
+      {projectId === null ? (
+        <Text style={styles.empty}>Open a project from the Projects tab to start editing.</Text>
+      ) : (
+        editor.timeline.tracks.every((track) => track.clips.length === 0) && (
+          <Text style={styles.empty}>Import a clip to start. Tap a clip to select it, then use the tools above.</Text>
+        )
       )}
 
       {exportState.kind === 'failed' && <Text style={styles.message}>{exportState.message}</Text>}
-      {exportState.kind === 'done' && <Text style={styles.exported}>Exported to {exportState.uri}</Text>}
+      {exportState.kind === 'done' && <Text style={styles.exported}>Saved to {exportState.uri}.</Text>}
       <Text style={styles.exportNote}>
-        Export renders with AVFoundation on iOS. Android is not implemented yet and says so rather than producing a
-        file that is not there.
+        {isExportAvailable
+          ? 'Export renders with AVFoundation on iOS and saves to your photo library, falling back to the share sheet if you decline that permission. Android is not implemented yet and says so rather than producing a file that is not there.'
+          : 'Export needs a development build — Expo Go cannot load the native video module, so the button is disabled rather than failing when pressed. Editing and projects work here.'}
       </Text>
     </View>
   );

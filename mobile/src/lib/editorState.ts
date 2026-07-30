@@ -19,9 +19,19 @@ type Snapshot = { readonly timeline: TimelineDocument; readonly label: string };
 
 const UNDO_DEPTH = 40;
 
-export function useMobileEditor() {
+export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) {
   const [timeline, setTimeline] = useState<TimelineDocument>(() => createInitialTimeline());
   const [assets, setAssets] = useState<readonly EditorAsset[]>([]);
+  const loadProject = useCallback((next: TimelineDocument, nextAssets: readonly EditorAsset[]): void => {
+    setTimeline(next);
+    setAssets(nextAssets);
+    setSelectedClipId(null);
+    setPlayheadMs(0);
+    // Undo does not cross projects: stepping back into another project's
+    // timeline would be nonsense.
+    setPast([]);
+    setFuture([]);
+  }, []);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [past, setPast] = useState<readonly Snapshot[]>([]);
@@ -46,6 +56,10 @@ export function useMobileEditor() {
         setPast((stack) => [...stack, { timeline: current, label }].slice(-UNDO_DEPTH));
         setFuture([]);
         setMessage(null);
+        // Written on every accepted edit rather than on a save button: a phone
+        // app is backgrounded and killed without warning, and an explicit save
+        // is a thing to forget.
+        persist?.(next);
         return next;
       });
     },
@@ -104,7 +118,7 @@ export function useMobileEditor() {
         'That asset could not be placed on a track.'
       );
     },
-    [apply]
+    [apply, persist]
   );
 
   const selectedClip = useMemo(() => {
@@ -118,6 +132,7 @@ export function useMobileEditor() {
   return {
     timeline,
     assets,
+    loadProject,
     durationMs,
     playheadMs,
     setPlayheadMs,
