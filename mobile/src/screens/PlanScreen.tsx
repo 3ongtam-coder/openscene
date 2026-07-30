@@ -1,23 +1,37 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { estimateVideoPlanCost, PRICING_AS_OF } from '@openvideo/shared/mediaGenerationPricing';
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
+import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { ModelPicker } from '../components/ModelPicker';
+import { readConnectedSlots, PROVIDER_KEYS } from '../lib/credentials';
 import { theme } from '../lib/theme';
 
 const LENGTHS = [8, 16, 30, 45, 60] as const;
-const MODELS = [
-  { id: 'sora-2', providerId: 'openai', label: 'Sora 2' },
-  { id: 'veo-3.0-generate-001', providerId: 'google_gemini', label: 'Veo 3' },
-  { id: 'veo-3.0-fast-generate-001', providerId: 'google_gemini', label: 'Veo 3 Fast' }
-] as const;
 
 export function PlanScreen({ topInset }: { readonly topInset: number }) {
+  const catalog = getDomainModels('video-generation');
   const [totalSeconds, setTotalSeconds] = useState<number>(30);
-  const [modelIndex, setModelIndex] = useState(0);
+  const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
+  const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [approved, setApproved] = useState(false);
 
-  const model = MODELS[modelIndex] ?? MODELS[0];
+  // Connection is reported by provider id, which is what the picker keys on.
+  useEffect(() => {
+    let cancelled = false;
+    void readConnectedSlots().then((slots) => {
+      if (cancelled) return;
+      setConnected(
+        Object.fromEntries(PROVIDER_KEYS.map(({ slot, providerId }) => [providerId, slots[slot] === true]))
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
   const plan = useMemo(
     () => planVideoStoryboard({ totalSeconds, providerId: model.providerId }),
     [totalSeconds, model.providerId]
@@ -40,16 +54,12 @@ export function PlanScreen({ topInset }: { readonly topInset: number }) {
       <Text style={styles.sub}>Shot lengths and prices come from the same modules the desktop app uses.</Text>
 
       <Text style={styles.label}>Model</Text>
-      <View style={styles.row}>
-        {MODELS.map((entry, index) => (
-          <Chip
-            key={entry.id}
-            label={entry.label}
-            selected={index === modelIndex}
-            onPress={() => setPlan(() => setModelIndex(index))}
-          />
-        ))}
-      </View>
+      <ModelPicker
+        domain="video-generation"
+        selectedId={modelId}
+        connectedSlots={connected}
+        onSelect={(next) => setPlan(() => setModelId(next.id))}
+      />
 
       <Text style={styles.label}>Length</Text>
       <View style={styles.row}>

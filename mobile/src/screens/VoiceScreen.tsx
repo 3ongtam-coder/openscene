@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { checkNarrationFit } from '@openvideo/shared/narrationTiming';
+import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { ModelPicker } from '../components/ModelPicker';
+import { readConnectedSlots, PROVIDER_KEYS } from '../lib/credentials';
 import { theme } from '../lib/theme';
 
 /**
@@ -11,7 +14,23 @@ import { theme } from '../lib/theme';
  * the screen does the part that works and says which part does not.
  */
 export function VoiceScreen({ topInset, targetSeconds }: { readonly topInset: number; readonly targetSeconds: number }) {
+  const catalog = getDomainModels('voice-generation');
+  const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
+  const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [script, setScript] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void readConnectedSlots().then((slots) => {
+      if (cancelled) return;
+      setConnected(
+        Object.fromEntries(PROVIDER_KEYS.map(({ slot, providerId }) => [providerId, slots[slot] === true]))
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const fit = useMemo(
     () => (script.trim().length === 0 ? null : checkNarrationFit({ script, targetSeconds })),
     [script, targetSeconds]
@@ -24,6 +43,14 @@ export function VoiceScreen({ topInset, targetSeconds }: { readonly topInset: nu
         Write to the length of the cut. Over-running is the failure that costs a re-record, so the check runs before
         anything is paid for.
       </Text>
+
+      <Text style={styles.label}>Voice model</Text>
+      <ModelPicker
+        domain="voice-generation"
+        selectedId={modelId}
+        connectedSlots={connected}
+        onSelect={(next) => setModelId(next.id)}
+      />
 
       <Text style={styles.label}>Script · fitting {targetSeconds.toFixed(1)}s of picture</Text>
       <TextInput
@@ -50,8 +77,9 @@ export function VoiceScreen({ topInset, targetSeconds }: { readonly topInset: nu
       )}
 
       <Text style={styles.note}>
-        Synthesis is not ported yet — the speech adapters still return Node buffers, the same thing that blocked image
-        generation until its byte handling moved into the shared core. Sizing the script is the half that works today.
+        Choosing the model works; synthesis does not yet. The speech adapters still return Node buffers — the same
+        thing that blocked image generation until its byte handling moved into the shared core — so nothing here can
+        charge your account, and the picker above only records which model the script is written for.
       </Text>
     </ScrollView>
   );

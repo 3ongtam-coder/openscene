@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { timelineDurationMs } from '@openvideo/shared/timelineLogic';
+import { AgentScreen } from './src/screens/AgentScreen';
 import { EditScreen } from './src/screens/EditScreen';
 import { ImageScreen } from './src/screens/ImageScreen';
 import { PlanScreen } from './src/screens/PlanScreen';
@@ -144,7 +145,7 @@ function Shell() {
         {tab === 'video' && <PlanScreen topInset={0} />}
         {tab === 'voice' && <VoiceScreen topInset={0} targetSeconds={pictureSeconds} />}
         {tab === 'image' && <ImageScreen topInset={0} />}
-        {tab === 'agent' && <AgentPlaceholder />}
+        {tab === 'agent' && <AgentScreen topInset={0} projectId={route.projectId} />}
       </View>
 
       <View style={[styles.tabBar, { paddingBottom: insets.bottom, height: 54 + insets.bottom }]}>
@@ -184,23 +185,6 @@ function SettingsModal({ open, onClose, topInset, bottomInset }: { open: boolean
   );
 }
 
-/**
- * Stated rather than stubbed with a chat box that cannot act: the assistant's
- * tools read and write a project on disk from a long-lived process, and the app
- * has neither.
- */
-function AgentPlaceholder() {
-  return (
-    <View style={styles.placeholder}>
-      <Text style={styles.placeholderTitle}>AI assistant</Text>
-      <Text style={styles.placeholderBody}>
-        Not ported yet. The pieces that did cross are already here: shot planning and pricing under Video, narration
-        sizing under Voice.
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   bar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.line },
@@ -220,7 +204,4 @@ const styles = StyleSheet.create({
   tabOn: { color: theme.accent },
   done: { position: 'absolute', right: 20, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: theme.accent },
   doneText: { color: theme.bg, fontSize: 14, fontWeight: '700' },
-  placeholder: { flex: 1, paddingHorizontal: 24, paddingTop: 40, gap: 12 },
-  placeholderTitle: { color: theme.text, fontSize: 24, fontWeight: '700' },
-  placeholderBody: { color: theme.textWeak, fontSize: 14, lineHeight: 21 }
 });
