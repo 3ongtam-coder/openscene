@@ -142,7 +142,7 @@ function Shell() {
 
       <View style={styles.body}>
         {tab === 'edit' && <EditScreen topInset={0} projectId={route.projectId} />}
-        {tab === 'video' && <PlanScreen topInset={0} />}
+        {tab === 'video' && <PlanScreen topInset={0} projectId={route.projectId} />}
         {tab === 'voice' && <VoiceScreen topInset={0} targetSeconds={pictureSeconds} />}
         {tab === 'image' && <ImageScreen topInset={0} />}
         {tab === 'agent' && <AgentScreen topInset={0} projectId={route.projectId} />}

@@ -1,8 +1,11 @@
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { parseTimelineDocument } from '@openvideo/shared/timelineDocumentValidators';
+import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/shared/timelineClipPlacement';
+import { placeClip } from '@openvideo/shared/timelineClipLogic';
+
 import { createInitialTimeline } from '@openvideo/shared/timelineLogic';
-import { PROJECT_SCHEMA_VERSION, type TimelineDocument } from '@openvideo/shared/timelineTypes';
+import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, type TimelineDocument } from '@openvideo/shared/timelineTypes';
 
 /**
  * Projects live inside the app's own storage.
@@ -53,6 +56,11 @@ function projectDir(id: string): Directory {
 
 function projectFile(id: string): File {
   return new File(projectDir(id), 'project.json');
+}
+
+/** The project's media directory, for callers that write assets themselves. */
+export function projectMediaDir(projectId: string): Directory {
+  return new Directory(projectDir(projectId), 'media');
 }
 
 /** Absolute URI for a stored asset, resolved at read time rather than persisted. */
@@ -169,4 +177,46 @@ export function importAsset(
     width: source.width,
     height: source.height
   };
+}
+
+/**
+ * Appends a stored asset to the project's timeline and saves it.
+ *
+ * Generated shots arrive one at a time and have to land somewhere the user can
+ * see them. They are appended rather than placed at their planned start: the
+ * plan's timing assumes every shot succeeds, and leaving a gap where a failed
+ * shot would have gone silently changes the cut.
+ */
+export function appendAssetToTimeline(project: MobileProject, asset: MobileAsset): MobileProject | null {
+  // Placement only reads the asset's kind, but the shared signature takes the
+  // whole record, so the stored asset is widened rather than partially faked.
+  const target = resolveTimelineTrackForAsset(project.timeline, {
+    id: asset.id,
+    displayName: asset.displayName,
+    kind: asset.kind,
+    mimeType: asset.mimeType,
+    byteLength: 0,
+    projectRelativePath: asset.relativePath,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    metadata: { durationMs: asset.durationMs, width: asset.width, height: asset.height }
+  });
+  if (!target.ok) return null;
+  const next = placeClip(project.timeline, {
+    trackId: target.track.id,
+    clip: {
+      id: `clip-${asset.id}`,
+      assetId: asset.id,
+      timelineStartMs: trackAppendStartMs(target.track),
+      sourceStartMs: 0,
+      sourceEndMs: asset.durationMs,
+      sourceDurationMs: asset.durationMs,
+      effects: { ...DEFAULT_CLIP_EFFECTS },
+      keyframes: []
+    }
+  });
+  if (next === null) return null;
+  const updated: MobileProject = { ...project, assets: [...project.assets, asset], timeline: next };
+  writeProject(updated);
+  return updated;
 }

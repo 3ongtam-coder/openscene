@@ -5,13 +5,20 @@
  * never echo key material and keep provider detail short.
  */
 
-import { supportedShotSeconds } from '../shared/videoStoryboardPlan';
+import {
+  requestSoraVideo,
+  requestVeoVideo,
+  snapSoraSeconds,
+  SORA_ALLOWED_SECONDS,
+  type VideoDownload,
+  type VideoRequestInput
+} from '../shared/videoGeneration';
+
+export { snapSoraSeconds, SORA_ALLOWED_SECONDS };
 
 type FetchLike = typeof fetch;
 
 const REQUEST_TIMEOUT_MS = 60_000;
-const VIDEO_POLL_INTERVAL_MS = 5_000;
-const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000;
 
 export const DEFAULT_ELEVENLABS_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 export const DEFAULT_OPENAI_TTS_VOICE = 'alloy';
@@ -99,141 +106,26 @@ export type GeneratedVideo = {
   readonly providerJobId: string;
 };
 
-/** Sora only accepts these clip lengths; requests snap to the nearest one. */
-/**
- * Sora takes a discrete set of lengths, so a request has to land on one of them.
- * The numbers come from the shared table rather than a second literal: a length
- * the table knows and the adapter does not would be silently snapped to a
- * different duration than the one the user was quoted and approved.
- */
-export const SORA_ALLOWED_SECONDS: readonly number[] = supportedShotSeconds('openai');
+export type VideoSynthesisInput = VideoRequestInput;
 
-export function snapSoraSeconds(requested: number): number {
-  return SORA_ALLOWED_SECONDS.reduce((best, candidate) =>
-    Math.abs(candidate - requested) < Math.abs(best - requested) ? candidate : best
-  );
+/**
+ * Downloads what the shared adapter resolved.
+ *
+ * The request, the polling and the failure messages are shared with the mobile
+ * app; only this last step differs, because the desktop wants bytes it can write
+ * to the AI directory and the phone wants the native downloader to stream
+ * straight to disk.
+ */
+async function download(ready: VideoDownload, providerLabel: string, fetchImpl: FetchLike): Promise<GeneratedVideo> {
+  const response = await fetchWithTimeout(fetchImpl, ready.url, { method: 'GET', headers: ready.headers }, REQUEST_TIMEOUT_MS * 5);
+  await expectOk(response, providerLabel);
+  return { bytes: Buffer.from(await response.arrayBuffer()), providerJobId: ready.providerJobId };
 }
 
-export type VideoSynthesisInput = {
-  readonly apiKey: string;
-  /** Optional image-to-video seed; only Veo accepts one in this build. */
-  readonly referenceImage?: { readonly mimeType: string; readonly base64: string };
-  readonly modelId: string;
-  readonly prompt: string;
-  readonly aspectRatio: '16:9' | '9:16' | '1:1';
-  readonly durationSeconds: number;
-  readonly fetchImpl?: FetchLike;
-  readonly pollIntervalMs?: number;
-  readonly pollTimeoutMs?: number;
-};
-
-/**
- * Google Veo over the Gemini API: predictLongRunning → poll the operation →
- * download the generated MP4. The key travels in headers only.
- */
 export async function generateVeoVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
-  const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
-  const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': input.apiKey };
-  const base = 'https://generativelanguage.googleapis.com/v1beta';
-
-  const startResponse = await fetchWithTimeout(fetchImpl, `${base}/models/${encodeURIComponent(input.modelId)}:predictLongRunning`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      instances: [{
-        prompt: input.prompt,
-        ...(input.referenceImage === undefined
-          ? {}
-          : { image: { bytesBase64Encoded: input.referenceImage.base64, mimeType: input.referenceImage.mimeType } })
-      }],
-      parameters: { aspectRatio: input.aspectRatio === '1:1' ? '16:9' : input.aspectRatio }
-    })
-  });
-  await expectOk(startResponse, 'Google Veo');
-  const operation = (await startResponse.json()) as { name?: string };
-  if (typeof operation.name !== 'string' || operation.name.length === 0) {
-    throw new Error('Google Veo did not return an operation to poll.');
-  }
-
-  const deadline = Date.now() + pollTimeoutMs;
-  for (;;) {
-    if (Date.now() > deadline) {
-      throw new Error(`Google Veo generation did not finish within ${Math.round(pollTimeoutMs / 60_000)} minutes.`);
-    }
-    await sleep(pollIntervalMs);
-    const pollResponse = await fetchWithTimeout(fetchImpl, `${base}/${operation.name}`, { method: 'GET', headers });
-    await expectOk(pollResponse, 'Google Veo');
-    const status = (await pollResponse.json()) as {
-      done?: boolean;
-      error?: { message?: string };
-      response?: { generateVideoResponse?: { generatedSamples?: readonly { video?: { uri?: string } }[] } };
-    };
-    if (status.done !== true) continue;
-    if (status.error !== undefined) {
-      throw new Error(`Google Veo generation failed: ${status.error.message ?? 'unknown error'}.`);
-    }
-    const videoUri = status.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
-    if (typeof videoUri !== 'string' || videoUri.length === 0) {
-      throw new Error('Google Veo finished without a downloadable video.');
-    }
-    const download = await fetchWithTimeout(fetchImpl, videoUri, { method: 'GET', headers: { 'x-goog-api-key': input.apiKey } }, REQUEST_TIMEOUT_MS * 5);
-    await expectOk(download, 'Google Veo');
-    return { bytes: Buffer.from(await download.arrayBuffer()), providerJobId: operation.name };
-  }
+  return download(await requestVeoVideo(input), 'Google Veo', input.fetchImpl ?? fetch);
 }
 
-/** OpenAI Sora over /v1/videos: create → poll → download content as MP4. */
 export async function generateSoraVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
-  if (input.referenceImage !== undefined) {
-    // Sora takes an input_reference only as multipart, which this adapter does
-    // not send. Refuse rather than silently generating without the image.
-    throw new Error('OpenAI Sora reference images are not supported in this build; use Google Veo, or remove the reference image.');
-  }
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
-  const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
-  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` };
-  const size = input.aspectRatio === '9:16' ? '720x1280' : input.aspectRatio === '1:1' ? '720x720' : '1280x720';
-
-  const startResponse = await fetchWithTimeout(fetchImpl, 'https://api.openai.com/v1/videos', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: input.modelId,
-      prompt: input.prompt,
-      seconds: String(snapSoraSeconds(input.durationSeconds)),
-      size
-    })
-  });
-  await expectOk(startResponse, 'OpenAI Sora');
-  const created = (await startResponse.json()) as { id?: string };
-  if (typeof created.id !== 'string' || created.id.length === 0) {
-    throw new Error('OpenAI Sora did not return a video job id.');
-  }
-
-  const deadline = Date.now() + pollTimeoutMs;
-  for (;;) {
-    if (Date.now() > deadline) {
-      throw new Error(`OpenAI Sora generation did not finish within ${Math.round(pollTimeoutMs / 60_000)} minutes.`);
-    }
-    await sleep(pollIntervalMs);
-    const pollResponse = await fetchWithTimeout(fetchImpl, `https://api.openai.com/v1/videos/${encodeURIComponent(created.id)}`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${input.apiKey}` }
-    });
-    await expectOk(pollResponse, 'OpenAI Sora');
-    const status = (await pollResponse.json()) as { status?: string; error?: { message?: string } };
-    if (status.status === 'failed') {
-      throw new Error(`OpenAI Sora generation failed: ${status.error?.message ?? 'unknown error'}.`);
-    }
-    if (status.status !== 'completed') continue;
-    const download = await fetchWithTimeout(fetchImpl, `https://api.openai.com/v1/videos/${encodeURIComponent(created.id)}/content`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${input.apiKey}` }
-    }, REQUEST_TIMEOUT_MS * 5);
-    await expectOk(download, 'OpenAI Sora');
-    return { bytes: Buffer.from(await download.arrayBuffer()), providerJobId: created.id };
-  }
+  return download(await requestSoraVideo(input), 'OpenAI Sora', input.fetchImpl ?? fetch);
 }

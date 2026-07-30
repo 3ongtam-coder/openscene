@@ -10,8 +10,11 @@ import {
 } from '@openvideo/shared/imageGeneration';
 import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 
+import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import type { VideoAspectRatio } from '@openvideo/shared/videoGeneration';
 import { readKey, type ProviderSlot } from './credentials';
-import { readProject } from './projectStore';
+import { appendAssetToTimeline, readProject } from './projectStore';
+import { generateShot } from './videoGeneration';
 import type { SpendFeature } from './permissions';
 import type { ToolSchema } from './agentChatClient';
 
@@ -23,9 +26,9 @@ import type { ToolSchema } from './agentChatClient';
  * but only the feature tells them what kind of charge they are approving, and
  * "always allow" has to mean *this* kind and not every kind.
  *
- * Only tools whose adapters actually run on the device are declared. A
- * `generate_video` tool would be a lie today — the video adapters are not ported
- * — and a model that is offered a tool will call it.
+ * Only tools whose adapters actually run on the device are declared. A model
+ * that is offered a tool will call it, so offering one that cannot run would
+ * turn every plan into a dead end. Voice is absent for exactly that reason.
  */
 
 export type ToolResult = {
@@ -38,7 +41,13 @@ export type AgentTool = ToolSchema & {
   readonly spends: SpendFeature | null;
   /** Shown in the approval prompt, before anything is charged. */
   readonly costOf: (args: Record<string, unknown>) => string;
-  readonly run: (args: Record<string, unknown>, context: { readonly projectId: string | null }) => Promise<ToolResult>;
+  readonly run: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
+};
+
+export type ToolContext = {
+  readonly projectId: string | null;
+  /** Video takes minutes; without this the UI is a bare spinner for all of it. */
+  readonly onProgress?: (note: string) => void;
 };
 
 const IMAGE_BINDINGS: Readonly<Record<string, { slot: ProviderSlot; request: (input: never) => Promise<GeneratedImageData> }>> = {
@@ -52,6 +61,53 @@ const text = (args: Record<string, unknown>, key: string, fallback = ''): string
 
 const number = (args: Record<string, unknown>, key: string, fallback: number): number =>
   typeof args[key] === 'number' && Number.isFinite(args[key]) ? (args[key] as number) : fallback;
+
+const VIDEO_MODEL_IDS = getDomainModels('video-generation')
+  .filter((model) => model.available)
+  .map((model) => model.id);
+
+export const GENERATE_VIDEO_TOOL: AgentTool = {
+  name: 'generate_video',
+  description:
+    'Generate one video shot and append it to the open project. This charges your provider account. Plan and price first.',
+  parameters: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string', description: 'Restate everything that must stay consistent; the shot is rendered blind.' },
+      modelId: { type: 'string', enum: VIDEO_MODEL_IDS },
+      durationSeconds: { type: 'number', description: 'Must be one of the lengths the model accepts.' },
+      aspectRatio: { type: 'string', enum: ['16:9', '9:16', '1:1'] }
+    },
+    required: ['prompt', 'durationSeconds']
+  },
+  spends: 'video-generation',
+  costOf: (args) => {
+    const cost = estimateVideoPlanCost([
+      { modelId: text(args, 'modelId', VIDEO_MODEL_IDS[0] ?? ''), durationSeconds: number(args, 'durationSeconds', 4) }
+    ]);
+    return cost.fullyPriced && cost.totalUsd !== undefined ? `~$${cost.totalUsd.toFixed(2)}` : 'Cost unknown';
+  },
+  run: async (args, context) => {
+    if (context.projectId === null) return { summary: 'No project is open, so there is nowhere to save the shot.' };
+    const result = await generateShot({
+      projectId: context.projectId,
+      modelId: text(args, 'modelId', VIDEO_MODEL_IDS[0] ?? ''),
+      prompt: text(args, 'prompt'),
+      aspectRatio: text(args, 'aspectRatio', '16:9') as VideoAspectRatio,
+      durationSeconds: number(args, 'durationSeconds', 4),
+      onProgress: (stage, elapsedMs) => context.onProgress?.(`${stage} · ${Math.round(elapsedMs / 1000)}s`)
+    });
+    if (!result.ok) return { summary: result.message };
+    const project = readProject(context.projectId);
+    if (project === null) return { summary: 'The shot was generated but the project could not be read to save it.' };
+    return {
+      summary:
+        appendAssetToTimeline(project, result.asset) === null
+          ? 'The shot was generated but no video track would take it.'
+          : `Generated and appended "${result.asset.displayName}" to the timeline.`
+    };
+  }
+};
 
 export const AGENT_TOOLS: readonly AgentTool[] = [
   {
@@ -136,6 +192,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
       };
     }
   },
+  GENERATE_VIDEO_TOOL,
   {
     name: 'generate_image',
     description: 'Generate one image with an image model. This charges your provider account.',

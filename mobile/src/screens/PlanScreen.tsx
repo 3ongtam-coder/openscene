@@ -1,21 +1,40 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { estimateVideoPlanCost, PRICING_AS_OF } from '@openvideo/shared/mediaGenerationPricing';
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelPicker } from '../components/ModelPicker';
+import type { VideoAspectRatio, VideoProgressStage } from '@openvideo/shared/videoGeneration';
 import { readConnectedSlots, PROVIDER_KEYS } from '../lib/credentials';
+import { useSpendPermissions, type Decision } from '../lib/permissions';
+import { generateShot } from '../lib/videoGeneration';
+import { appendAssetToTimeline, readProject } from '../lib/projectStore';
+import { SpendPrompt } from '../components/SpendPrompt';
 import { theme } from '../lib/theme';
+
+const RATIOS: readonly VideoAspectRatio[] = ['16:9', '9:16', '1:1'];
+
+/** Per-shot state, so a failure names the shot that failed. */
+type ShotState =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'running'; readonly stage: VideoProgressStage }
+  | { readonly kind: 'done' }
+  | { readonly kind: 'failed'; readonly message: string };
 
 const LENGTHS = [8, 16, 30, 45, 60] as const;
 
-export function PlanScreen({ topInset }: { readonly topInset: number }) {
+export function PlanScreen({ topInset, projectId }: { readonly topInset: number; readonly projectId: string | null }) {
   const catalog = getDomainModels('video-generation');
   const [totalSeconds, setTotalSeconds] = useState<number>(30);
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
-  const [approved, setApproved] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
+  const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
+  const [running, setRunning] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const permissions = useSpendPermissions();
 
   // Connection is reported by provider id, which is what the picker keys on.
   useEffect(() => {
@@ -41,12 +60,83 @@ export function PlanScreen({ topInset }: { readonly topInset: number }) {
     [plan, model.id]
   );
 
-  // Changing anything about the plan invalidates approval. Carrying it across a
-  // change would let the user approve one price and generate another.
+  // Changing anything about the plan clears the last run's results. Leaving them
+  // on screen next to a different plan and a different price would misreport
+  // what was actually generated.
   const setPlan = (next: () => void): void => {
-    setApproved(false);
+    setShotStates([]);
     next();
   };
+
+  /**
+   * Shots run one at a time. In parallel they would multiply the spend before
+   * the first failure could stop it, and every one of these providers rate-limits
+   * concurrent jobs anyway.
+   */
+  const runGeneration = async (): Promise<void> => {
+    if (projectId === null || model === undefined) return;
+    setRunning(true);
+    setShotStates(plan.shots.map(() => ({ kind: 'idle' })));
+
+    for (const [index, shot] of plan.shots.entries()) {
+      const mark = (state: ShotState): void =>
+        setShotStates((current) => current.map((entry, position) => (position === index ? state : entry)));
+      mark({ kind: 'running', stage: 'submitting' });
+
+      const result = await generateShot({
+        projectId,
+        modelId: model.id,
+        // Each shot is rendered blind, so the continuity keys are restated in
+        // every prompt rather than referenced across shots.
+        prompt: `${prompt.trim()} — shot ${shot.index} of ${plan.shots.length}, ${shot.durationSeconds}s. Keep consistent: ${CONTINUITY_KEYS.join(', ')}.`,
+        aspectRatio,
+        durationSeconds: shot.durationSeconds,
+        onProgress: (stage) => mark({ kind: 'running', stage })
+      });
+
+      if (!result.ok) {
+        mark({ kind: 'failed', message: result.message });
+        // Stopping on the first failure: the remaining shots would charge for a
+        // sequence the user can no longer assemble as planned.
+        break;
+      }
+
+      const project = readProject(projectId);
+      if (project === null) {
+        mark({ kind: 'failed', message: 'The project could not be read to save this shot.' });
+        break;
+      }
+      mark(appendAssetToTimeline(project, result.asset) === null
+        ? { kind: 'failed', message: 'The clip was generated but no video track would take it.' }
+        : { kind: 'done' });
+    }
+
+    setRunning(false);
+  };
+
+  const start = (): void => {
+    const standing = permissions.standingFor('video-generation');
+    if (standing === 'reject') {
+      setShotStates([{ kind: 'failed', message: 'Video generation is set to never charge. Change it in Settings.' }]);
+      return;
+    }
+    if (standing === 'always') {
+      void runGeneration();
+      return;
+    }
+    setAsking(true);
+  };
+
+  const decide = (decision: Decision): void => {
+    setAsking(false);
+    permissions.remember('video-generation', decision);
+    if (decision !== 'reject') void runGeneration();
+  };
+
+  const costLine =
+    cost.fullyPriced && cost.totalUsd !== undefined ? `~$${cost.totalUsd.toFixed(2)}` : 'Cost unknown';
+  const canGenerate =
+    projectId !== null && !running && prompt.trim().length > 0 && connected[model?.providerId ?? ''] === true;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingTop: topInset + 16 }]}>
@@ -73,6 +163,24 @@ export function PlanScreen({ topInset }: { readonly topInset: number }) {
         ))}
       </View>
 
+      <Text style={styles.label}>Aspect ratio</Text>
+      <View style={styles.row}>
+        {RATIOS.map((ratio) => (
+          <Chip key={ratio} label={ratio} selected={ratio === aspectRatio} onPress={() => setPlan(() => setAspectRatio(ratio))} />
+        ))}
+      </View>
+
+      <Text style={styles.label}>Prompt · used for every shot</Text>
+      <TextInput
+        style={styles.input}
+        value={prompt}
+        onChangeText={(value) => setPlan(() => setPrompt(value))}
+        placeholder="Describe the video…"
+        placeholderTextColor={theme.textWeaker}
+        multiline
+        accessibilityLabel="Video prompt"
+      />
+
       <Text style={styles.label}>
         {plan.shots.length} shot{plan.shots.length === 1 ? '' : 's'} · accepts{' '}
         {supportedShotSeconds(model.providerId).join('/')}s
@@ -84,8 +192,16 @@ export function PlanScreen({ topInset }: { readonly topInset: number }) {
             {shot.startSeconds}s → {shot.startSeconds + shot.durationSeconds}s
           </Text>
           <Text style={styles.shotLen}>{shot.durationSeconds}s</Text>
+          <ShotStatus state={shotStates[shot.index - 1] ?? { kind: 'idle' }} />
         </View>
       ))}
+      {shotStates.map((state, index) =>
+        state.kind === 'failed' ? (
+          <Text key={`failed-${index}`} style={styles.warn}>
+            Shot {index + 1}: {state.message}
+          </Text>
+        ) : null
+      )}
 
       {plan.roundedFrom !== undefined && (
         <Text style={styles.warn}>
@@ -121,21 +237,44 @@ export function PlanScreen({ topInset }: { readonly topInset: number }) {
 
         <Pressable
           accessibilityRole="button"
-          accessibilityState={{ selected: approved }}
-          onPress={() => setApproved((value) => !value)}
-          style={[styles.approve, approved && styles.approveDone]}
+          disabled={!canGenerate}
+          onPress={start}
+          style={[styles.approve, !canGenerate && styles.approveOff]}
         >
-          <Text style={[styles.approveText, approved && styles.approveTextDone]}>
-            {approved ? 'Spend approved — generate on the desktop' : 'Approve this spend'}
+          <Text style={styles.approveText}>
+            {running ? 'Generating…' : `Generate ${plan.shots.length} shot${plan.shots.length === 1 ? '' : 's'}`}
           </Text>
         </Pressable>
-        {approved && (
+        {projectId === null && <Text style={styles.footnote}>Open a project first — generated shots are saved into it.</Text>}
+        {projectId !== null && connected[model?.providerId ?? ''] !== true && (
+          <Text style={styles.footnote}>{model?.providerLabel} is not connected. Add its key in Settings.</Text>
+        )}
+        {shotStates.some((state) => state.kind === 'done') && (
           <Text style={styles.footnote}>
-            Approval covers this plan only. Changing the length or the model clears it.
+            Finished shots are appended to the project&apos;s video track — open Edit to see them.
           </Text>
         )}
       </View>
+
+      <SpendPrompt feature="video-generation" cost={costLine} visible={asking} onDecide={decide} />
     </ScrollView>
+  );
+}
+
+function ShotStatus({ state }: { readonly state: ShotState }) {
+  if (state.kind === 'idle') return null;
+  if (state.kind === 'running') {
+    return (
+      <View style={styles.status}>
+        <ActivityIndicator size="small" color={theme.accent} />
+        <Text style={styles.statusText}>{state.stage}</Text>
+      </View>
+    );
+  }
+  return (
+    <Text style={[styles.statusText, state.kind === 'done' ? styles.statusDone : styles.statusFailed]}>
+      {state.kind === 'done' ? 'saved' : 'failed'}
+    </Text>
   );
 }
 
@@ -174,8 +313,12 @@ const styles = StyleSheet.create({
   total: { color: theme.text, fontSize: 32, fontWeight: '700', fontVariant: ['tabular-nums'], marginBottom: 6 },
   estimate: { color: theme.textWeak, fontSize: 11, fontVariant: ['tabular-nums'] },
   footnote: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, marginTop: 8 },
+  input: { minHeight: 84, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 14, textAlignVertical: 'top' },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusText: { color: theme.textWeak, fontSize: 10, fontWeight: '600' },
+  statusDone: { color: theme.mint },
+  statusFailed: { color: theme.danger },
+  approveOff: { opacity: 0.35 },
   approve: { marginTop: 14, paddingVertical: 14, borderRadius: 10, alignItems: 'center', backgroundColor: theme.accent },
-  approveDone: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.mint },
-  approveText: { color: theme.bg, fontSize: 14, fontWeight: '700' },
-  approveTextDone: { color: theme.mint }
+  approveText: { color: theme.bg, fontSize: 14, fontWeight: '700' }
 });

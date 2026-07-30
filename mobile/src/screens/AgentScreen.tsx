@@ -47,6 +47,7 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [images, setImages] = useState<readonly string[]>([]);
+  const [progress, setProgress] = useState<string | null>(null);
   const scroller = useRef<ScrollView>(null);
 
   // Providers worth showing: the popular ones, plus any the user has connected —
@@ -149,13 +150,15 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
     if (tool === undefined) return;
     setThinking(true);
     try {
-      const result = await tool.run(proposal.args, { projectId });
+      const result = await tool.run(proposal.args, { projectId, onProgress: setProgress });
       const image = result.image;
       if (image !== undefined) {
         setImages((current) => [...current, `data:${image.mimeType};base64,${image.base64}`]);
       }
+      setProgress(null);
       await complete(history, proposal, result.summary);
     } catch (failure) {
+      setProgress(null);
       await complete(history, proposal, failure instanceof Error ? failure.message : 'The tool failed.');
     } finally {
       setThinking(false);
@@ -247,8 +250,8 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
       >
         {messages.length === 0 && (
           <Text style={styles.empty}>
-            Ask for a plan, a script check, or an image. Every tool call is shown for approval first, and anything that
-            charges your provider says the price before it runs.
+            Ask for a plan, a script check, an image, or a shot. Every tool call is shown for approval first, and
+            anything that charges your provider says the price before it runs.
           </Text>
         )}
         {messages.map((message, index) => {
@@ -273,7 +276,12 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
             <Text style={styles.toolText}>{uri.slice(0, 48)}…</Text>
           </View>
         ))}
-        {thinking && <ActivityIndicator color={theme.accent} style={styles.spinner} />}
+        {thinking && (
+          <View style={styles.working}>
+            <ActivityIndicator color={theme.accent} />
+            {progress !== null && <Text style={styles.toolText}>{progress}</Text>}
+          </View>
+        )}
         {error !== null && <Text style={styles.error}>{error}</Text>}
       </ScrollView>
 
@@ -352,7 +360,7 @@ const styles = StyleSheet.create({
   toolBubble: { alignSelf: 'stretch', padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.line, gap: 4 },
   toolName: { color: theme.mint, fontSize: 10, fontWeight: '700', letterSpacing: 0.6 },
   toolText: { color: theme.textWeak, fontSize: 12, lineHeight: 18 },
-  spinner: { alignSelf: 'flex-start', marginTop: 4 },
+  working: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 4 },
   error: { color: theme.danger, fontSize: 12, lineHeight: 18 },
   approveCard: { margin: 16, marginTop: 0, padding: 14, borderRadius: 12, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 8 },
   approveTitle: { color: theme.text, fontSize: 14, fontWeight: '700' },
