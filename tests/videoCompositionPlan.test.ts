@@ -119,7 +119,8 @@ describe('composition plan', () => {
     const timeline: TimelineDocument = {
       ...base,
       tracks: base.tracks.map((track) =>
-        track.id === INITIAL_AUDIO_TRACK_ID
+        // Narrowed on kind: only an audio track carries a mix.
+        track.kind === 'audio'
           ? { ...track, mix: { ...track.mix, muted: true }, clips: [clip('vo', 'asset-audio', 0)] }
           : track
       )
