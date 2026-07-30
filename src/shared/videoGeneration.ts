@@ -20,6 +20,9 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const VIDEO_POLL_INTERVAL_MS = 5_000;
 const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000;
 
+/** Runway pins API behaviour to a dated version rather than a semver. */
+const RUNWAY_API_VERSION = '2024-11-06';
+
 export type VideoAspectRatio = '16:9' | '9:16' | '1:1';
 
 /** Where a finished video can be fetched, and what to send when fetching it. */
@@ -225,9 +228,146 @@ export async function requestSoraVideo(input: VideoRequestInput): Promise<VideoD
   }
 }
 
+/**
+ * Runway over /v1/text_to_video: create → poll the task → hand back the output URL.
+ *
+ * Worth having even though Runway is one provider: it fronts Seedance, Veo 3.1,
+ * HappyHorse and Gemini Omni Flash behind the same endpoint, so one adapter and
+ * one key make nine models reachable instead of one.
+ */
+export async function requestRunwayVideo(input: VideoRequestInput): Promise<VideoDownload> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
+  const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${input.apiKey}`,
+    // Runway's behaviour is pinned by date; without this header the API picks a
+    // default version that can change under us.
+    'X-Runway-Version': RUNWAY_API_VERSION
+  };
+  // Text-to-video takes landscape or portrait only on every model that offers
+  // it, so a square request renders landscape rather than being rejected after
+  // the user approved the spend.
+  const ratio = input.aspectRatio === '9:16' ? '720:1280' : '1280:720';
+  const startedAt = Date.now();
+  input.onProgress?.('submitting', 0);
+
+  const startResponse = await fetchWithTimeout(fetchImpl, 'https://api.dev.runwayml.com/v1/text_to_video', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: input.modelId,
+      promptText: input.prompt,
+      ratio,
+      duration: Math.round(input.durationSeconds)
+    })
+  });
+  await expectOk(startResponse, 'Runway');
+  const created = (await startResponse.json()) as { id?: string };
+  if (typeof created.id !== 'string' || created.id.length === 0) {
+    throw new Error('Runway did not return a task id.');
+  }
+
+  const deadline = startedAt + pollTimeoutMs;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(`Runway generation did not finish within ${Math.round(pollTimeoutMs / 60_000)} minutes.`);
+    }
+    input.onProgress?.('generating', Date.now() - startedAt);
+    await sleep(pollIntervalMs);
+    const pollResponse = await fetchWithTimeout(fetchImpl, `https://api.dev.runwayml.com/v1/tasks/${encodeURIComponent(created.id)}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${input.apiKey}`, 'X-Runway-Version': RUNWAY_API_VERSION }
+    });
+    await expectOk(pollResponse, 'Runway');
+    const status = (await pollResponse.json()) as {
+      status?: string;
+      failure?: string;
+      failureCode?: string;
+      output?: readonly string[];
+    };
+    if (status.status === 'FAILED' || status.status === 'CANCELED') {
+      throw new Error(`Runway generation ${status.status?.toLowerCase()}: ${status.failure ?? status.failureCode ?? 'unknown error'}.`);
+    }
+    if (status.status !== 'SUCCEEDED') continue;
+    const url = status.output?.[0];
+    if (typeof url !== 'string' || url.length === 0) {
+      throw new Error('Runway finished without a downloadable video.');
+    }
+    input.onProgress?.('ready', Date.now() - startedAt);
+    // The output URL is pre-signed and expires in a day or two, so it carries
+    // its own credentials and must not be stored — only downloaded now.
+    return { url, headers: {}, providerJobId: created.id, mimeType: 'video/mp4' };
+  }
+}
+
+/** Luma Dream Machine: create → poll the generation → hand back assets.video. */
+export async function requestLumaVideo(input: VideoRequestInput): Promise<VideoDownload> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
+  const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
+  const headers = { 'Content-Type': 'application/json', accept: 'application/json', Authorization: `Bearer ${input.apiKey}` };
+  const base = 'https://api.lumalabs.ai/dream-machine/v1';
+  const startedAt = Date.now();
+  input.onProgress?.('submitting', 0);
+
+  const startResponse = await fetchWithTimeout(fetchImpl, `${base}/generations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      prompt: input.prompt,
+      model: input.modelId,
+      resolution: '720p',
+      // Dream Machine takes only these two lengths, as a string with a unit.
+      duration: input.durationSeconds >= 7 ? '9s' : '5s',
+      aspect_ratio: input.aspectRatio
+    })
+  });
+  await expectOk(startResponse, 'Luma');
+  const created = (await startResponse.json()) as { id?: string };
+  if (typeof created.id !== 'string' || created.id.length === 0) {
+    throw new Error('Luma did not return a generation id.');
+  }
+
+  const deadline = startedAt + pollTimeoutMs;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(`Luma generation did not finish within ${Math.round(pollTimeoutMs / 60_000)} minutes.`);
+    }
+    input.onProgress?.('generating', Date.now() - startedAt);
+    await sleep(pollIntervalMs);
+    const pollResponse = await fetchWithTimeout(fetchImpl, `${base}/generations/${encodeURIComponent(created.id)}`, {
+      method: 'GET',
+      headers: { accept: 'application/json', Authorization: `Bearer ${input.apiKey}` }
+    });
+    await expectOk(pollResponse, 'Luma');
+    const status = (await pollResponse.json()) as {
+      state?: string;
+      failure_reason?: string;
+      assets?: { video?: string };
+    };
+    if (status.state === 'failed') {
+      throw new Error(`Luma generation failed: ${status.failure_reason ?? 'unknown error'}.`);
+    }
+    if (status.state !== 'completed') continue;
+    const url = status.assets?.video;
+    if (typeof url !== 'string' || url.length === 0) {
+      throw new Error('Luma finished without a downloadable video.');
+    }
+    input.onProgress?.('ready', Date.now() - startedAt);
+    return { url, headers: {}, providerJobId: created.id, mimeType: 'video/mp4' };
+  }
+}
+
+const VIDEO_ADAPTERS: Readonly<Record<string, (input: VideoRequestInput) => Promise<VideoDownload>>> = {
+  openai: requestSoraVideo,
+  google_gemini: requestVeoVideo,
+  runway: requestRunwayVideo,
+  luma: requestLumaVideo
+};
+
 /** The adapter a provider id resolves to, or undefined when none is ported. */
 export function videoAdapterFor(providerId: string): ((input: VideoRequestInput) => Promise<VideoDownload>) | undefined {
-  if (providerId === 'openai') return requestSoraVideo;
-  if (providerId === 'google_gemini') return requestVeoVideo;
-  return undefined;
+  return VIDEO_ADAPTERS[providerId];
 }

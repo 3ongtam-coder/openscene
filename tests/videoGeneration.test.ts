@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  requestLumaVideo,
+  requestRunwayVideo,
   requestSoraVideo,
   requestVeoVideo,
   snapSoraSeconds,
@@ -174,9 +176,139 @@ describe('shared video generation', () => {
   it('resolves an adapter only for providers that actually have one', () => {
     expect(videoAdapterFor('openai')).toBe(requestSoraVideo);
     expect(videoAdapterFor('google_gemini')).toBe(requestVeoVideo);
+    expect(videoAdapterFor('runway')).toBe(requestRunwayVideo);
+    expect(videoAdapterFor('luma')).toBe(requestLumaVideo);
     // Listed in the catalog but unported: callers must get undefined and say so
     // rather than picking a wrong adapter.
     expect(videoAdapterFor('kling')).toBeUndefined();
     expect(videoAdapterFor('byteplus')).toBeUndefined();
+  });
+
+  it('pins the Runway API version and polls the task until it succeeds', async () => {
+    let polls = 0;
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const headers = init.headers as Record<string, string>;
+      // Runway's behaviour is versioned by date; without the header the API
+      // silently picks a default that can change under us.
+      expect(headers['X-Runway-Version']).toBe('2024-11-06');
+      expect(headers.Authorization).toBe('Bearer rw-key');
+      if (url === 'https://api.dev.runwayml.com/v1/text_to_video') {
+        const body = JSON.parse(init.body as string);
+        expect(body).toEqual({ model: 'gen4.5', promptText: 'a kite', ratio: '1280:720', duration: 5 });
+        return new Response(JSON.stringify({ id: 'task_1' }), { status: 200 });
+      }
+      polls += 1;
+      return polls === 1
+        ? new Response(JSON.stringify({ status: 'RUNNING' }), { status: 200 })
+        : new Response(JSON.stringify({ status: 'SUCCEEDED', output: ['https://cdn/out.mp4?_jwt=x'] }), { status: 200 });
+    });
+
+    const ready = await requestRunwayVideo({
+      apiKey: 'rw-key',
+      modelId: 'gen4.5',
+      prompt: 'a kite',
+      aspectRatio: '16:9',
+      durationSeconds: 5,
+      pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(ready.url).toBe('https://cdn/out.mp4?_jwt=x');
+    // The output URL is already signed, so re-sending the key would leak it to
+    // a CDN that never needed it.
+    expect(ready.headers).toEqual({});
+    expect(ready.providerJobId).toBe('task_1');
+  });
+
+  it('renders a square Runway request as landscape rather than being rejected', async () => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/text_to_video')) {
+        // Every Runway text-to-video model takes landscape or portrait only.
+        expect(JSON.parse(init.body as string).ratio).toBe('1280:720');
+        return new Response(JSON.stringify({ id: 't' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: 'SUCCEEDED', output: ['https://cdn/a.mp4'] }), { status: 200 });
+    });
+    await requestRunwayVideo({
+      apiKey: 'k',
+      modelId: 'gen4.5',
+      prompt: 'p',
+      aspectRatio: '1:1',
+      durationSeconds: 5,
+      pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+  });
+
+  it('reports a cancelled Runway task as a failure, not a silent success', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith('/text_to_video')
+        ? new Response(JSON.stringify({ id: 't' }), { status: 200 })
+        : new Response(JSON.stringify({ status: 'CANCELED', failure: 'moderation' }), { status: 200 })
+    );
+    await expect(
+      requestRunwayVideo({
+        apiKey: 'k',
+        modelId: 'gen4.5',
+        prompt: 'p',
+        aspectRatio: '16:9',
+        durationSeconds: 5,
+        pollIntervalMs: 0,
+        fetchImpl: fetchMock as unknown as typeof fetch
+      })
+    ).rejects.toThrow(/canceled: moderation/);
+  });
+
+  it('sends Luma its two legal durations as strings and reads assets.video', async () => {
+    const seen: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/generations')) {
+        const body = JSON.parse(init.body as string);
+        seen.push(body.duration);
+        expect(body).toMatchObject({ model: 'ray-2', resolution: '720p', aspect_ratio: '9:16' });
+        return new Response(JSON.stringify({ id: 'gen_1' }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ state: 'completed', assets: { video: 'https://cdn-luma/v.mp4' } }),
+        { status: 200 }
+      );
+    });
+
+    const run = (durationSeconds: number) =>
+      requestLumaVideo({
+        apiKey: 'luma-key',
+        modelId: 'ray-2',
+        prompt: 'p',
+        aspectRatio: '9:16',
+        durationSeconds,
+        pollIntervalMs: 0,
+        fetchImpl: fetchMock as unknown as typeof fetch
+      });
+
+    const ready = await run(5);
+    await run(9);
+    // Dream Machine accepts "5s" or "9s" and nothing else, so a request has to
+    // land on one of them rather than passing the number through.
+    expect(seen).toEqual(['5s', '9s']);
+    expect(ready.url).toBe('https://cdn-luma/v.mp4');
+  });
+
+  it('surfaces a Luma failure reason', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith('/generations')
+        ? new Response(JSON.stringify({ id: 'g' }), { status: 200 })
+        : new Response(JSON.stringify({ state: 'failed', failure_reason: 'unsafe prompt' }), { status: 200 })
+    );
+    await expect(
+      requestLumaVideo({
+        apiKey: 'k',
+        modelId: 'ray-2',
+        prompt: 'p',
+        aspectRatio: '16:9',
+        durationSeconds: 5,
+        pollIntervalMs: 0,
+        fetchImpl: fetchMock as unknown as typeof fetch
+      })
+    ).rejects.toThrow(/unsafe prompt/);
   });
 });

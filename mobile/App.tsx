@@ -14,6 +14,7 @@ import { VoiceScreen } from './src/screens/VoiceScreen';
 import { assetUri, readProject } from './src/lib/projectStore';
 import { deliverExport, exportTimeline } from './src/lib/exportComposition';
 import { isExportAvailable } from './modules/video-export';
+import { ChevronLeftIcon, GearIcon } from './src/components/Icon';
 import { theme } from './src/lib/theme';
 
 /**
@@ -120,7 +121,7 @@ function Shell() {
 
       <View style={[styles.bar, { paddingTop: insets.top + 8 }]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Back to projects" onPress={() => setRoute({ name: 'projects' })} style={styles.barButton}>
-          <Text style={styles.barIcon}>‹</Text>
+          <ChevronLeftIcon size={20} />
         </Pressable>
         <Text style={styles.barTitle} numberOfLines={1}>{project?.name ?? 'Project'}</Text>
         <Pressable
@@ -133,7 +134,7 @@ function Shell() {
           <Text style={styles.exportText}>{exportState.kind === 'running' ? '…' : 'Export'}</Text>
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={() => setSettingsOpen(true)} style={styles.barButton}>
-          <Text style={styles.barIcon}>⚙</Text>
+          <GearIcon size={19} />
         </Pressable>
       </View>
 
@@ -189,7 +190,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   bar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.line },
   barButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  barIcon: { color: theme.text, fontSize: 22 },
   barTitle: { flex: 1, color: theme.text, fontSize: 16, fontWeight: '700' },
   export: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: theme.accent },
   exportOff: { opacity: 0.3 },

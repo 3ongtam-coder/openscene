@@ -17,7 +17,9 @@ import { projectMediaDir, type MobileAsset } from './projectStore';
 
 const SLOTS: Readonly<Record<string, ProviderSlot>> = {
   openai: 'openaiApiKey',
-  google_gemini: 'geminiApiKey'
+  google_gemini: 'geminiApiKey',
+  runway: 'runwayApiKey',
+  luma: 'lumaApiKey'
 };
 
 export type GenerateShotInput = {

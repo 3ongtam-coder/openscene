@@ -16,6 +16,7 @@ import {
 import { PreviewPlayer } from '../components/PreviewPlayer';
 import { TimelineClip } from '../components/TimelineClip';
 import { MediaLibrary } from '../components/MediaLibrary';
+import { PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from '../components/Icon';
 
 const TRACK_HEIGHT = { video: 56, audio: 40 } as const;
 const RAIL = 92;
@@ -122,6 +123,26 @@ export function EditScreen({
     if (playing && editor.playheadMs >= editor.durationMs && editor.durationMs > 0) setPlaying(false);
   }, [playing, editor.playheadMs, editor.durationMs]);
 
+  /**
+   * Step to the previous or next edit point.
+   *
+   * A fixed ±5s step would be arbitrary; the positions that matter on a timeline
+   * are where the picture changes, which is what the shared boundary helper
+   * already knows.
+   */
+  const step = (direction: 'back' | 'forward'): void => {
+    if (direction === 'forward') {
+      const next = nextVisualBoundaryMs(editor.timeline, editor.playheadMs);
+      setPlayheadMs(next ?? editor.durationMs);
+      return;
+    }
+    const edges = editor.timeline.tracks
+      .filter((track) => track.kind === 'video')
+      .flatMap((track) => track.clips.flatMap((clip) => [clip.timelineStartMs, clip.sourceEndMs - clip.sourceStartMs + clip.timelineStartMs]))
+      .filter((edge) => edge < editor.playheadMs - 1);
+    setPlayheadMs(edges.length === 0 ? 0 : Math.max(...edges));
+  };
+
   const importMedia = async (): Promise<void> => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) return;
@@ -189,19 +210,32 @@ export function EditScreen({
       <View style={styles.transport}>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Previous edit point"
+          onPress={() => step('back')}
+          style={styles.small}
+        >
+          <SkipBackIcon />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
           accessibilityLabel={playing ? 'Pause' : 'Play'}
           disabled={editor.durationMs === 0}
           onPress={() => setPlaying((value) => !value)}
           style={[styles.play, editor.durationMs === 0 && styles.disabled]}
         >
-          <Text style={styles.playGlyph}>{playing ? '❙❙' : '▶'}</Text>
+          {playing ? <PauseIcon /> : <PlayIcon />}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Next edit point"
+          onPress={() => step('forward')}
+          style={styles.small}
+        >
+          <SkipForwardIcon />
         </Pressable>
         <Text style={styles.clock}>
           {formatMs(editor.playheadMs)} / {formatMs(editor.durationMs)}
         </Text>
-        <Pressable accessibilityRole="button" onPress={() => setPlayheadMs(0)} style={styles.small}>
-          <Text style={styles.smallText}>⏮</Text>
-        </Pressable>
         <Pressable
           accessibilityRole="button"
           onPress={() => setPxPerSecond((value) => Math.max(6, value / 1.5))}

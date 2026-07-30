@@ -6,6 +6,8 @@
  */
 
 import {
+  requestLumaVideo,
+  requestRunwayVideo,
   requestSoraVideo,
   requestVeoVideo,
   snapSoraSeconds,
@@ -128,4 +130,12 @@ export async function generateVeoVideo(input: VideoSynthesisInput): Promise<Gene
 
 export async function generateSoraVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
   return download(await requestSoraVideo(input), 'OpenAI Sora', input.fetchImpl ?? fetch);
+}
+
+export async function generateRunwayVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
+  return download(await requestRunwayVideo(input), 'Runway', input.fetchImpl ?? fetch);
+}
+
+export async function generateLumaVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
+  return download(await requestLumaVideo(input), 'Luma', input.fetchImpl ?? fetch);
 }

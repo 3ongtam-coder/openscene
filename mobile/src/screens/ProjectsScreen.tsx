@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { createProject, deleteProject, listProjects, renameProject, type ProjectSummary } from '../lib/projectStore';
+import { GearIcon } from '../components/Icon';
 import { theme } from '../lib/theme';
 
 export function ProjectsScreen({
@@ -49,7 +50,7 @@ export function ProjectsScreen({
         <Text style={styles.h1}>Projects</Text>
         {onOpenSettings !== undefined && (
           <Pressable accessibilityRole="button" accessibilityLabel="Settings" onPress={onOpenSettings} style={styles.iconButton}>
-            <Text style={styles.icon}>⚙</Text>
+            <GearIcon size={19} />
           </Pressable>
         )}
       </View>
