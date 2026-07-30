@@ -64,12 +64,16 @@ export function ModelSelect({
           onPress={() => setSheet('choose')}
           style={styles.select}
         >
-          <View style={styles.selectText}>
-            <Text style={styles.provider}>{selected?.providerLabel ?? 'No model'}</Text>
-            <Text style={styles.model} numberOfLines={1}>
-              {selected?.label ?? 'Connect a provider to pick one'}
-            </Text>
-          </View>
+          <Text style={styles.model} numberOfLines={1}>
+            {selected === undefined ? (
+              'Connect a provider to pick one'
+            ) : (
+              <>
+                <Text style={styles.provider}>{selected.providerLabel} · </Text>
+                {selected.label}
+              </>
+            )}
+          </Text>
           {/* A chevron rather than a glyph: it is drawn, so it matches the rest
               of the controls on both platforms. */}
           <View style={styles.chevron} />
@@ -171,39 +175,42 @@ export function ModelSelect({
 const styles = StyleSheet.create({
   root: { gap: 6 },
   row: { flexDirection: 'row', alignItems: 'stretch', gap: 8 },
+  // Sized to sit level with the chip rows beside it — the stacked two-line
+  // version stood about twice their height and read as the loudest thing on a
+  // screen where it is one setting among several.
   select: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderRadius: 10,
+    gap: 8,
+    height: 40,
+    paddingHorizontal: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: theme.line,
     backgroundColor: theme.surface
   },
-  selectText: { flex: 1 },
-  provider: { color: theme.textWeaker, fontSize: 10, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
-  model: { color: theme.text, fontSize: 15, fontWeight: '600', marginTop: 2 },
+  provider: { color: theme.textWeaker, fontSize: 13, fontWeight: '600' },
+  model: { flex: 1, color: theme.text, fontSize: 13, fontWeight: '600' },
   chevron: {
-    width: 9,
-    height: 9,
-    borderRightWidth: 2,
-    borderBottomWidth: 2,
+    width: 7,
+    height: 7,
+    borderRightWidth: 1.5,
+    borderBottomWidth: 1.5,
     borderColor: theme.textWeak,
     transform: [{ rotate: '45deg' }],
-    marginBottom: 4
+    marginBottom: 3
   },
   plus: {
-    width: 46,
-    borderRadius: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: theme.accent,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  plusBar: { position: 'absolute', width: 16, height: 2, borderRadius: 1, backgroundColor: theme.accent },
+  plusBar: { position: 'absolute', width: 13, height: 1.5, borderRadius: 1, backgroundColor: theme.accent },
   plusBarVertical: { transform: [{ rotate: '90deg' }] },
   needsKey: { color: theme.warn, fontSize: 11, lineHeight: 16 },
 
@@ -213,10 +220,10 @@ const styles = StyleSheet.create({
   sheetTitle: { flex: 1, color: theme.text, fontSize: 17, fontWeight: '700' },
   close: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: theme.accent },
   closeText: { color: theme.bg, fontSize: 13, fontWeight: '700' },
-  sheetBody: { padding: 16, paddingBottom: 40, gap: 12 },
+  sheetBody: { padding: 16, paddingBottom: 40, gap: 10 },
   sheetBlurb: { color: theme.textWeak, fontSize: 12, lineHeight: 18 },
 
-  group: { gap: 6 },
+  group: { gap: 5 },
   groupHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   groupTitle: { flex: 1, color: theme.text, fontSize: 13, fontWeight: '700' },
   groupBadge: { fontSize: 9, fontWeight: '700', letterSpacing: 0.4, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, overflow: 'hidden', borderWidth: 1 },
@@ -226,9 +233,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: theme.line,
     backgroundColor: theme.surface
@@ -236,7 +243,7 @@ const styles = StyleSheet.create({
   optionOn: { borderColor: theme.accent },
   optionOff: { opacity: 0.45 },
   optionText: { flex: 1 },
-  optionLabel: { color: theme.text, fontSize: 14, fontWeight: '600' },
-  optionMeta: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, marginTop: 2 },
-  tick: { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.accent }
+  optionLabel: { color: theme.text, fontSize: 13, fontWeight: '600' },
+  optionMeta: { color: theme.textWeaker, fontSize: 10, lineHeight: 14, marginTop: 1 },
+  tick: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.accent }
 });
