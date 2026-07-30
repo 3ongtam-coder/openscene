@@ -10,6 +10,8 @@ import { Tabs } from './ui';
 import { closeProjectTab, openProjectTab, pruneProjectTabs, type ProjectTab } from './projectTabs';
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
 import { NarrationPanel } from './NarrationPanel';
+import type { ReferenceImageSelection } from '../../shared/providerSeams';
+import { ImageGenerationWorkspace } from './ImageGenerationWorkspace';
 import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
 import {
   WORKSPACE_TAB_IDS,
@@ -256,6 +258,10 @@ export function App(): ReactElement {
     typeof window === 'undefined' ? 'edit' : parseWorkspaceTabId(window.localStorage.getItem(WORKSPACE_TAB_STORAGE_KEY))
   );
 
+  // Lives here because both studios touch it: the image studio produces a still
+  // and the video studio consumes it as an image-to-video seed.
+  const [videoReferenceImage, setVideoReferenceImage] = useState<ReferenceImageSelection | null>(null);
+
   const selectWorkspaceTab = (tabId: WorkspaceTabId): void => {
     setWorkspaceTabId(tabId);
     try {
@@ -367,7 +373,25 @@ export function App(): ReactElement {
                 style={APP_WORKSPACE_PANEL_STYLE}
                 tabIndex={-1}
               >
-                <VideoGenerationWorkspace />
+                <VideoGenerationWorkspace
+                  referenceImage={videoReferenceImage}
+                  onReferenceImageChange={setVideoReferenceImage}
+                />
+              </section>
+              <section
+                aria-label={WORKSPACE_TAB_LABELS.image}
+                className="workspace-studio-panel"
+                hidden={workspaceTabId !== 'image' || !workspaceIsVisible}
+                role="region"
+                style={APP_WORKSPACE_PANEL_STYLE}
+                tabIndex={-1}
+              >
+                <ImageGenerationWorkspace
+                  onUseForVideo={(reference) => {
+                    setVideoReferenceImage(reference);
+                    selectWorkspaceTab('video');
+                  }}
+                />
               </section>
             </div>
           </div>
