@@ -220,3 +220,40 @@ export function appendAssetToTimeline(project: MobileProject, asset: MobileAsset
   writeProject(updated);
   return updated;
 }
+
+/** Bytes on disk for a stored asset, or null when the file has gone missing. */
+export function assetByteLength(projectId: string, asset: MobileAsset): number | null {
+  const file = new File(projectDir(projectId), asset.relativePath);
+  return file.exists ? file.size ?? null : null;
+}
+
+/**
+ * Removes an asset, its file, and every clip that referenced it.
+ *
+ * Leaving the clips behind would point the timeline at a file that is gone, and
+ * an export would fail at the last step instead of the moment the user asked for
+ * this. The file removed is always inside the app's own project directory.
+ */
+export function deleteAsset(projectId: string, assetId: string): MobileProject | null {
+  const project = readProject(projectId);
+  if (project === null) return null;
+  const asset = project.assets.find((candidate) => candidate.id === assetId);
+  if (asset === undefined) return null;
+
+  const file = new File(projectDir(projectId), asset.relativePath);
+  if (file.exists) file.delete();
+
+  const updated: MobileProject = {
+    ...project,
+    assets: project.assets.filter((candidate) => candidate.id !== assetId),
+    timeline: {
+      ...project.timeline,
+      tracks: project.timeline.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.filter((clip) => clip.assetId !== assetId)
+      }))
+    }
+  };
+  writeProject(updated);
+  return updated;
+}

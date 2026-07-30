@@ -1,7 +1,18 @@
 import { useCallback, useMemo, useState } from 'react';
 
-import { deleteClip, moveClip, placeClip, splitClip, trimClipLeft, trimClipRight } from '@openvideo/shared/timelineClipLogic';
-import { createInitialTimeline, timelineDurationMs } from '@openvideo/shared/timelineLogic';
+import {
+  deleteClip,
+  moveClip,
+  placeClip,
+  splitClip,
+  trimClipLeft,
+  trimClipRight,
+  updateClipEffects
+} from '@openvideo/shared/timelineClipLogic';
+import { addTrack, createInitialTimeline, removeTrack, timelineDurationMs } from '@openvideo/shared/timelineLogic';
+import { updateAudioTrackMix } from '@openvideo/shared/timelineMetadataLogic';
+import { resolveVisibleClip } from '@openvideo/shared/timelinePlayback';
+import type { ClipEffects } from '@openvideo/shared/timelineTypes';
 import { DEFAULT_CLIP_EFFECTS } from '@openvideo/shared/timelineTypes';
 import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/shared/timelineClipPlacement';
 import type { MediaAsset, TimelineDocument } from '@openvideo/shared/timelineTypes';
@@ -121,6 +132,46 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
     [apply, persist]
   );
 
+  /** What the preview should be showing right now. */
+  const visible = useMemo(() => resolveVisibleClip(timeline, playheadMs), [timeline, playheadMs]);
+
+  /**
+   * Places an asset that is already in the project on the timeline.
+   *
+   * `addAsset` both registers and places, which is right for an import. Using it
+   * from the media library would register a second copy of an asset the project
+   * already holds.
+   */
+  const placeExisting = useCallback(
+    (assetId: string): void => {
+      apply(
+        'Add to timeline',
+        (current) => {
+          const asset = assets.find((candidate) => candidate.id === assetId);
+          if (asset === undefined) return null;
+          const target = resolveTimelineTrackForAsset(current, asset);
+          if (!target.ok) return null;
+          const durationMsForAsset = asset.metadata?.durationMs ?? 5_000;
+          return placeClip(current, {
+            trackId: target.track.id,
+            clip: {
+              id: `clip-${asset.id}-${Date.now().toString(36)}`,
+              assetId: asset.id,
+              timelineStartMs: trackAppendStartMs(target.track),
+              sourceStartMs: 0,
+              sourceEndMs: durationMsForAsset,
+              sourceDurationMs: durationMsForAsset,
+              effects: { ...DEFAULT_CLIP_EFFECTS },
+              keyframes: []
+            }
+          });
+        },
+        'That asset could not be placed on a track.'
+      );
+    },
+    [apply, assets]
+  );
+
   const selectedClip = useMemo(() => {
     for (const track of timeline.tracks) {
       const clip = track.clips.find((candidate) => candidate.id === selectedClipId);
@@ -139,12 +190,14 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
     selectedClipId,
     setSelectedClipId,
     selectedClip,
+    visible,
     message,
     canUndo: past.length > 0,
     canRedo: future.length > 0,
     undo,
     redo,
     addAsset,
+    placeExisting,
     assetFor: (assetId: string) => assets.find((asset) => asset.id === assetId) ?? null,
 
     splitAtPlayhead: () =>
@@ -199,6 +252,89 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
           });
         },
         'That move would overlap another clip.'
+      ),
+
+    /**
+     * Absolute placement, for dragging.
+     *
+     * A drag knows where the finger ended, not how far it travelled from the
+     * last committed position — accumulating deltas across a gesture drifts,
+     * and every rejected intermediate move would drift it further.
+     */
+    moveClipTo: (clipId: string, trackId: string, timelineStartMs: number) =>
+      apply(
+        'Move',
+        (current) => moveClip(current, { clipId, targetTrackId: trackId, timelineStartMs: Math.max(0, Math.round(timelineStartMs)) }),
+        'That move would overlap another clip.'
+      ),
+
+    /** Absolute trim, for dragging a clip edge. */
+    trimClipTo: (clipId: string, edge: 'left' | 'right', timelineMs: number) =>
+      apply(
+        `Trim ${edge}`,
+        (current) => {
+          const at = Math.max(0, Math.round(timelineMs));
+          return edge === 'left'
+            ? trimClipLeft(current, { clipId, timelineStartMs: at })
+            : trimClipRight(current, { clipId, timelineEndMs: at });
+        },
+        'That trim would make the clip shorter than a frame.'
+      ),
+
+    setSelectedEffects: (effects: Partial<ClipEffects>) =>
+      apply(
+        'Adjust',
+        (current) =>
+          selectedClip === null
+            ? null
+            : updateClipEffects(current, {
+                clipId: selectedClip.clip.id,
+                effects: { ...selectedClip.clip.effects, ...effects }
+              }),
+        'That value is outside what the effect accepts.'
+      ),
+
+    setTrackMuted: (trackId: string, muted: boolean) =>
+      apply(
+        muted ? 'Mute' : 'Unmute',
+        (current) => {
+          const track = current.tracks.find((candidate) => candidate.id === trackId);
+          if (track === undefined || track.kind !== 'audio') return null;
+          return updateAudioTrackMix(current, { trackId, mix: { ...track.mix, muted } });
+        },
+        'Only audio tracks carry a mix.'
+      ),
+
+    setTrackGainDb: (trackId: string, gainDb: number) =>
+      apply(
+        'Track gain',
+        (current) => {
+          const track = current.tracks.find((candidate) => candidate.id === trackId);
+          if (track === undefined || track.kind !== 'audio') return null;
+          return updateAudioTrackMix(current, { trackId, mix: { ...track.mix, gainDb } });
+        },
+        'Only audio tracks carry a mix.'
+      ),
+
+    addTrack: (kind: 'video' | 'audio') =>
+      apply(
+        'Add track',
+        (current) => {
+          const existing = current.tracks.filter((track) => track.kind === kind).length + 1;
+          return addTrack(current, {
+            id: `${kind}-${Date.now().toString(36)}`,
+            kind,
+            name: `${kind === 'video' ? 'Video' : 'Audio'} ${existing}`
+          });
+        },
+        'That track could not be added.'
+      ),
+
+    removeTrack: (trackId: string) =>
+      apply(
+        'Remove track',
+        (current) => removeTrack(current, trackId),
+        'A timeline keeps at least one video and one audio track.'
       )
   };
 }

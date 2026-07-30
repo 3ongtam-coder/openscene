@@ -1,4 +1,5 @@
 import { clipTimelineEndMs } from '../../../shared/timelineLogic';
+import { isClipActiveAt, sourceTimeForClip } from '../../../shared/timelinePlayback';
 import { CLIP_EFFECT_PROPERTIES, DEFAULT_AUDIO_TRACK_MIX, DEFAULT_CLIP_EFFECTS } from '../../../shared/timelineTypes';
 import type {
   AudioTrackMix,
@@ -68,14 +69,6 @@ function assertNever(value: never): never {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function isClipActiveAt(clip: PersistedTimelineClip, playheadMs: number): boolean {
-  return playheadMs >= clip.timelineStartMs && playheadMs < clipTimelineEndMs(clip);
-}
-
-function sourceTimeForClip(clip: PersistedTimelineClip, playheadMs: number): number {
-  return clip.sourceStartMs + playheadMs - clip.timelineStartMs;
 }
 
 function valueForProperty(effects: ClipEffects, property: ClipEffectProperty): number {
