@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { theme } from '../lib/theme';
 import { useMobileEditor, type EditorAsset } from '../lib/editorState';
+import { exportTimeline } from '../lib/exportComposition';
 
 const TRACK_HEIGHT = { video: 56, audio: 40 } as const;
 const RAIL = 92;
@@ -17,6 +18,9 @@ function formatMs(ms: number): string {
 export function EditScreen({ topInset }: { readonly topInset: number }) {
   const editor = useMobileEditor();
   const [pxPerSecond, setPxPerSecond] = useState(28);
+  const [exportState, setExportState] = useState<
+    { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; uri: string } | { kind: 'failed'; message: string }
+  >({ kind: 'idle' });
   const laneWidth = useRef(0);
 
   const timelineWidth = useMemo(
@@ -56,6 +60,12 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
     editor.addAsset(asset);
   };
 
+  const runExport = async (): Promise<void> => {
+    setExportState({ kind: 'running' });
+    const outcome = await exportTimeline({ timeline: editor.timeline, assets: editor.assets });
+    setExportState(outcome.ok ? { kind: 'done', uri: outcome.uri } : { kind: 'failed', message: outcome.message });
+  };
+
   return (
     <View style={[styles.root, { paddingTop: topInset + 12 }]}>
       <View style={styles.head}>
@@ -84,6 +94,11 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
         <Tool label="Redo" onPress={editor.redo} disabled={!editor.canRedo} />
         <Tool label="Zoom +" onPress={() => setPxPerSecond((value) => Math.min(120, value * 1.5))} />
         <Tool label="Zoom −" onPress={() => setPxPerSecond((value) => Math.max(6, value / 1.5))} />
+        <Tool
+          label={exportState.kind === 'running' ? 'Exporting…' : 'Export'}
+          onPress={() => void runExport()}
+          disabled={exportState.kind === 'running' || editor.durationMs <= 0}
+        />
       </ScrollView>
 
       {editor.message !== null && <Text style={styles.message}>{editor.message}</Text>}
@@ -153,9 +168,11 @@ export function EditScreen({ topInset }: { readonly topInset: number }) {
         <Text style={styles.empty}>Import a clip to start. Tap a clip to select it, then use the tools above.</Text>
       )}
 
+      {exportState.kind === 'failed' && <Text style={styles.message}>{exportState.message}</Text>}
+      {exportState.kind === 'done' && <Text style={styles.exported}>Exported to {exportState.uri}</Text>}
       <Text style={styles.exportNote}>
-        Editing only. Exporting a file needs a native video pipeline — AVFoundation here, Media3 on Android — which
-        this build does not have yet, so a mobile edit is a project rather than a finished video.
+        Export renders with AVFoundation on iOS. Android is not implemented yet and says so rather than producing a
+        file that is not there.
       </Text>
     </View>
   );
@@ -210,5 +227,6 @@ const styles = StyleSheet.create({
   clipText: { color: theme.bg, fontSize: 10, fontWeight: '700' },
   playhead: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: theme.text },
   empty: { color: theme.textWeak, fontSize: 13, lineHeight: 19, paddingHorizontal: 20, paddingTop: 20 },
+  exported: { color: theme.mint, fontSize: 11, paddingHorizontal: 20, paddingTop: 12 },
   exportNote: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, paddingHorizontal: 20, paddingTop: 16 }
 });
