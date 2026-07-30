@@ -54,12 +54,46 @@ function createCommandItemFactory(onCommand: SendTimelineMenuCommand) {
   });
 }
 
-export function createApplicationMenuTemplate(onCommand: SendTimelineMenuCommand): MenuItemConstructorOptions[] {
+export function createApplicationMenuTemplate(
+  onCommand: SendTimelineMenuCommand,
+  /**
+   * Reaching the updater on demand. The startup check is silent unless there is
+   * an update; this is where a user who wants to know now can ask, and where an
+   * up-to-date or failed answer is worth reporting.
+   */
+  onCheckForUpdates?: () => void
+): MenuItemConstructorOptions[] {
   const commandItem = createCommandItemFactory(onCommand);
   const template: MenuItemConstructorOptions[] = [];
   // macOS always titles the first menu with the running bundle's name, so the
   // label is what a packaged OpenVideo build shows; a dev run reads Electron.
-  if (process.platform === 'darwin') template.push({ label: 'OpenVideo', role: 'appMenu' });
+  //
+  // The updates item goes *inside* that menu. Pushing a second entry labelled
+  // OpenVideo — which is what this did — leaves the menu bar with two app-named
+  // menus, the real one and a stub holding one item.
+  if (process.platform === 'darwin') {
+    template.push(
+      onCheckForUpdates === undefined
+        ? { label: 'OpenVideo', role: 'appMenu' }
+        : {
+            label: 'OpenVideo',
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              // Where macOS users look for it: just under About.
+              { label: 'Check for Updates…', click: onCheckForUpdates },
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' }
+            ]
+          }
+    );
+  }
   template.push(
     { role: 'fileMenu' },
     { role: 'editMenu' },
@@ -120,6 +154,13 @@ export function createApplicationMenuTemplate(onCommand: SendTimelineMenuCommand
     },
     { role: 'windowMenu' }
   );
+  // Windows and Linux have no app menu, so Help is where an updates item goes.
+  if (onCheckForUpdates !== undefined && process.platform !== 'darwin') {
+    template.push({
+      role: 'help',
+      submenu: [{ label: 'Check for Updates…', click: onCheckForUpdates }]
+    });
+  }
   return template;
 }
 
@@ -134,8 +175,10 @@ export function applyTimelineMenuState(menu: TimelineMenuTarget, state: Timeline
   if (playPauseItem !== null) playPauseItem.label = state.playPauseLabel;
 }
 
-export function installApplicationMenu(): void {
-  const menu = Menu.buildFromTemplate(createApplicationMenuTemplate(dispatchTimelineMenuCommand));
+export function installApplicationMenu(onCheckForUpdates?: () => void): void {
+  const menu = Menu.buildFromTemplate(
+    createApplicationMenuTemplate(dispatchTimelineMenuCommand, onCheckForUpdates)
+  );
   Menu.setApplicationMenu(menu);
   ipcMain.on(IPC_CHANNELS.timelineMenuState, (event, payload: unknown) => {
     const focusedWindow = BrowserWindow.getFocusedWindow();
