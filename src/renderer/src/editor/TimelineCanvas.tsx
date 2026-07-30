@@ -90,7 +90,17 @@ const ICONS = {
   unlock: toolIcon(<><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 017.8-1.3" /></>, 12)
 } as const;
 
-const TRACK_TOGGLE_STYLE = {
+/**
+ * The track rail is one shared coordinate: the ruler, every track row, and the
+ * playhead's left offset all measure from it. It lives in one constant because
+ * it was previously written out five times, and any one of them drifting puts
+ * the ruler out of step with the clips underneath it.
+ */
+export const TRACK_RAIL_WIDTH = '168px';
+
+const TRACK_GRID_TEMPLATE = `${TRACK_RAIL_WIDTH} minmax(0, 1fr)`;
+
+const TRACK_TOGGLE_STYLE_BASE = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -105,6 +115,17 @@ const TRACK_TOGGLE_STYLE = {
   lineHeight: 1,
   transition: 'background var(--transition-fast), color var(--transition-fast)'
 } as const satisfies CSSProperties;
+
+const TRACK_TOGGLE_STYLE = TRACK_TOGGLE_STYLE_BASE;
+
+/** Two glyphs, so the 20px toggle box would wrap them onto two lines. */
+const INSERT_TRACK_BUTTON_STYLE = {
+  ...TRACK_TOGGLE_STYLE_BASE,
+  width: 'auto',
+  padding: '0 3px',
+  fontSize: 'var(--text-micro)'
+} as const satisfies CSSProperties;
+
 
 function trackToggleStyle(isOn: boolean, tone: 'danger' | 'warning' | 'primary'): CSSProperties {
   if (!isOn) return TRACK_TOGGLE_STYLE;
@@ -450,18 +471,38 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
           style={{ overflowX: 'auto', position: 'relative', height: '100%', cursor: activeTool === 'hand' ? (panOriginRef.current === null ? 'grab' : 'grabbing') : undefined }}
         >
           {/* Scrollable Container based on zoomLevel */}
-          <div style={{ width: `calc(100% * ${zoomLevel})`, minWidth: '100%', position: 'relative', display: 'grid', gap: '4px', padding: 'var(--space-2) var(--space-3)' }}>
+          {/* Column, not a content-height grid: the rows keep their natural
+              heights and a trailing spacer takes whatever is left, so the
+              surface reaches the bottom of the panel instead of stopping under
+              the last track. The playhead is absolutely positioned against this
+              element, so it runs the full height too. */}
+          <div
+            style={{
+              width: `calc(100% * ${zoomLevel})`,
+              minWidth: '100%',
+              minHeight: '100%',
+              boxSizing: 'border-box',
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+              padding: 'var(--space-2) var(--space-3)'
+            }}
+          >
 
-            {/* Slim mono ruler. The scale cell mirrors the track grid (104px rail + lane),
+            {/* Slim mono ruler. The scale cell mirrors the track grid (rail + lane),
                 so the scrub dot, the lane playhead line, and seek mapping share the exact
                 same horizontal coordinate space. */}
             <div
               className="timeline-ruler"
               style={{
                 display: 'grid',
-                gridTemplateColumns: '104px minmax(0, 1fr)',
+                gridTemplateColumns: TRACK_GRID_TEMPLATE,
                 gap: 0,
                 height: '20px',
+                // Flex children shrink by default. In the old grid this row
+                // could not be squashed; without this the ruler collapses.
+                flexShrink: 0,
                 position: 'relative',
                 overflow: 'visible',
                 padding: 0,
@@ -579,14 +620,14 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
             {/* One continuous playhead line from the ruler dot down through every
                 track. It lives at the container level so the 4px row gaps and the
                 lanes' overflow clipping cannot break it; the horizontal math
-                mirrors the shared 104px-rail + lane coordinate space. */}
+                mirrors the shared rail + lane coordinate space. */}
             <div
               aria-hidden="true"
               style={{
                 position: 'absolute',
                 top: 'calc(var(--space-2) + 17px)',
                 bottom: 'var(--space-2)',
-                left: `calc(var(--space-3) + 104px + (100% - (2 * var(--space-3)) - 104px) * ${playheadPercent / 100})`,
+                left: `calc(var(--space-3) + ${TRACK_RAIL_WIDTH} + (100% - (2 * var(--space-3)) - ${TRACK_RAIL_WIDTH}) * ${playheadPercent / 100})`,
                 width: '1.5px',
                 background: 'var(--foreground)',
                 zIndex: 4,
@@ -601,8 +642,12 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
                 className="timeline-track"
                 key={track.id}
                 style={{
-                  gridTemplateColumns: '104px minmax(0, 1fr)',
+                  gridTemplateColumns: TRACK_GRID_TEMPLATE,
                   minHeight: trackMinHeight(track.kind),
+                  // The lane inside is min-height 72px. Let the row shrink and
+                  // the lane overflows it, painting its background over the
+                  // clips on the row below.
+                  flexShrink: 0,
                   opacity: mutedTracks[track.id] ? 0.55 : 1
                 }}
               >
@@ -619,13 +664,14 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <span aria-hidden="true" style={{ fontSize: '10px' }}>{track.kind === 'video' ? '🎬' : '🎵'}</span>
-                    <strong style={{ fontSize: 'var(--text-micro)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70px' }}>
+                    <strong style={{ fontSize: 'var(--text-micro)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '118px' }}>
                       {track.name}
                     </strong>
                   </div>
 
-                  {/* Track toggle cluster */}
-                  <div style={{ display: 'flex', gap: '2px' }}>
+                  {/* One row: the state toggles, then the lifecycle actions.
+                      A third row overflowed the 42px audio track height. */}
+                  <div style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
                     <button
                       type="button"
                       title={mutedTracks[track.id] ? 'Unmute track' : 'Mute track'}
@@ -655,6 +701,52 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
                       style={trackToggleStyle(Boolean(lockedTracks[track.id]), 'primary')}
                     >
                       {lockedTracks[track.id] ? ICONS.lock : ICONS.unlock}
+                    </button>
+
+                    {/* Separated because these change the document, not just
+                        the view. Insert position is layer order: above means
+                        over this track in the composite. */}
+                    <span aria-hidden="true" style={{ width: '1px', height: '12px', margin: '0 2px', background: 'var(--line-subtle)' }} />
+
+                    <button
+                      type="button"
+                      title="Add a track above (higher video layer)"
+                      aria-label={`Add a track above ${track.name}`}
+                      onClick={(e) => { e.stopPropagation(); editor.insertTimelineTrack(track.id, 'above'); }}
+                      style={INSERT_TRACK_BUTTON_STYLE}
+                    >
+                      +↑
+                    </button>
+                    <button
+                      type="button"
+                      title="Add a track below (lower video layer)"
+                      aria-label={`Add a track below ${track.name}`}
+                      onClick={(e) => { e.stopPropagation(); editor.insertTimelineTrack(track.id, 'below'); }}
+                      style={INSERT_TRACK_BUTTON_STYLE}
+                    >
+                      +↓
+                    </button>
+                    <button
+                      type="button"
+                      title="Rename track"
+                      aria-label={`Rename ${track.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const next = window.prompt('Track name', track.name);
+                        if (next !== null) editor.renameTimelineTrack(track.id, next);
+                      }}
+                      style={TRACK_TOGGLE_STYLE}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      title="Remove track"
+                      aria-label={`Remove ${track.name}`}
+                      onClick={(e) => { e.stopPropagation(); editor.removeTimelineTrack(track.id); }}
+                      style={trackToggleStyle(false, 'danger')}
+                    >
+                      ✕
                     </button>
                   </div>
                 </div>
@@ -724,6 +816,15 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
                       <span className="timeline-clip__handle timeline-clip__handle--right" draggable={!lockedTracks[track.id] && activeTool === 'select'} onDragStart={(event) => writeTimelineDrag(event, { kind: 'trim', clipId: block.clip.id, edge: 'right' })} aria-hidden="true" />
                     </button>
                   ))}
+
+            {/* Takes the remaining height so the timeline fills its panel.
+                Clicking it clears the selection, like empty space in any NLE. */}
+            <div
+              style={{ flex: '1 1 auto', minHeight: '16px' }}
+              onPointerDown={(event) => {
+                if (event.target === event.currentTarget) editor.clearSelection();
+              }}
+            />
                 </div>
               </div>
             ))}
