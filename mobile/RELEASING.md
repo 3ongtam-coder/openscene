@@ -10,7 +10,7 @@ survive `expo prebuild` belongs in a config plugin, as the release signing does.
 | --- | --- |
 | Display name | OpenScene |
 | iOS bundle id / Android applicationId | `com.sloki9637.openscene` |
-| Version | `0.3.0` (`expo.version`) |
+| Version | `0.3.1` (`expo.version`) |
 | iOS build number | `expo.ios.buildNumber` |
 | Android version code | `expo.android.versionCode` |
 
@@ -57,6 +57,51 @@ OPENSCENE_KEY_PASSWORD=…
 `plugins/withReleaseSigning.js` reads them. When they are absent the release
 build falls back to the debug key, so a local build still works for testing and
 only a real submission needs the keystore.
+
+## Store distribution on main releases
+
+The **release** workflow is the only store-distribution trigger. It runs when
+an unreleased version is promoted to `main`, after the release verification and
+desktop packaging jobs finish. It calls the iOS and Android distribution
+workflows; they cannot be run manually. A push to `main` with an already tagged
+version skips all release and store-distribution work.
+
+The iOS job builds an IPA and uploads it to App Store Connect. It never submits
+an app for review: that remains an explicit App Store Connect action after build
+processing and metadata review. The Android job uploads the signed AAB to the
+Google Play **production** track with status `completed`.
+
+Create the `app-store-production` GitHub Environment, restrict it to the `main`
+branch, and require a reviewer before deploying. Store the following values as
+environment configuration (not in the repository):
+
+- Variables: `APPLE_TEAM_ID` (`5H9F8F82WT`) and `APP_STORE_PROFILE_NAME`
+  (`macbook`).
+- Secrets: `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY`,
+  `APPLE_DISTRIBUTION_CERTIFICATE_BASE64`,
+  `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD`, and
+  `APP_STORE_PROVISIONING_PROFILE_BASE64`.
+
+`ASC_PRIVATE_KEY` is the complete content of the downloaded App Store Connect
+`.p8` file. The two `*_BASE64` secrets are base64-encoded copies of the signing
+certificate `.p12` and the App Store provisioning profile respectively. Never
+commit any of these files or their decoded values.
+
+### Google Play automation
+
+Create the `play-store-production` GitHub Environment, restrict it to the
+`main` branch, and require a reviewer before deploying. Store the following
+values as environment configuration (not in the repository):
+
+- Variable: `ANDROID_PACKAGE_NAME` (`com.sloki9637.openscene`).
+- Secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, and
+  `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
+
+`ANDROID_KEYSTORE_BASE64` is the base64-encoded release keystore. The Google
+Play service account must have access to the OpenScene app in Play Console and
+the Google Play Android Developer API must be enabled for its Google Cloud
+project. Never commit the keystore, Gradle properties, or service-account JSON.
 
 ### Build
 
