@@ -19,7 +19,7 @@ const videoAsset = (): MediaAsset => ({
   metadata: { durationMs: 10_000, width: 1920, height: 1080 }
 });
 
-describe('OpenVideo TypeMCP Server and Tool declarations', () => {
+describe('OpenScene TypeMCP Server and Tool declarations', () => {
   let tempDir: string;
   let projectStore: ProjectStore;
 
@@ -120,14 +120,14 @@ describe('OpenVideo TypeMCP Server and Tool declarations', () => {
 
     await expect(server.createVideoJob({
       prompt: 'Cinematic intro shot of Seoul skyline',
-      modelId: 'gen4_turbo'
+      modelId: 'kling-v2.5-turbo'
     })).rejects.toThrow('is not available for video-generation');
   });
 
   it('executes createSpeechJob MCP tool against the selected cloud model', async () => {
     const server = new OpenVideoMcpServer();
     const result = await server.createSpeechJob({
-      script: 'Welcome to OpenVideo desktop suite',
+      script: 'Welcome to OpenScene desktop suite',
       voiceId: '',
       modelId: 'eleven_multilingual_v2'
     });

@@ -14,7 +14,7 @@
  */
 
 /** The day the rates below were recorded. Surfaced in every estimate. */
-export const PRICING_AS_OF = '2026-07-30';
+export const PRICING_AS_OF = '2026-07-31';
 
 export type GenerationRate =
   | { readonly kind: 'per-second'; readonly usd: number }
@@ -23,7 +23,7 @@ export type GenerationRate =
 
 const UNKNOWN_THIRD_PARTY: GenerationRate = {
   kind: 'unknown',
-  reason: 'No list price is recorded for this model in OpenVideo.'
+  reason: 'No list price is recorded for this model in OpenScene.'
 };
 
 /**
@@ -37,7 +37,22 @@ const VIDEO_RATES: Readonly<Record<string, GenerationRate>> = {
   'veo-3.0-fast-generate-001': { kind: 'per-second', usd: 0.15 },
   'veo-2.0-generate-001': { kind: 'per-second', usd: 0.35 },
   'sora-2': { kind: 'per-second', usd: 0.1 },
-  'sora-2-pro': { kind: 'per-second', usd: 0.3 }
+  'sora-2-pro': { kind: 'per-second', usd: 0.3 },
+  // Runway bills in credits at $0.01 each, so these are the published
+  // credits-per-second figures divided by 100. Rates that vary by resolution use
+  // the 720p tier, which is what the adapter requests.
+  'gen4.5': { kind: 'per-second', usd: 0.12 },
+  gen4_turbo: { kind: 'per-second', usd: 0.05 },
+  seedance2: { kind: 'per-second', usd: 0.36 },
+  seedance2_fast: { kind: 'per-second', usd: 0.29 },
+  seedance2_mini: { kind: 'per-second', usd: 0.16 },
+  'veo3.1': { kind: 'per-second', usd: 0.4 },
+  'veo3.1_fast': { kind: 'per-second', usd: 0.15 },
+  happyhorse_1_0: { kind: 'per-second', usd: 0.15 },
+  gemini_omni_flash: { kind: 'per-second', usd: 0.1 },
+  aleph2: { kind: 'per-second', usd: 0.28 },
+  // Luma publishes no public per-second list price for the Dream Machine API,
+  // so these stay unpriced rather than carrying a guess.
 };
 
 const IMAGE_RATES: Readonly<Record<string, GenerationRate>> = {
@@ -131,7 +146,7 @@ function unpriced(kind: GenerationKind, modelId: string, rate: GenerationRate): 
     caveat:
       rate.kind === 'unknown'
         ? `${rate.reason} Ask the user to confirm they accept an unknown charge before generating.`
-        : 'This model is billed on a basis OpenVideo cannot convert to a dollar figure.'
+        : 'This model is billed on a basis OpenScene cannot convert to a dollar figure.'
   };
 }
 
