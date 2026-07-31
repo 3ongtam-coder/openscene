@@ -16,7 +16,9 @@ import { discoverFfmpeg } from './ffmpegDiscovery';
 import type { CredentialStore } from './credentialStore';
 import {
   generateElevenLabsSpeech,
+  generateLumaVideo,
   generateOpenAiSpeech,
+  generateRunwayVideo,
   generateSoraVideo,
   generateVeoVideo
 } from './mediaGenerationAdapters';
@@ -117,17 +119,22 @@ async function invokeCloudVideoProvider(
     ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage })
   };
   try {
-    let generated: { bytes: Buffer; providerJobId: string };
-    if (model.providerId === 'google_gemini') {
-      generated = await generateVeoVideo(synthesisInput);
-    } else if (model.providerId === 'openai') {
-      generated = await generateSoraVideo(synthesisInput);
-    } else {
+    // One entry per ported provider, so adding an adapter is one line rather
+    // than another branch in a chain that is easy to leave a provider out of.
+    const adapters: Readonly<Record<string, (input: typeof synthesisInput) => Promise<{ bytes: Buffer; providerJobId: string }>>> = {
+      google_gemini: generateVeoVideo,
+      openai: generateSoraVideo,
+      runway: generateRunwayVideo,
+      luma: generateLumaVideo
+    };
+    const adapter = adapters[model.providerId];
+    if (adapter === undefined) {
       return {
         ok: false,
         error: `${model.providerLabel} video generation adapter is not implemented in this build.`
       };
     }
+    const generated = await adapter(synthesisInput);
     await writeFile(outputFilePath, generated.bytes);
     return { ok: true, outputFilePath, providerJobId: generated.providerJobId };
   } catch (err) {

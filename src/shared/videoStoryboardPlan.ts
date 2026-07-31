@@ -12,7 +12,15 @@
 const SUPPORTED_SHOT_SECONDS: Readonly<Record<string, readonly number[]>> = {
   openai: [4, 8, 12],
   google_gemini: [4, 6, 8],
-  byteplus: [5, 10]
+  byteplus: [5, 10],
+  // Runway takes any whole number inside a per-model range, so this is not the
+  // provider's limit but the intersection of every video model it fronts:
+  // Gen-4.5 and Gen-4 Turbo stop at 10, Seedance starts at 4, Gemini Omni Flash
+  // starts at 3. A length outside that would be legal for the model the user
+  // picked and rejected for the next one they try.
+  runway: [5, 10],
+  // Dream Machine accepts exactly these two.
+  luma: [5, 9]
 };
 
 const FALLBACK_SHOT_SECONDS: readonly number[] = [4, 8];

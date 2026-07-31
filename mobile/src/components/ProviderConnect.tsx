@@ -1,0 +1,145 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+
+import { readSlot, writeSlot } from '../lib/credentials';
+import { theme } from '../lib/theme';
+
+/**
+ * Connect a provider where you need it, not somewhere else.
+ *
+ * The picker used to say "add a key in Settings", which is a instruction, not a
+ * control: the user had to leave the thing they were doing, find one provider in
+ * a long list, and come back. Generation is gated on exactly one provider at a
+ * time — the one whose model is selected — so that is the only one worth putting
+ * in front of them, and it belongs on the screen that is blocked without it.
+ *
+ * The same component backs the Settings list, so there is one connect flow
+ * rather than two that drift.
+ */
+
+export function ProviderConnect({
+  slot,
+  label,
+  hint,
+  meta,
+  connected,
+  onChange,
+  compact
+}: {
+  readonly slot: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly meta?: string;
+  readonly connected: boolean;
+  /** Fired after the keystore changed, so callers can re-read connection state. */
+  readonly onChange: () => void;
+  /** Inline form used beside a model picker; the full card is for Settings. */
+  readonly compact?: boolean;
+}) {
+  const [draft, setDraft] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+  // Collapsed by default when connected: a filled-in key field invites editing
+  // something that is already working.
+  const [open, setOpen] = useState(!connected);
+
+  useEffect(() => {
+    setOpen(!connected);
+  }, [connected]);
+
+  const save = useCallback(async (): Promise<void> => {
+    const value = draft.trim();
+    await writeSlot(slot, value);
+    // Never held in state after it reaches the keystore: that only widens where
+    // the key lives.
+    setDraft('');
+    setNote(value.length > 0 ? 'Stored.' : 'Removed.');
+    onChange();
+  }, [draft, slot, onChange]);
+
+  const action = draft.trim().length > 0 ? 'save' : connected ? 'clear' : 'none';
+
+  return (
+    <View style={[styles.root, compact === true ? styles.compact : styles.card]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((value) => !value)}
+        style={styles.head}
+      >
+        <View style={styles.headText}>
+          <Text style={styles.title}>{label}</Text>
+          {meta !== undefined && <Text style={styles.meta}>{meta}</Text>}
+        </View>
+        <Text style={[styles.badge, connected ? styles.badgeOn : styles.badgeOff]}>
+          {connected ? 'connected' : 'not connected'}
+        </Text>
+      </Pressable>
+
+      {open && (
+        <>
+          <TextInput
+            style={styles.input}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder={connected ? 'Replace the stored key' : hint}
+            placeholderTextColor={theme.textWeaker}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            accessibilityLabel={`${label} API key`}
+          />
+          {/* An empty field on a provider with nothing stored has no action to
+              offer. Labelling that button "Clear" invited the user to delete a
+              key that does not exist. */}
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={action === 'none'}
+              onPress={() => void save()}
+              style={[styles.save, action === 'none' && styles.saveOff, action === 'clear' && styles.saveClear]}
+            >
+              <Text style={[styles.saveText, action === 'clear' && styles.saveClearText]}>
+                {action === 'clear' ? 'Remove stored key' : 'Save'}
+              </Text>
+            </Pressable>
+            {note !== null && <Text style={styles.note}>{note}</Text>}
+          </View>
+          <Text style={styles.footnote}>
+            Held in the device keystore — Keychain on iOS, Keystore on Android. Never read back for display.
+          </Text>
+        </>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { gap: 8 },
+  card: { padding: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface },
+  compact: { padding: 12, borderRadius: 10, borderWidth: 1, borderColor: theme.warn, backgroundColor: theme.surface },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headText: { flex: 1 },
+  title: { color: theme.text, fontSize: 14, fontWeight: '700' },
+  meta: { color: theme.textWeaker, fontSize: 10, marginTop: 2 },
+  badge: { fontSize: 10, fontWeight: '700', letterSpacing: 0.4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },
+  badgeOn: { color: theme.mint, borderWidth: 1, borderColor: theme.mint },
+  badgeOff: { color: theme.textWeaker, borderWidth: 1, borderColor: theme.line },
+  input: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: theme.line,
+    backgroundColor: theme.bg,
+    color: theme.text,
+    fontSize: 13
+  },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  save: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8, backgroundColor: theme.accent },
+  saveOff: { opacity: 0.35 },
+  saveClear: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.danger },
+  saveText: { color: theme.bg, fontSize: 13, fontWeight: '700' },
+  saveClearText: { color: theme.danger },
+  note: { color: theme.mint, fontSize: 11 },
+  footnote: { color: theme.textWeaker, fontSize: 10, lineHeight: 15 }
+});

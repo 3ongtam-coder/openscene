@@ -215,26 +215,105 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: true
   },
   {
-    id: 'gen4_turbo',
+    id: 'gen4.5',
     providerId: 'runway',
-    label: 'Runway Gen-4 Turbo',
+    label: 'Gen-4.5',
     providerLabel: 'Runway',
-    description: 'Runway image/text-to-video generation.',
+    description: 'Runway text-to-video, 2-10s.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: false,
-    unavailableReason: 'Runway adapter is not implemented in this build.'
+    available: true
   },
   {
-    id: 'gen4_aleph',
+    id: 'gen4_turbo',
     providerId: 'runway',
-    label: 'Runway Aleph',
+    label: 'Gen-4 Turbo',
     providerLabel: 'Runway',
-    description: 'Runway in-context video editing model.',
+    description: 'Cheapest Runway video model, 2-10s.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'seedance2',
+    providerId: 'runway',
+    label: 'Seedance 2.0',
+    providerLabel: 'Runway',
+    description: 'ByteDance Seedance via Runway, 4-15s, up to 4K.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'seedance2_fast',
+    providerId: 'runway',
+    label: 'Seedance 2.0 Fast',
+    providerLabel: 'Runway',
+    description: 'Faster, cheaper Seedance 2.0, 4-15s.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'seedance2_mini',
+    providerId: 'runway',
+    label: 'Seedance 2.0 Mini',
+    providerLabel: 'Runway',
+    description: 'Smallest Seedance 2.0 tier, 4-15s.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'veo3.1',
+    providerId: 'runway',
+    label: 'Veo 3.1 (via Runway)',
+    providerLabel: 'Runway',
+    description: 'Google Veo 3.1 on a Runway key.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'veo3.1_fast',
+    providerId: 'runway',
+    label: 'Veo 3.1 Fast (via Runway)',
+    providerLabel: 'Runway',
+    description: 'Faster Veo 3.1 on a Runway key.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'happyhorse_1_0',
+    providerId: 'runway',
+    label: 'HappyHorse 1.0',
+    providerLabel: 'Runway',
+    description: 'Text or first-frame video, 3-15s, 720p/1080p.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'gemini_omni_flash',
+    providerId: 'runway',
+    label: 'Gemini Omni Flash',
+    providerLabel: 'Runway',
+    description: 'Google Omni Flash video, 3-10s at 720p.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'aleph2',
+    providerId: 'runway',
+    label: 'Aleph 2.0',
+    providerLabel: 'Runway',
+    description: 'In-context video editing; needs a source video.',
     executionPath: 'api',
     domains: ['video-generation'],
     available: false,
-    unavailableReason: 'Runway adapter is not implemented in this build.'
+    unavailableReason: 'Aleph edits an existing video, which this build does not send.'
   },
   {
     id: 'kling-v2.5-turbo',
@@ -261,24 +340,22 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   {
     id: 'ray-2',
     providerId: 'luma',
-    label: 'Luma Ray 2',
+    label: 'Ray 2',
     providerLabel: 'Luma',
-    description: 'Luma Dream Machine text-to-video.',
+    description: 'Luma Dream Machine, 5s or 9s.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: false,
-    unavailableReason: 'Luma adapter is not implemented in this build.'
+    available: true
   },
   {
     id: 'ray-flash-2',
     providerId: 'luma',
-    label: 'Luma Ray Flash 2',
+    label: 'Ray 2 Flash',
     providerLabel: 'Luma',
-    description: 'Faster, cheaper Luma text-to-video.',
+    description: 'Faster, cheaper Luma Dream Machine.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: false,
-    unavailableReason: 'Luma adapter is not implemented in this build.'
+    available: true
   },
   {
     id: 'minimax-hailuo-02',

@@ -132,7 +132,9 @@ describe('one shot-length table', () => {
 describe('the adapter reads the same table', () => {
   it('derives Sora shot lengths from supportedShotSeconds instead of a second literal', () => {
     // Given
-    const adapters = readFileSync(resolve(process.cwd(), 'src/main/mediaGenerationAdapters.ts'), 'utf8');
+    // The table moved into shared when the adapters were made portable; the
+    // guarantee is the same, so the guard follows the code rather than the path.
+    const adapters = readFileSync(resolve(process.cwd(), 'src/shared/videoGeneration.ts'), 'utf8');
 
     // Then
     // A length the table knows and the adapter does not would be snapped to a

@@ -120,7 +120,7 @@ describe('OpenVideo TypeMCP Server and Tool declarations', () => {
 
     await expect(server.createVideoJob({
       prompt: 'Cinematic intro shot of Seoul skyline',
-      modelId: 'gen4_turbo'
+      modelId: 'kling-v2.5-turbo'
     })).rejects.toThrow('is not available for video-generation');
   });
 

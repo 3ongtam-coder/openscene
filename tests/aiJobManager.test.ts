@@ -20,9 +20,11 @@ describe('AI Job Manager and cloud provider seams', () => {
   });
 
   it('rejects unimplemented cloud models before queuing a misleading job', async () => {
-    // Runway/Kling/Luma/MiniMax models stay honestly unavailable until their
-    // adapters land, so job creation refuses them up front.
-    for (const modelId of ['gen4_turbo', 'kling-v2.5-turbo', 'ray-2', 'minimax-hailuo-02']) {
+    // Kling and MiniMax stay honestly unavailable until their adapters land, and
+    // Aleph edits a source video this build does not send, so job creation
+    // refuses all three up front. Runway and Luma moved out of this list when
+    // their adapters landed.
+    for (const modelId of ['kling-v2.5-turbo', 'minimax-hailuo-02', 'aleph2']) {
       await expect(createVideoGenerationJob({
         prompt: `Test prompt for ${modelId}`,
         aspectRatio: '16:9',

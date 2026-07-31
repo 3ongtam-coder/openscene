@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { estimateImageCost } from '@openvideo/shared/mediaGenerationPricing';
@@ -10,24 +10,21 @@ import {
 } from '@openvideo/shared/imageGeneration';
 import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 import { readKey, type ProviderSlot } from '../lib/credentials';
+import { readProviderConnections } from '../lib/mediaProviders';
+import { useSpendPermissions, type Decision } from '../lib/permissions';
+import { ModelSelect } from '../components/ModelSelect';
+import { SpendPrompt } from '../components/SpendPrompt';
+import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { theme } from '../lib/theme';
 
 const RATIOS: readonly ImageAspectRatio[] = ['1:1', '16:9', '9:16', '4:3', '3:4'];
 
-/**
- * Only the models whose adapters exist. Offering one that cannot run turns a tap
- * into a failure the user cannot act on.
- */
-const MODELS = [
-  { id: 'gpt-image-1', label: 'GPT Image 1', slot: 'openaiApiKey', request: requestOpenAiImage },
-  { id: 'imagen-4.0-generate-001', label: 'Imagen 4', slot: 'geminiApiKey', request: requestImagenImage },
-  { id: 'seedream-4-0-250828', label: 'Seedream 4.0', slot: 'bytePlusApiKey', request: requestBytePlusImage }
-] as const satisfies readonly {
-  id: string;
-  label: string;
-  slot: ProviderSlot;
-  request: (input: never) => Promise<GeneratedImageData>;
-}[];
+/** Which adapter and credential slot each provider id resolves to. */
+const PROVIDER_BINDINGS: Readonly<Record<string, { slot: ProviderSlot; request: (input: never) => Promise<GeneratedImageData> }>> = {
+  openai: { slot: 'openaiApiKey', request: requestOpenAiImage as never },
+  google_gemini: { slot: 'geminiApiKey', request: requestImagenImage as never },
+  byteplus: { slot: 'bytePlusApiKey', request: requestBytePlusImage as never }
+};
 
 type Result =
   | { readonly kind: 'idle' }
@@ -35,36 +32,47 @@ type Result =
   | { readonly kind: 'done'; readonly image: GeneratedImageData }
   | { readonly kind: 'failed'; readonly message: string };
 
-export function ImageScreen({ topInset }: { readonly topInset: number }) {
-  const [modelIndex, setModelIndex] = useState(0);
+export function ImageScreen({
+  topInset,
+  connectionsVersion
+}: {
+  readonly topInset: number;
+  /** Changes when Settings closes, so stored keys are picked up. */
+  readonly connectionsVersion: number;
+}) {
+  const catalog = getDomainModels('image-generation');
+  const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
+  const [connected, setConnectedSlots] = useState<Readonly<Record<string, boolean>>>({});
+  const [pending, setPending] = useState<null | (() => void)>(null);
+  const permissions = useSpendPermissions();
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [result, setResult] = useState<Result>({ kind: 'idle' });
-  const [connected, setConnected] = useState<boolean | null>(null);
 
-  const model = MODELS[modelIndex] ?? MODELS[0];
-  const cost = useMemo(() => estimateImageCost({ modelId: model.id, imageCount: 1 }), [model.id]);
+  const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
+  const binding = model === undefined ? undefined : PROVIDER_BINDINGS[model.providerId];
+  const cost = useMemo(() => estimateImageCost({ modelId: modelId, imageCount: 1 }), [modelId]);
+  const costLine = cost.priced && cost.amountUsd !== undefined ? `~$${cost.amountUsd.toFixed(2)}` : 'Cost unknown';
 
-  useEffect(() => {
-    let cancelled = false;
-    void readKey(model.slot).then((key) => {
-      if (!cancelled) setConnected(key !== null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [model.slot]);
+  // Connection is reported per provider, so the picker can say which models can
+  // actually run rather than only which exist.
+  const refreshConnections = useCallback((): void => {
+    void readProviderConnections().then(setConnectedSlots);
+  }, []);
 
-  const generate = async (): Promise<void> => {
-    const apiKey = await readKey(model.slot);
+  useEffect(refreshConnections, [refreshConnections, connectionsVersion]);
+
+  const doGenerate = async (): Promise<void> => {
+    if (model === undefined || binding === undefined) return;
+    const apiKey = await readKey(binding.slot);
     if (apiKey === null) {
-      setResult({ kind: 'failed', message: `${model.label} is not connected. Add its key in Settings.` });
+      setResult({ kind: 'failed', message: `${model.providerLabel} is not connected. Add its key in Settings.` });
       return;
     }
     setResult({ kind: 'running' });
     try {
       // The same adapter the desktop app calls, over the same shared module.
-      const image = await model.request({ apiKey, modelId: model.id, prompt: prompt.trim(), aspectRatio } as never);
+      const image = await binding.request({ apiKey, modelId: model.id, prompt: prompt.trim(), aspectRatio } as never);
       setResult({ kind: 'done', image });
     } catch (error) {
       setResult({
@@ -74,28 +82,40 @@ export function ImageScreen({ topInset }: { readonly topInset: number }) {
     }
   };
 
+  /** Asks unless the user already said always; rejecting is remembered too. */
+  const generate = (): void => {
+    const standing = permissions.standingFor('image-generation');
+    if (standing === 'reject') {
+      setResult({ kind: 'failed', message: 'Image generation is set to never charge. Change it in Settings.' });
+      return;
+    }
+    if (standing === 'always') {
+      void doGenerate();
+      return;
+    }
+    setPending(() => () => void doGenerate());
+  };
+
+  const decide = (decision: Decision): void => {
+    const run = pending;
+    setPending(null);
+    permissions.remember('image-generation', decision);
+    if (decision !== 'reject') run?.();
+  };
+
   return (
     <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingTop: topInset + 16 }]}>
       <Text style={styles.h1}>Generate an image</Text>
       <Text style={styles.sub}>Runs against your own provider account, through the shared adapters.</Text>
 
       <Text style={styles.label}>Model</Text>
-      <View style={styles.row}>
-        {MODELS.map((entry, index) => (
-          <Pressable
-            key={entry.id}
-            accessibilityRole="button"
-            accessibilityState={{ selected: index === modelIndex }}
-            onPress={() => setModelIndex(index)}
-            style={[styles.chip, index === modelIndex && styles.chipOn]}
-          >
-            <Text style={[styles.chipText, index === modelIndex && styles.chipTextOn]}>{entry.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      {connected === false && (
-        <Text style={styles.warn}>{model.label} has no key stored — add one in Settings before generating.</Text>
-      )}
+      <ModelSelect
+        domain="image-generation"
+        selectedId={modelId}
+        connected={connected}
+        onSelect={(next) => setModelId(next.id)}
+        onConnectionChange={refreshConnections}
+      />
 
       <Text style={styles.label}>Aspect ratio</Text>
       <View style={styles.row}>
@@ -132,11 +152,13 @@ export function ImageScreen({ topInset }: { readonly topInset: number }) {
       <Pressable
         accessibilityRole="button"
         disabled={result.kind === 'running' || prompt.trim().length === 0}
-        onPress={() => void generate()}
+        onPress={generate}
         style={[styles.cta, (result.kind === 'running' || prompt.trim().length === 0) && styles.ctaOff]}
       >
         <Text style={styles.ctaText}>{result.kind === 'running' ? 'Generating…' : 'Generate'}</Text>
       </Pressable>
+
+      <SpendPrompt feature="image-generation" headline={costLine} visible={pending !== null} onDecide={decide} />
 
       {result.kind === 'running' && <ActivityIndicator color={theme.accent} style={styles.spinner} />}
       {result.kind === 'failed' && <Text style={styles.error}>{result.message}</Text>}
