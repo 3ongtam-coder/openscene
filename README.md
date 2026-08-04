@@ -37,6 +37,49 @@ What makes it different is the **Edit Agent**: a chat panel that sits beside the
 
 Nothing is uploaded on its own. Model providers are opt-in, connected one at a time with your own API key or sign-in, and the app works with none of them connected.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  Creator[Creator]
+
+  subgraph Renderer["Renderer — React UI"]
+    Editor["Timeline · Program Monitor"]
+    Agent["Edit Agent · approval UI"]
+    Studios["Voice · Image · Video studios"]
+  end
+
+  Bridge["Preload — typed window.videoTool bridge"]
+
+  subgraph Main["Electron main process"]
+    Policy["Validation · approval · provider policy"]
+    Projects["Local projects · assets · chats"]
+    Jobs["FFmpeg export · AI job manager"]
+    Secrets["safeStorage · OAuth tokens"]
+    Tools["TypeMCP tool surface"]
+  end
+
+  subgraph Shared["Shared editing core"]
+    Timeline["Timeline rules · composition · validation"]
+    Planning["Shot planning · cost estimation"]
+    Contracts["IPC · provider contracts"]
+  end
+
+  Local[("User-controlled local files")]
+  Providers["Connected providers\nonly after explicit approval"]
+
+  Creator --> Renderer --> Bridge --> Main
+  Renderer <--> Shared
+  Main <--> Shared
+  Main <--> Local
+  Jobs --> Providers
+  Tools --> Policy
+```
+
+The **renderer** collects intent and renders editor state; it never receives raw IPC, FFmpeg execution paths or arguments, or stored provider credentials and OAuth tokens. The **preload** layer exposes only the typed `window.videoTool` bridge. The **main process** owns local projects, secrets, job lifecycle, local FFmpeg execution, and the TypeMCP tool surface. Editing rules, composition, validation, and generation planning live in the portable **shared core**, which desktop and mobile use together.
+
+Project folders, imports, generated results, chats, and exports remain local. A connected provider is contacted only for an operation you explicitly start: in a generation studio, that is the visible **Generate** action; for an agent-initiated mutation or job, the Edit Agent asks for approval before execution. The Program Monitor is a best-effort review surface; local FFmpeg MP4 export is the authoritative saved output.
+
 ## The workspace
 
 Open a folder and you land in the workspace. One tab strip switches between editing and the two generation studios; the agent chat stays docked beside all three.
@@ -127,7 +170,7 @@ The provider and model registry is generated from a snapshot of the [models.dev]
 - **OpenAI**: two login methods on one provider — an API key, or a ChatGPT sign-in (PKCE OAuth) for the model set that backend serves. Tokens stay in main-process safe storage; the renderer only learns whether you are connected.
 - **Generation**: 17 runnable video models across Google Veo, OpenAI Sora, Runway and Luma — Runway alone fronts Seedance, Veo 3.1, HappyHorse and Gemini Omni Flash on one key. Eight image models and seven voices. Providers without a real adapter stay listed but honestly unavailable rather than pretending to work, and every model says which it is.
 
-API keys are written to Electron `safeStorage` in the main process and never reach the renderer.
+A provider API key is entered in Settings and sent once through the typed bridge to Electron `safeStorage`; stored provider credentials are never returned to the renderer.
 
 ## Quick start
 
@@ -171,7 +214,7 @@ Projects are folders you choose. Assets, chat history, and generated results are
 VIDEO_TOOL_RECORDINGS_DIR=/absolute/path/to/recordings npm run dev
 ```
 
-The renderer talks to the main process through a narrow typed `window.videoTool` bridge. Raw `ipcRenderer`, filesystem paths, FFmpeg arguments, API keys, and OAuth tokens stay outside it — a picked reference image, for example, crosses as bytes, never as a path.
+The renderer talks to the main process through a narrow typed `window.videoTool` bridge. Raw `ipcRenderer`, FFmpeg executable paths and arguments, stored credentials, and OAuth tokens stay outside it. Some safe display paths and an API key entered in Settings cross through explicit typed operations; a picked reference image, for example, crosses as bytes, never as a path.
 
 - **No account, no telemetry.** No analytics, crash reporting, or usage tracking.
 - **No background network calls.** The app talks to a provider only when you ask it to, using a provider you connected.
