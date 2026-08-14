@@ -10,7 +10,7 @@ survive `expo prebuild` belongs in a config plugin, as the release signing does.
 | --- | --- |
 | Display name | OpenScene |
 | iOS bundle id / Android applicationId | `com.sloki9637.openscene` |
-| Version | `0.3.1` (`expo.version`) |
+| Version | `0.4.0` (`expo.version`) |
 | iOS build number | `expo.ios.buildNumber` |
 | Android version code | `expo.android.versionCode` |
 
@@ -137,13 +137,48 @@ declaration in your name, not ours.
 
 **The app talks to third-party AI providers.** Only ones the user connects with
 their own key, only when they ask, and the key is held in Keychain/Keystore.
-Both stores want that stated in the privacy questionnaire and in a privacy
-policy you host. Prompts and generated media go to the provider the user chose;
-nothing goes anywhere else, and there is no analytics or account.
+Both stores want that stated in the privacy questionnaire and in the privacy
+policy, which is published at `https://www.sloki9637.com/privacy` and linked from
+Settings. Prompts and generated media go to the provider the user chose; nothing
+else about the user's editing leaves the device, and there is no account.
 
-**Android export does not work yet.** It reports that plainly rather than
-failing silently — but a reviewer who taps Export on Android will see it. Either
-ship iOS first, or finish the Media3 Transformer work before submitting Android.
+**The app shows ads, and that changes the privacy answers.** The Google Mobile
+Ads SDK is in the binary and reports device identifiers to Google. Both stores
+ask about this directly and the answers are no longer "none":
+
+- **Data Safety / App Privacy** must declare device or other identifiers,
+  collected by a third party, used for advertising. Declaring nothing here is
+  the mismatch reviewers look for, and it is checked against the SDKs in the
+  binary rather than against what the form says.
+- **iOS** lists the SKAdNetwork identifiers Google publishes; they are in
+  `app.json` and reach `Info.plist` through the config plugin.
+- **App Tracking Transparency is not implemented**, deliberately. Without it the
+  SDK serves non-personalised ads, which needs no ATT prompt. Adding
+  personalised ads means adding the prompt and the Info.plist string first.
+- **Consent** is gathered through Google's UMP before any ad is requested, and
+  the banner does not render until `canRequestAds` is true.
+
+**Ads have not been seen to run.** Expo Go cannot load the SDK, so the banner,
+the consent flow and the SDK initialisation have only ever been exercised as
+code. A development build must show a test banner before a store build ships
+one — a release that reaches users with a silently broken banner earns nothing
+and still declares ad collection.
+
+**Android export is implemented but unverified.** The Media3 Transformer path
+is written, compiles, and installs; no export has been seen to produce a file.
+Two attempts on an emulator ended with the emulator itself dying, which is a
+resource problem rather than evidence either way — but it is not evidence that
+it works.
+
+Run one on a real device before submitting Android: import a clip, tap Export,
+and confirm a playable file arrives in the photo library. If it does not, set
+`isSupported` back to `false` in `VideoExportModule.kt` so the app says so
+plainly rather than handing the user a path to nothing, and ship iOS first.
+
+Overlapping video layers are refused by name on Android — the plan flattens
+every video track into one list, and compositing two sequences is work that is
+not done. A single video track, which is what the app creates by default,
+exports as one sequence.
 
 **Age rating** — user-supplied prompts reach a generative model, so both stores
 treat it as user-generated content. Expect questions about moderation; the
