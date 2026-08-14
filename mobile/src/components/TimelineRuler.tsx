@@ -48,11 +48,19 @@ export function TimelineRuler({
   const count = Math.floor(spanSeconds / step) + 1;
 
   return (
+    // The ticks are decoration and must not be touch targets. The scrubbing
+    // Pressable this sits inside reads `locationX`, which on Android is measured
+    // from the view that actually received the touch — so a tap landing on a
+    // tick's label was reported relative to that label rather than to the lane,
+    // and scrubbed to a fraction of a second instead of to the moment under the
+    // finger. Tapping between labels always worked, which is what made it look
+    // intermittent rather than broken. Skipping the children leaves this root as
+    // the target, and it shares its origin with the lane.
     <View style={[styles.root, { width }]}>
       {Array.from({ length: count }, (_, index) => {
         const seconds = index * step;
         return (
-          <View key={seconds} style={[styles.tick, { left: seconds * 1000 * pxPerMs }]}>
+          <View key={seconds} pointerEvents="none" style={[styles.tick, { left: seconds * 1000 * pxPerMs }]}>
             <View style={styles.mark} />
             <Text style={styles.label}>{label(seconds)}</Text>
           </View>
@@ -63,6 +71,7 @@ export function TimelineRuler({
       {Array.from({ length: count }, (_, index) => (
         <View
           key={`half-${index}`}
+          pointerEvents="none"
           style={[styles.half, { left: (index + 0.5) * step * 1000 * pxPerMs }]}
         />
       ))}
@@ -71,9 +80,9 @@ export function TimelineRuler({
 }
 
 const styles = StyleSheet.create({
-  root: { height: 26, borderBottomWidth: 1, borderBottomColor: theme.line, position: 'relative' },
+  root: { height: 28, borderBottomWidth: 1, borderBottomColor: theme.line, position: 'relative' },
   tick: { position: 'absolute', top: 0, bottom: 0, alignItems: 'flex-start' },
   mark: { width: 1, height: 9, backgroundColor: theme.line },
   half: { position: 'absolute', top: 0, width: 1, height: 5, backgroundColor: theme.line, opacity: 0.6 },
-  label: { color: theme.textWeaker, fontSize: 9, marginLeft: 3, fontVariant: ['tabular-nums'] }
+  label: { color: theme.textWeak, fontSize: 11, marginLeft: 3, fontVariant: ['tabular-nums'] }
 });
