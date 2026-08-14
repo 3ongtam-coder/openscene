@@ -9,11 +9,13 @@ import { AgentScreen } from './src/screens/AgentScreen';
 import { EditScreen } from './src/screens/EditScreen';
 import { ImageScreen } from './src/screens/ImageScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
+import { AdBanner } from './src/components/AdBanner';
 import { PlanScreen } from './src/screens/PlanScreen';
 import { ProjectsScreen } from './src/screens/ProjectsScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { VoiceScreen } from './src/screens/VoiceScreen';
 import { assetUri, readProject } from './src/lib/projectStore';
+import { useProject } from './src/lib/useProject';
 import { deliverExport, exportTimeline } from './src/lib/exportComposition';
 import { isExportAvailable } from './modules/video-export';
 import {
@@ -110,7 +112,10 @@ function Shell() {
     );
   }
 
-  const project = readProject(route.projectId);
+  // Subscribed rather than merely read: the import happens in the editor below,
+  // so nothing here re-rendered and Export stayed disabled over a ten-second
+  // timeline until the user changed tabs and came back.
+  const project = useProject(route.projectId);
   const pictureSeconds = project === null ? 0 : timelineDurationMs(project.timeline) / 1000;
 
   /**
@@ -237,6 +242,10 @@ function Shell() {
         {tab === 'agent' && <AgentScreen topInset={0} keyboardOffset={bodyTop} projectId={route.projectId} />}
         {tab === 'library' && <LibraryScreen topInset={0} keyboardOffset={bodyTop} projectId={route.projectId} />}
       </View>
+
+      {/* Above the bar rather than over the content: it never covers the
+          timeline, and the bar keeps its own border between the two. */}
+      <AdBanner />
 
       <View accessibilityRole="tablist" style={[styles.tabBar, { paddingBottom: insets.bottom, height: 60 + insets.bottom }]}>
         {PROJECT_TABS.map(({ id, label, Icon }) => {
