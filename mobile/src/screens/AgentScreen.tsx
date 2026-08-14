@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
+  KeyboardAvoidingView,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,15 +12,20 @@ import {
 } from 'react-native';
 
 import { LLM_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, getLlmCatalogProvider } from '@openvideo/shared/llmProviders';
+import { AGENT_SCOPE_POLICY } from '@openvideo/shared/agentScope';
 
 import { readSlot } from '../lib/credentials';
 import { customCredentialKey, useCustomProviders } from '../lib/customProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { AGENT_TOOLS, findTool } from '../lib/agentTools';
 import { sendChatTurn, type ChatMessage, type ToolCallProposal } from '../lib/agentChatClient';
+import { dropUnansweredCalls, trimHistory } from '../lib/chatMemory';
+import { clearChat, readChat, writeChat } from '../lib/chatStore';
 import { SpendPrompt } from '../components/SpendPrompt';
 import { AddCustomProvider } from '../components/AddCustomProvider';
+import { ChatText } from '../components/ChatText';
 import { theme } from '../lib/theme';
+import { MIN_TAP, press } from '../lib/touch';
 
 /**
  * The agent, with approval in front of every tool call.
@@ -30,14 +37,56 @@ import { theme } from '../lib/theme';
  * video.
  */
 
+/**
+ * What this surface can actually do, listed from the tools themselves.
+ *
+ * `agentTools` already refuses to declare a tool whose adapter cannot run here —
+ * voice is absent for that reason — so the tool list *is* the capability list,
+ * and writing the capabilities out by hand would be a second copy that goes
+ * stale the first time a tool is added or dropped. The names come from the same
+ * array the request carries.
+ *
+ * The limits are worth stating rather than leaving to be inferred. A model with
+ * no trim tool does not conclude it cannot trim; it offers to, and then either
+ * invents a result or leaves the user waiting for something that will never
+ * happen. Naming the control they should tap instead turns a dead end into an
+ * answer.
+ */
+const CAPABILITIES =
+  `Your tools are the whole of what you can do here: ${AGENT_TOOLS.map((tool) => tool.name).join(', ')}. ` +
+  'You cannot edit the timeline — trimming, splitting, moving, deleting clips and changing clip effects are done by ' +
+  'the user on the Edit tab, and you have no tool for any of them. You cannot export; that is the Export button in ' +
+  'the title bar. You cannot synthesise speech on this surface at all: the Voice tab sizes a script against the cut ' +
+  'and says so itself. ' +
+  'When a request needs something you have no tool for, say which part you cannot do and name the tab or control ' +
+  'that does it, then do the part you can.';
+
 const SYSTEM_PROMPT =
   'You are the OpenScene editing assistant on a phone. Be brief — the screen is small. ' +
+  // Seen on the device: a reply that answered, then answered again in a second
+  // paragraph. On a phone that is most of a screenful of scrolling for nothing.
+  'Say it once; do not restate a point you have already made. ' +
   'Plan and price before proposing anything that generates media, and say the cost in your own words. ' +
-  'Every tool call is shown to the user for approval before it runs, so never claim something has happened until a tool result says it did.';
+  'Every tool call is shown to the user for approval before it runs, so never claim something has happened until a tool result says it did.' +
+  '\n\n' +
+  CAPABILITIES +
+  '\n\n' +
+  // The same scope both surfaces answer to, from the shared core rather than
+  // written twice and left to drift.
+  AGENT_SCOPE_POLICY;
 
 type Pending = { readonly proposal: ToolCallProposal; readonly cost: string };
 
-export function AgentScreen({ topInset, projectId }: { readonly topInset: number; readonly projectId: string | null }) {
+export function AgentScreen({
+  topInset,
+  keyboardOffset,
+  projectId
+}: {
+  readonly topInset: number;
+  /** Height of the chrome above this screen; see FormScreen. */
+  readonly keyboardOffset: number;
+  readonly projectId: string | null;
+}) {
   const permissions = useSpendPermissions();
   const { providers: customProviders, refresh: refreshCustom } = useCustomProviders();
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
@@ -45,13 +94,23 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   const [modelId, setModelId] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
+  const [messages, setMessages] = useState<readonly ChatMessage[]>(() => readChat(projectId));
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [images, setImages] = useState<readonly string[]>([]);
   const [progress, setProgress] = useState<string | null>(null);
   const scroller = useRef<ScrollView>(null);
+  /**
+   * Which conversation a turn belongs to.
+   *
+   * A turn takes seconds against a provider and holds the history it started
+   * from. Starting a new conversation, or moving to another project, while one
+   * is in flight used to end with the reply landing on the cleared thread and
+   * putting the whole old transcript back — and the write effect then saved it
+   * again, so the discard silently undid itself. Bumping this abandons anything
+   * still in the air.
+   */
+  const era = useRef(0);
 
   // Providers worth showing: the popular ones, plus any the user has connected —
   // 153 in a phone-sized list is a search problem, not a picker.
@@ -107,16 +166,39 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
     if (models.length > 0 && !models.some((model) => model.id === modelId)) setModelId(models[0].id);
   }, [models, modelId]);
 
+  /**
+   * The conversation follows the project, not the mount.
+   *
+   * The AI tab only exists while it is the selected tab, so every glance at the
+   * timeline used to throw the transcript away. Reading on project change and
+   * writing on every change keeps it where the tools' subject already is.
+   */
+  useEffect(() => {
+    era.current += 1;
+    setMessages(readChat(projectId));
+  }, [projectId]);
+
+  useEffect(() => {
+    writeChat(projectId, messages);
+  }, [projectId, messages]);
+
   /** Runs one turn and stops at the first proposal that needs a decision. */
   const advance = async (history: readonly ChatMessage[]): Promise<void> => {
+    const started = era.current;
     setThinking(true);
     setError(null);
     const turn = await sendChatTurn({
       providerId,
       modelId,
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history],
+      // Trimmed here and not only on the way to disk: the cap exists because
+      // every turn re-sends the whole history, and that is this line. Repaired
+      // for the same reason it is repaired on the way back in — a history that
+      // still carries an unanswered call is one the provider refuses outright,
+      // and refusing to send it beats a 400 the user cannot act on.
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...trimHistory(dropUnansweredCalls(history))],
       tools: AGENT_TOOLS
     });
+    if (started !== era.current) return;
     setThinking(false);
 
     if (!turn.ok) {
@@ -156,8 +238,19 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   };
 
   /** Feeds a tool reply back to the model and continues the loop. */
-  const complete = async (history: readonly ChatMessage[], proposal: ToolCallProposal, summary: string): Promise<void> => {
-    const reply: ChatMessage = { role: 'tool', content: summary, toolCallId: proposal.id, toolName: proposal.name };
+  const complete = async (
+    history: readonly ChatMessage[],
+    proposal: ToolCallProposal,
+    summary: string,
+    image?: string
+  ): Promise<void> => {
+    const reply: ChatMessage = {
+      role: 'tool',
+      content: summary,
+      toolCallId: proposal.id,
+      toolName: proposal.name,
+      ...(image === undefined ? {} : { image })
+    };
     const next = [...history, reply];
     setMessages(next);
     await advance(next);
@@ -166,21 +259,34 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   const run = async (history: readonly ChatMessage[], proposal: ToolCallProposal): Promise<void> => {
     const tool = findTool(proposal.name);
     if (tool === undefined) return;
+    const started = era.current;
     setThinking(true);
     try {
       const result = await tool.run(proposal.args, { projectId, onProgress: setProgress });
+      if (started !== era.current) return;
       const image = result.image;
-      if (image !== undefined) {
-        setImages((current) => [...current, `data:${image.mimeType};base64,${image.base64}`]);
-      }
       setProgress(null);
-      await complete(history, proposal, result.summary);
+      await complete(
+        history,
+        proposal,
+        result.summary,
+        image === undefined ? undefined : `data:${image.mimeType};base64,${image.base64}`
+      );
     } catch (failure) {
+      if (started !== era.current) return;
       setProgress(null);
       await complete(history, proposal, failure instanceof Error ? failure.message : 'The tool failed.');
     } finally {
-      setThinking(false);
+      if (started === era.current) setThinking(false);
     }
+  };
+
+  /** Closes the prompt and answers the call, without remembering anything. */
+  const dismiss = (): void => {
+    const request = pending;
+    setPending(null);
+    if (request === null) return;
+    void complete(messages, request.proposal, 'The user dismissed this without deciding. Ask again if it matters.');
   };
 
   const decide = (decision: Decision): void => {
@@ -199,6 +305,11 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   const send = (): void => {
     const body = draft.trim();
     if (body.length === 0 || modelId.length === 0) return;
+    // The approval card for a free tool sits inline rather than in a modal, so
+    // nothing physically stopped the user typing past it — and a turn sent with
+    // that call still unanswered is rejected outright by the provider. The
+    // question has to be answered before the conversation moves on.
+    if (pending !== null) return;
     setDraft('');
     const next = [...messages, { role: 'user', content: body } as ChatMessage];
     setMessages(next);
@@ -209,31 +320,71 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
   const spendTool = pending === null ? undefined : findTool(pending.proposal.name);
 
   return (
-    <View style={[styles.root, { paddingTop: topInset }]}>
-      <Pressable accessibilityRole="button" style={styles.modelBar} onPress={() => setPickerOpen((open) => !open)}>
-        <Text style={styles.modelText} numberOfLines={1}>
-          {providerLabel} · {modelId.length === 0 ? 'no tool-calling model' : modelId}
-        </Text>
-        <Text style={styles.modelChevron}>{pickerOpen ? '▲' : '▼'}</Text>
-      </Pressable>
+    // The composer is the bottom-most thing on the screen, so the keyboard
+    // covered both the field being typed into and the send button. `padding` on
+    // both platforms and an offset for the title bar above: the reasoning is in
+    // FormScreen, which has the same problem in a scrolling shape.
+    <KeyboardAvoidingView
+      style={[styles.root, { paddingTop: topInset }]}
+      behavior="padding"
+      keyboardVerticalOffset={keyboardOffset}
+    >
+      <View style={styles.modelBar}>
+        <Pressable
+          accessibilityRole="button"
+          style={press(styles.modelPick)}
+          onPress={() => setPickerOpen((open) => !open)}
+        >
+          <Text style={styles.modelText} numberOfLines={1}>
+            {providerLabel} · {modelId.length === 0 ? 'no tool-calling model' : modelId}
+          </Text>
+          <Text style={styles.modelChevron}>{pickerOpen ? '▲' : '▼'}</Text>
+        </Pressable>
+        {/* The transcript now outlives the screen, so there has to be a way to
+            end one. Without it the only exit from a conversation that has gone
+            wrong is deleting the project. */}
+        {messages.length > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Start a new conversation"
+            onPress={() => {
+              era.current += 1;
+              clearChat(projectId);
+              setMessages([]);
+              setError(null);
+              setPending(null);
+              setThinking(false);
+              setProgress(null);
+            }}
+            style={press(styles.newChat)}
+          >
+            <Text style={styles.newChatText}>New</Text>
+          </Pressable>
+        )}
+      </View>
 
       {pickerOpen && (
         <View style={styles.picker}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pickerRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.pickerRow}
+          >
             {providers.map((provider) => (
               <Pressable
                 key={provider.id}
                 accessibilityRole="button"
                 accessibilityState={{ selected: provider.id === providerId }}
                 onPress={() => setProviderId(provider.id)}
-                style={[styles.chip, provider.id === providerId && styles.chipOn]}
+                style={press([styles.chip, provider.id === providerId && styles.chipOn])}
               >
                 <Text style={[styles.chipText, provider.id === providerId && styles.chipTextOn]}>{provider.label}</Text>
                 {connected[provider.id] !== true && provider.auth === 'api-key' && <Text style={styles.chipDot}>•</Text>}
               </Pressable>
             ))}
           </ScrollView>
-          <ScrollView style={styles.modelList} nestedScrollEnabled>
+          <ScrollView style={styles.modelList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
             {models.length === 0 ? (
               <Text style={styles.note}>{providerLabel} lists no tool-calling models in the catalog.</Text>
             ) : (
@@ -246,7 +397,7 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
                     setModelId(model.id);
                     setPickerOpen(false);
                   }}
-                  style={[styles.modelRow, model.id === modelId && styles.modelRowOn]}
+                  style={press([styles.modelRow, model.id === modelId && styles.modelRowOn])}
                 >
                   <Text style={styles.modelName}>{model.label}</Text>
                   {model.contextK !== undefined && <Text style={styles.modelMeta}>{model.contextK}k</Text>}
@@ -272,6 +423,10 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
         ref={scroller}
         style={styles.thread}
         contentContainerStyle={styles.threadContent}
+        keyboardShouldPersistTaps="handled"
+        // Dragging the thread pushes the keyboard down with the finger, which is
+        // how every messaging app on both platforms behaves.
+        keyboardDismissMode="interactive"
         onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: true })}
       >
         {messages.length === 0 && (
@@ -286,22 +441,28 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
               <View key={index} style={styles.toolBubble}>
                 <Text style={styles.toolName}>{message.toolName}</Text>
                 <Text style={styles.toolText}>{message.content}</Text>
+                {message.image !== undefined && (
+                  <Image style={styles.image} source={{ uri: message.image }} accessibilityLabel="Generated image" resizeMode="cover" />
+                )}
+                {message.imageDropped === true && (
+                  <Text style={styles.toolNote}>The image is not kept with the transcript. Generate it again to see it.</Text>
+                )}
               </View>
             );
           }
           if (message.content.length === 0) return null;
           return (
             <View key={index} style={[styles.bubble, message.role === 'user' ? styles.mine : styles.theirs]}>
-              <Text style={message.role === 'user' ? styles.mineText : styles.theirsText}>{message.content}</Text>
+              {/* The user's own words go through unchanged; only the assistant
+                  writes Markdown at us. */}
+              {message.role === 'user' ? (
+                <Text style={styles.mineText}>{message.content}</Text>
+              ) : (
+                <ChatText style={styles.theirsText}>{message.content}</ChatText>
+              )}
             </View>
           );
         })}
-        {images.map((uri, index) => (
-          <View key={`image-${index}`} style={styles.toolBubble}>
-            <Text style={styles.toolName}>generated image</Text>
-            <Text style={styles.toolText}>{uri.slice(0, 48)}…</Text>
-          </View>
-        ))}
         {thinking && (
           <View style={styles.working}>
             <ActivityIndicator color={theme.accent} />
@@ -320,10 +481,10 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
             {JSON.stringify(pending.proposal.args)}
           </Text>
           <View style={styles.approveRow}>
-            <Pressable accessibilityRole="button" style={styles.approveYes} onPress={() => decide('once')}>
+            <Pressable accessibilityRole="button" style={press(styles.approveYes)} onPress={() => decide('once')}>
               <Text style={styles.approveYesText}>Run</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" style={styles.approveNo} onPress={() => decide('reject')}>
+            <Pressable accessibilityRole="button" style={press(styles.approveNo)} onPress={() => decide('reject')}>
               <Text style={styles.approveNoText}>Decline</Text>
             </Pressable>
           </View>
@@ -331,7 +492,13 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
       )}
 
       {spendTool?.spends != null && (
-        <SpendPrompt feature={spendTool.spends} headline={pending?.cost ?? ''} visible={pending !== null} onDecide={decide} />
+        <SpendPrompt
+          feature={spendTool.spends}
+          headline={pending?.cost ?? ''}
+          visible={pending !== null}
+          onDecide={decide}
+          onDismiss={dismiss}
+        />
       )}
 
       <View style={styles.composer}>
@@ -346,60 +513,66 @@ export function AgentScreen({ topInset, projectId }: { readonly topInset: number
         />
         <Pressable
           accessibilityRole="button"
-          disabled={thinking || draft.trim().length === 0}
+          accessibilityLabel="Send"
+          disabled={thinking || pending !== null || draft.trim().length === 0}
           onPress={send}
-          style={[styles.send, (thinking || draft.trim().length === 0) && styles.sendOff]}
+          style={press([styles.send, (thinking || pending !== null || draft.trim().length === 0) && styles.sendOff])}
         >
           <Text style={styles.sendText}>↑</Text>
         </Pressable>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
-  modelBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.line },
-  modelText: { flex: 1, color: theme.text, fontSize: 12, fontWeight: '600' },
-  modelChevron: { color: theme.textWeaker, fontSize: 10 },
+  modelBar: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: MIN_TAP, paddingLeft: 20, paddingRight: 8, borderBottomWidth: 1, borderBottomColor: theme.line },
+  modelPick: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: MIN_TAP, paddingVertical: 12 },
+  newChat: { minHeight: MIN_TAP, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: theme.line },
+  newChatText: { color: theme.textWeak, fontSize: 13, fontWeight: '700' },
+  modelText: { flex: 1, color: theme.text, fontSize: 13, fontWeight: '600' },
+  modelChevron: { color: theme.textWeaker, fontSize: 11 },
   picker: { borderBottomWidth: 1, borderBottomColor: theme.line, paddingBottom: 10 },
   pickerRow: { gap: 8, paddingHorizontal: 20, paddingVertical: 10 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: theme.line },
+  chip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: MIN_TAP, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.line },
   chipOn: { backgroundColor: theme.accent, borderColor: theme.accent },
-  chipText: { color: theme.textWeak, fontSize: 12, fontWeight: '600' },
+  chipText: { color: theme.textWeak, fontSize: 13, fontWeight: '600' },
   chipTextOn: { color: theme.bg },
-  chipDot: { color: theme.warn, fontSize: 12 },
-  modelList: { maxHeight: 180 },
-  modelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 9 },
+  chipDot: { color: theme.warn, fontSize: 13 },
+  modelList: { maxHeight: 220 },
+  modelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: MIN_TAP, paddingHorizontal: 20, paddingVertical: 10 },
   modelRowOn: { backgroundColor: theme.surface },
-  modelName: { color: theme.text, fontSize: 12 },
-  modelMeta: { color: theme.textWeaker, fontSize: 10, fontVariant: ['tabular-nums'] },
+  modelName: { flex: 1, color: theme.text, fontSize: 14 },
+  modelMeta: { color: theme.textWeaker, fontSize: 12, fontVariant: ['tabular-nums'] },
   addCustom: { paddingHorizontal: 20, paddingTop: 10 },
-  note: { color: theme.textWeaker, fontSize: 11, lineHeight: 16, paddingHorizontal: 20, paddingTop: 6 },
+  note: { color: theme.textWeaker, fontSize: 12, lineHeight: 17, paddingHorizontal: 20, paddingTop: 6 },
   thread: { flex: 1 },
   threadContent: { padding: 16, gap: 10, paddingBottom: 24 },
-  empty: { color: theme.textWeak, fontSize: 13, lineHeight: 20, padding: 8 },
+  empty: { color: theme.textWeak, fontSize: 14, lineHeight: 21, padding: 8 },
   bubble: { maxWidth: '86%', paddingHorizontal: 13, paddingVertical: 10, borderRadius: 14 },
   mine: { alignSelf: 'flex-end', backgroundColor: theme.accent },
   theirs: { alignSelf: 'flex-start', backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line },
   mineText: { color: theme.bg, fontSize: 14, lineHeight: 20 },
   theirsText: { color: theme.text, fontSize: 14, lineHeight: 20 },
-  toolBubble: { alignSelf: 'stretch', padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.line, gap: 4 },
-  toolName: { color: theme.mint, fontSize: 10, fontWeight: '700', letterSpacing: 0.6 },
-  toolText: { color: theme.textWeak, fontSize: 12, lineHeight: 18 },
+  toolBubble: { alignSelf: 'stretch', padding: 11, borderRadius: 10, borderWidth: 1, borderColor: theme.line, gap: 6 },
+  toolName: { color: theme.mint, fontSize: 11, fontWeight: '700', letterSpacing: 0.6 },
+  toolText: { color: theme.textWeak, fontSize: 13, lineHeight: 19 },
+  toolNote: { color: theme.textWeaker, fontSize: 12, lineHeight: 17, fontStyle: 'italic' },
+  image: { width: '100%', aspectRatio: 1, borderRadius: 8, backgroundColor: theme.bg },
   working: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', marginTop: 4 },
-  error: { color: theme.danger, fontSize: 12, lineHeight: 18 },
+  error: { color: theme.danger, fontSize: 13, lineHeight: 19 },
   approveCard: { margin: 16, marginTop: 0, padding: 14, borderRadius: 12, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 8 },
-  approveTitle: { color: theme.text, fontSize: 14, fontWeight: '700' },
-  approveArgs: { color: theme.textWeaker, fontSize: 11, lineHeight: 16 },
+  approveTitle: { color: theme.text, fontSize: 15, fontWeight: '700' },
+  approveArgs: { color: theme.textWeaker, fontSize: 12, lineHeight: 17 },
   approveRow: { flexDirection: 'row', gap: 8 },
-  approveYes: { flex: 1, paddingVertical: 11, borderRadius: 9, alignItems: 'center', backgroundColor: theme.accent },
-  approveYesText: { color: theme.bg, fontSize: 13, fontWeight: '700' },
-  approveNo: { flex: 1, paddingVertical: 11, borderRadius: 9, alignItems: 'center', borderWidth: 1, borderColor: theme.line },
-  approveNoText: { color: theme.textWeak, fontSize: 13, fontWeight: '600' },
+  approveYes: { flex: 1, minHeight: MIN_TAP, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.accent },
+  approveYesText: { color: theme.bg, fontSize: 14, fontWeight: '700' },
+  approveNo: { flex: 1, minHeight: MIN_TAP, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.line },
+  approveNoText: { color: theme.textWeak, fontSize: 14, fontWeight: '600' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 12, borderTopWidth: 1, borderTopColor: theme.line },
-  input: { flex: 1, maxHeight: 120, minHeight: 42, paddingHorizontal: 13, paddingVertical: 11, borderRadius: 12, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 14 },
-  send: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.accent },
+  input: { flex: 1, maxHeight: 120, minHeight: MIN_TAP, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 14, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 15 },
+  send: { width: MIN_TAP, height: MIN_TAP, borderRadius: MIN_TAP / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.accent },
   sendOff: { opacity: 0.35 },
-  sendText: { color: theme.bg, fontSize: 18, fontWeight: '700' }
+  sendText: { color: theme.bg, fontSize: 19, fontWeight: '700' }
 });
