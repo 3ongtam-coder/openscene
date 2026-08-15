@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { checkNarrationFit } from '@openvideo/shared/narrationTiming';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelSelect } from '../components/ModelSelect';
 import { readProviderConnections } from '../lib/mediaProviders';
+import { FormScreen } from '../components/FormScreen';
+import { useRevealOnFocus } from '../components/KeyboardAwareScroll';
 import { theme } from '../lib/theme';
 
 /**
@@ -15,10 +17,13 @@ import { theme } from '../lib/theme';
  */
 export function VoiceScreen({
   topInset,
+  keyboardOffset,
   targetSeconds,
   connectionsVersion
 }: {
   readonly topInset: number;
+  /** Height of the chrome above this screen; see FormScreen. */
+  readonly keyboardOffset: number;
   readonly targetSeconds: number;
   /** Changes when Settings closes, so stored keys are picked up. */
   readonly connectionsVersion: number;
@@ -27,6 +32,8 @@ export function VoiceScreen({
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [script, setScript] = useState('');
+  const reveal = useRevealOnFocus();
+  const promptInput = useRef<TextInput>(null);
 
   const refreshConnections = useCallback((): void => {
     void readProviderConnections().then(setConnected);
@@ -39,7 +46,7 @@ export function VoiceScreen({
   );
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingTop: topInset + 16 }]}>
+    <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
       <Text style={styles.h1}>Voice</Text>
       <Text style={styles.sub}>
         Write to the length of the cut. Over-running is the failure that costs a re-record, so the check runs before
@@ -57,6 +64,8 @@ export function VoiceScreen({
 
       <Text style={styles.label}>Script · fitting {targetSeconds.toFixed(1)}s of picture</Text>
       <TextInput
+        ref={promptInput}
+        onFocus={() => reveal(promptInput.current)}
         style={styles.input}
         value={script}
         onChangeText={setScript}
@@ -84,22 +93,20 @@ export function VoiceScreen({
         thing that blocked image generation until its byte handling moved into the shared core — so nothing here can
         charge your account, and the picker above only records which model the script is written for.
       </Text>
-    </ScrollView>
+    </FormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
-  content: { padding: 20, paddingBottom: 40, gap: 6 },
   h1: { color: theme.text, fontSize: 26, fontWeight: '700' },
   sub: { color: theme.textWeak, fontSize: 13, lineHeight: 19, marginBottom: 8 },
-  label: { color: theme.text, fontSize: 12, fontWeight: '600', marginTop: 16, marginBottom: 8 },
-  input: { minHeight: 130, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 14, textAlignVertical: 'top' },
+  label: { color: theme.text, fontSize: 13, fontWeight: '600', marginTop: 16, marginBottom: 8 },
+  input: { minHeight: 140, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface, color: theme.text, fontSize: 15, lineHeight: 21, textAlignVertical: 'top' },
   verdict: { marginTop: 16, padding: 14, borderRadius: 10, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.line, gap: 6 },
-  verdictLabel: { fontSize: 13, fontWeight: '700' },
+  verdictLabel: { fontSize: 14, fontWeight: '700' },
   ok: { color: theme.mint },
   warn: { color: theme.warn },
-  advice: { color: theme.text, fontSize: 13, lineHeight: 19 },
-  counted: { color: theme.textWeaker, fontSize: 11, fontVariant: ['tabular-nums'] },
-  note: { color: theme.textWeaker, fontSize: 11, lineHeight: 17, marginTop: 20 }
+  advice: { color: theme.text, fontSize: 14, lineHeight: 20 },
+  counted: { color: theme.textWeaker, fontSize: 12, fontVariant: ['tabular-nums'] },
+  note: { color: theme.textWeaker, fontSize: 12, lineHeight: 18, marginTop: 20 }
 });

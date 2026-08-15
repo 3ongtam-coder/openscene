@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 
 import { PROVIDER_KEYS, readSlot } from '../lib/credentials';
 import { SPEND_FEATURES, useSpendPermissions } from '../lib/permissions';
@@ -8,7 +10,10 @@ import { ProviderConnect } from '../components/ProviderConnect';
 import { AddCustomProvider } from '../components/AddCustomProvider';
 import { customCredentialKey, removeCustomProvider, useCustomProviders } from '../lib/customProviders';
 import { LLM_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, getLlmCatalogProvider } from '@openvideo/shared/llmProviders';
+import { FormScreen } from '../components/FormScreen';
+import { APP_VERSION, CONTACT_EMAIL, DEVELOPER_NAME, DEVELOPER_SITE, PRIVACY_URL, TERMS_URL } from '../lib/about';
 import { theme } from '../lib/theme';
+import { MIN_TAP, press } from '../lib/touch';
 
 /**
  * Providers, grouped by what connecting one lets you do.
@@ -66,7 +71,7 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
   }, [refresh]);
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingTop: topInset + 16 }]}>
+    <FormScreen topInset={topInset}>
       <Text style={styles.h1}>Providers</Text>
       <Text style={styles.sub}>
         Everything the app generates runs against your own accounts. Keys are held in the device keystore — Keychain on
@@ -111,7 +116,7 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
                 removeCustomProvider(provider.id);
                 refreshCustom();
               }}
-              style={styles.removeCustom}
+              style={press(styles.removeCustom)}
             >
               <Text style={styles.removeCustomText}>Remove this provider</Text>
             </Pressable>
@@ -146,7 +151,7 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
               <Text style={styles.permLabel}>{feature.replace('-generation', '')}</Text>
               <Text style={styles.permValue}>{standing === null ? 'asks each time' : standing}</Text>
               {standing !== null && (
-                <Pressable accessibilityRole="button" onPress={() => permissions.forget(feature)} style={styles.permReset}>
+                <Pressable accessibilityRole="button" onPress={() => permissions.forget(feature)} style={press(styles.permReset)}>
                   <Text style={styles.permResetText}>Reset</Text>
                 </Pressable>
               )}
@@ -154,24 +159,82 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
           );
         })}
       </View>
-    </ScrollView>
+
+      {/*
+        Who made this, and where to find them.
+
+        An app that carries ads is a published thing rather than a personal
+        build, and both the stores and AdMob expect a publisher a user can
+        identify and reach. The site is the place a privacy policy lives, which
+        serving ads also requires.
+      */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>About</Text>
+        <View style={styles.aboutRow}>
+          <Text style={styles.aboutLabel}>Developer</Text>
+          <Text style={styles.aboutValue}>{DEVELOPER_NAME}</Text>
+        </View>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={`Open ${DEVELOPER_SITE}`}
+          onPress={() => void WebBrowser.openBrowserAsync(`https://${DEVELOPER_SITE}`)}
+          style={press(styles.aboutRow)}
+        >
+          <Text style={styles.aboutLabel}>Site</Text>
+          <Text style={[styles.aboutValue, styles.aboutLink]}>{DEVELOPER_SITE}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={`Email ${CONTACT_EMAIL}`}
+          onPress={() => void Linking.openURL(`mailto:${CONTACT_EMAIL}`)}
+          style={press(styles.aboutRow)}
+        >
+          <Text style={styles.aboutLabel}>Contact</Text>
+          <Text style={[styles.aboutValue, styles.aboutLink]}>{CONTACT_EMAIL}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Open the privacy policy"
+          onPress={() => void WebBrowser.openBrowserAsync(PRIVACY_URL)}
+          style={press(styles.aboutRow)}
+        >
+          <Text style={styles.aboutLabel}>Privacy policy</Text>
+          <Text style={[styles.aboutValue, styles.aboutLink]}>Open</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Open the terms of service"
+          onPress={() => void WebBrowser.openBrowserAsync(TERMS_URL)}
+          style={press(styles.aboutRow)}
+        >
+          <Text style={styles.aboutLabel}>Terms of service</Text>
+          <Text style={[styles.aboutValue, styles.aboutLink]}>Open</Text>
+        </Pressable>
+        <View style={styles.aboutRow}>
+          <Text style={styles.aboutLabel}>Version</Text>
+          <Text style={styles.aboutValue}>{APP_VERSION}</Text>
+        </View>
+      </View>
+    </FormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
-  content: { padding: 20, paddingBottom: 60, gap: 6 },
+  aboutRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: MIN_TAP, borderBottomWidth: 1, borderBottomColor: theme.line },
+  aboutLabel: { flex: 1, color: theme.text, fontSize: 14 },
+  aboutValue: { color: theme.textWeak, fontSize: 13 },
+  aboutLink: { color: theme.accent, fontWeight: '600' },
   h1: { color: theme.text, fontSize: 26, fontWeight: '700' },
   sub: { color: theme.textWeak, fontSize: 13, lineHeight: 19, marginBottom: 6 },
   section: { marginTop: 22, gap: 10 },
-  sectionTitle: { color: theme.text, fontSize: 16, fontWeight: '700' },
-  sectionBlurb: { color: theme.textWeak, fontSize: 12, lineHeight: 18, marginBottom: 2 },
+  sectionTitle: { color: theme.text, fontSize: 17, fontWeight: '700' },
+  sectionBlurb: { color: theme.textWeak, fontSize: 13, lineHeight: 19, marginBottom: 2 },
   customRow: { gap: 6 },
-  removeCustom: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: theme.line },
-  removeCustomText: { color: theme.textWeaker, fontSize: 10, fontWeight: '600' },
-  permRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.line },
-  permLabel: { flex: 1, color: theme.text, fontSize: 13, textTransform: 'capitalize' },
-  permValue: { color: theme.textWeak, fontSize: 12 },
-  permReset: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: theme.line },
-  permResetText: { color: theme.textWeak, fontSize: 11, fontWeight: '600' }
+  removeCustom: { alignSelf: 'flex-start', justifyContent: 'center', minHeight: MIN_TAP, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.line },
+  removeCustomText: { color: theme.textWeaker, fontSize: 13, fontWeight: '600' },
+  permRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.line },
+  permLabel: { flex: 1, color: theme.text, fontSize: 14, textTransform: 'capitalize' },
+  permValue: { color: theme.textWeak, fontSize: 13 },
+  permReset: { justifyContent: 'center', minHeight: MIN_TAP, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.line },
+  permResetText: { color: theme.textWeak, fontSize: 13, fontWeight: '600' }
 });

@@ -3,6 +3,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { parseTimelineDocument } from '@openvideo/shared/timelineDocumentValidators';
 import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/shared/timelineClipPlacement';
 import { placeClip } from '@openvideo/shared/timelineClipLogic';
+import { isStill, stillClipSource } from '@openvideo/shared/timelineStills';
 
 import { createInitialTimeline } from '@openvideo/shared/timelineLogic';
 import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, type TimelineDocument } from '@openvideo/shared/timelineTypes';
@@ -22,17 +23,45 @@ import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, type TimelineDocument } f
 
 const ROOT = new Directory(Paths.document, 'projects');
 
+/**
+ * Where an asset came from.
+ *
+ * Optional, because every project written before this existed has assets with
+ * no origin and they are still perfectly good clips. Absent reads as imported.
+ * A generated one carries what made it: the library is the only place the user
+ * ever sees the prompt again, and a still with no prompt beside it is a picture
+ * they cannot ask for a variation of.
+ */
+export type AssetOrigin = {
+  readonly kind: 'generated';
+  readonly modelId: string;
+  readonly prompt: string;
+  readonly at: string;
+};
+
 export type MobileAsset = {
   readonly id: string;
   readonly displayName: string;
-  readonly kind: 'video' | 'audio';
+  /**
+   * `image` cannot go on a timeline — the tracks are video and audio, and the
+   * shared placement rules have nowhere to put a still. It is here because the
+   * project is where a generated image has to live to survive the screen that
+   * made it, and the library is what gives it somewhere to be seen.
+   */
+  readonly kind: 'video' | 'audio' | 'image';
   readonly mimeType: string;
   /** Relative to the project directory, so the record survives a reinstall path change. */
   readonly relativePath: string;
   readonly durationMs: number;
   readonly width: number;
   readonly height: number;
+  readonly origin?: AssetOrigin;
 };
+
+/** A still is a picture with no length of its own; see `timelineStills`. */
+export function isStillAsset(asset: MobileAsset): boolean {
+  return isStill(asset.kind);
+}
 
 export type MobileProject = {
   readonly schemaVersion: typeof PROJECT_SCHEMA_VERSION;
@@ -81,6 +110,16 @@ export function listProjects(): readonly ProjectSummary[] {
   return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** First record per id wins; a repeat is the same file recorded twice. */
+function dedupeAssets(assets: readonly MobileAsset[]): readonly MobileAsset[] {
+  const seen = new Set<string>();
+  return assets.filter((asset) => {
+    if (seen.has(asset.id)) return false;
+    seen.add(asset.id);
+    return true;
+  });
+}
+
 export function readProject(id: string): MobileProject | null {
   const file = projectFile(id);
   if (!file.exists) return null;
@@ -98,7 +137,10 @@ export function readProject(id: string): MobileProject | null {
       name: candidate.name,
       createdAt: candidate.createdAt ?? new Date().toISOString(),
       updatedAt: candidate.updatedAt ?? new Date().toISOString(),
-      assets: Array.isArray(candidate.assets) ? (candidate.assets as MobileAsset[]) : [],
+      // Deduplicated on the way in: projects written before the placement bug
+      // was fixed hold the same asset twice, which renders as duplicate keys and
+      // counts double against the library. The first record wins.
+      assets: dedupeAssets(Array.isArray(candidate.assets) ? (candidate.assets as MobileAsset[]) : []),
       timeline
     };
   } catch {
@@ -133,6 +175,42 @@ export function writeProject(project: MobileProject): void {
   const dir = projectDir(project.id);
   if (!dir.exists) dir.create({ intermediates: true });
   projectFile(project.id).write(JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
+  announce();
+}
+
+/**
+ * Who to tell when a project changes on disk.
+ *
+ * The screens are siblings: importing happens in the editor, generating happens
+ * in the Video and Image tabs, and the shell around them reads the same project
+ * to decide whether Export has anything to work on. Reading at render is only
+ * correct if something re-renders, and nothing did — importing a ten-second clip
+ * left Export disabled until the user switched tabs and came back, which reads
+ * as a broken button rather than as a stale one.
+ *
+ * The file is the state, so this carries no payload: it says the project changed
+ * and every reader goes back to disk, which is the same thing they would do on
+ * mount. That keeps one writer path — `writeProject` — as the only place that
+ * has to remember to announce anything.
+ */
+const listeners = new Set<() => void>();
+let epoch = 0;
+
+function announce(): void {
+  epoch += 1;
+  for (const listener of [...listeners]) listener();
+}
+
+/** Which generation of the stored projects a reader last saw. */
+export function projectsEpoch(): number {
+  return epoch;
+}
+
+export function subscribeToProjects(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function renameProject(id: string, name: string): MobileProject | null {
@@ -148,6 +226,7 @@ export function deleteProject(id: string): void {
   // Deletes only inside the app's own projects directory — never a path the user
   // chose, which is the rule the desktop follows for the same reason.
   if (dir.exists) dir.delete();
+  announce();
 }
 
 /**
@@ -157,10 +236,53 @@ export function deleteProject(id: string): void {
  * permission revoked, and a project that silently loses a clip between sessions
  * is worse than one that costs a copy.
  */
+/**
+ * Writes a generated still into the project and records it.
+ *
+ * Generated images used to be shown and then dropped: leaving the Image tab, or
+ * the assistant's thread scrolling on, lost a picture the user had paid for. The
+ * bytes arrive as base64 from the adapter and go straight to a file — holding a
+ * megabyte of it in the project record would put it through `JSON.parse` on
+ * every read of the project.
+ */
+export function saveGeneratedImage(
+  projectId: string,
+  image: {
+    readonly base64: string;
+    readonly mimeType: string;
+    readonly prompt: string;
+    readonly modelId: string;
+  }
+): MobileAsset | null {
+  const project = readProject(projectId);
+  if (project === null) return null;
+
+  const dir = new Directory(projectDir(projectId), 'media');
+  if (!dir.exists) dir.create({ intermediates: true });
+  const id = `asset-${Date.now().toString(36)}`;
+  const extension = image.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+  const relativePath = `media/${id}.${extension}`;
+  new File(projectDir(projectId), relativePath).write(image.base64, { encoding: 'base64' });
+
+  const asset: MobileAsset = {
+    id,
+    displayName: `${image.modelId} still`,
+    kind: 'image',
+    mimeType: image.mimeType,
+    relativePath,
+    durationMs: 0,
+    width: 0,
+    height: 0,
+    origin: { kind: 'generated', modelId: image.modelId, prompt: image.prompt, at: new Date().toISOString() }
+  };
+  writeProject({ ...project, assets: [...project.assets, asset] });
+  return asset;
+}
+
 export function importAsset(
   projectId: string,
   source: { readonly uri: string; readonly displayName: string; readonly mimeType: string; readonly durationMs: number; readonly width: number; readonly height: number; readonly kind: 'video' | 'audio' }
-): MobileAsset {
+): MobileAsset & { readonly kind: 'video' | 'audio' } {
   const dir = new Directory(projectDir(projectId), 'media');
   if (!dir.exists) dir.create({ intermediates: true });
   const id = `asset-${Date.now().toString(36)}`;
@@ -205,18 +327,33 @@ export function appendAssetToTimeline(project: MobileProject, asset: MobileAsset
   const next = placeClip(project.timeline, {
     trackId: target.track.id,
     clip: {
-      id: `clip-${asset.id}`,
+      // Unique per placement, the way the editor's own placements are. Deriving
+      // the clip id from the asset alone meant putting the same asset on the
+      // timeline twice produced two clips answering to one id — and the editor
+      // selects, splits, trims and deletes by that id.
+      id: `clip-${asset.id}-${Date.now().toString(36)}`,
       assetId: asset.id,
       timelineStartMs: trackAppendStartMs(target.track),
-      sourceStartMs: 0,
-      sourceEndMs: asset.durationMs,
-      sourceDurationMs: asset.durationMs,
+      // A still has no duration to take a length from, so the shared rule
+      // supplies the hold — and makes the clip's source as long as the hold, so
+      // the ordinary "a clip may not run past its source" check is satisfied.
+      ...(isStillAsset(asset)
+        ? stillClipSource()
+        : { sourceStartMs: 0, sourceEndMs: asset.durationMs, sourceDurationMs: asset.durationMs }),
       effects: { ...DEFAULT_CLIP_EFFECTS },
       keyframes: []
     }
   });
   if (next === null) return null;
-  const updated: MobileProject = { ...project, assets: [...project.assets, asset], timeline: next };
+  // The asset may already be in the project — the library places one that is
+  // certainly there, and adding it a second time put two records under one id.
+  // React rendered them as duplicate keys and the duplicate went to disk.
+  const known = project.assets.some((entry) => entry.id === asset.id);
+  const updated: MobileProject = {
+    ...project,
+    assets: known ? project.assets : [...project.assets, asset],
+    timeline: next
+  };
   writeProject(updated);
   return updated;
 }

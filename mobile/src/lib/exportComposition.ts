@@ -1,9 +1,28 @@
 import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
 import * as Sharing from 'expo-sharing';
-import * as MediaLibrary from 'expo-media-library';
-import VideoExport from '../../modules/video-export';
+import VideoExport, { areStillsRenderable } from '../../modules/video-export';
 import type { EditorAsset } from './editorState';
+
+/**
+ * The photo library, loaded where it is used rather than at import.
+ *
+ * `expo-media-library` resolves a native module — `ExpoMediaLibraryNext` — that
+ * a client without it cannot provide, and a top-level `import` of it threw while
+ * the module graph was still loading. That is not a failed save: it is thrown
+ * before any screen mounts, so the entire app dies on a red screen and the
+ * fallback below never gets the chance to run. `modules/video-export` is
+ * required optionally for exactly this reason; this import was the one that had
+ * been missed.
+ */
+function loadMediaLibrary(): typeof import('expo-media-library') | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-media-library') as typeof import('expo-media-library');
+  } catch {
+    return null;
+  }
+}
 
 export type ExportOutcome =
   | { readonly ok: true; readonly uri: string }
@@ -26,6 +45,9 @@ export async function exportTimeline(input: {
   try {
     plan = buildCompositionPlan({
       timeline: input.timeline,
+      // The plan is built from the timeline, which does not record what an asset
+      // is. Without this the native renderer opens a still as a movie.
+      stillAssetIds: new Set(input.assets.filter((asset) => asset.kind === 'image').map((asset) => asset.id)),
       width: input.width ?? 1920,
       height: input.height ?? 1080,
       frameRate: input.frameRate ?? 30
@@ -34,6 +56,18 @@ export async function exportTimeline(input: {
     return {
       ok: false,
       message: error instanceof CompositionPlanError ? error.message : 'The timeline could not be prepared for export.'
+    };
+  }
+
+  // A renderer that cannot hold a still would open it as a movie and contribute
+  // a single frame, so the export would be shorter than the timeline with
+  // nothing to say why. Refusing names the limit instead.
+  if (plan.stillSourceIndexes.length > 0 && !areStillsRenderable) {
+    return {
+      ok: false,
+      message:
+        `This build cannot render stills — ${plan.stillSourceIndexes.length} on the timeline. ` +
+        'Remove them, or rebuild the development client once still rendering lands.'
     };
   }
 
@@ -52,11 +86,13 @@ export async function exportTimeline(input: {
     readonly sourceEndMs: number;
   };
 
+  const stillSources = new Set(plan.stillSourceIndexes);
   const withUri = (segment: Placed) => ({
     uri: uris[segment.sourceIndex] as string,
     timelineStartMs: segment.timelineStartMs,
     sourceStartMs: segment.sourceStartMs,
-    sourceEndMs: segment.sourceEndMs
+    sourceEndMs: segment.sourceEndMs,
+    still: stillSources.has(segment.sourceIndex)
   });
 
   try {
@@ -87,11 +123,14 @@ export type DeliveryOutcome =
  * permission, since refusing photo access should not mean losing the render.
  */
 export async function deliverExport(uri: string): Promise<DeliveryOutcome> {
+  const mediaLibrary = loadMediaLibrary();
   try {
-    const permission = await MediaLibrary.requestPermissionsAsync();
-    if (permission.granted) {
-      await MediaLibrary.saveToLibraryAsync(uri);
-      return { ok: true, how: 'photos' };
+    if (mediaLibrary !== null) {
+      const permission = await mediaLibrary.requestPermissionsAsync();
+      if (permission.granted) {
+        await mediaLibrary.saveToLibraryAsync(uri);
+        return { ok: true, how: 'photos' };
+      }
     }
   } catch {
     // Fall through to sharing rather than failing: the render exists either way.
