@@ -6,6 +6,10 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
 import android.util.Base64
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -20,6 +24,7 @@ import androidx.media3.effect.TextureOverlay
 import androidx.media3.effect.Crop
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.RgbAdjustment
+import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
@@ -227,6 +232,81 @@ class VideoExportModule : Module() {
     return bitmap
   }
 
+  private data class Title(
+    val text: String,
+    val startMs: Long,
+    val endMs: Long,
+    val sizePx: Int,
+    val color: Int,
+    val offsetX: Float,
+    val offsetY: Float
+  )
+
+  @Suppress("UNCHECKED_CAST")
+  private fun titlesOf(request: Map<String, Any?>): List<Title> {
+    val raw = request["titles"] as? List<Map<String, Any?>> ?: emptyList()
+    return raw
+      .map {
+        Title(
+          text = it["text"] as? String ?: "",
+          startMs = ms(it["timelineStartMs"]),
+          endMs = ms(it["timelineEndMs"]),
+          sizePx = num(it["sizePx"], 72f).toInt(),
+          // A colour that will not parse is white rather than a failed export:
+          // a title in the wrong colour is a visible, fixable mistake, and a
+          // refused render over one is not.
+          color = runCatching { Color.parseColor(it["color"] as? String ?: "#ffffff") }.getOrDefault(Color.WHITE),
+          offsetX = num(it["positionX"], 0f),
+          offsetY = num(it["positionY"], 0f)
+        )
+      }
+      .filter { it.text.isNotEmpty() && it.endMs > it.startMs }
+  }
+
+  /**
+   * A title, drawn only while it is meant to be on screen.
+   *
+   * The timing is alpha, not text. The obvious way to hide a caption outside its
+   * range is to return an empty string from `getText` — and it does hide it, for
+   * about two seconds, after which the export dies with "Video frame processing
+   * error" and leaves a truncated file behind. Empty text is a zero-sized
+   * bitmap, and the frame processor cannot draw one.
+   *
+   * So the text never changes and the *settings* do: `getOverlaySettings` is
+   * called per frame, and outside the range it returns the same overlay at zero
+   * alpha. The bitmap stays valid, and nothing is drawn because nothing is
+   * opaque. Found by exporting on a device rather than by reading the API — the
+   * failure is invisible to a typecheck and to every test in the suite.
+   */
+  private fun overlayFor(title: Title, width: Int, height: Int): TextureOverlay {
+    val span = SpannableString(title.text)
+    span.setSpan(ForegroundColorSpan(title.color), 0, span.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    span.setSpan(AbsoluteSizeSpan(title.sizePx), 0, span.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    // Anchors are fractions of the frame from its centre, and the offsets are
+    // pixels of the output — so they are divided by half the frame to speak the
+    // same units the rest of the plan does.
+    fun settingsAt(alpha: Float): StaticOverlaySettings =
+      StaticOverlaySettings.Builder()
+        .setBackgroundFrameAnchor(
+          if (width > 0) title.offsetX / (width / 2f) else 0f,
+          if (height > 0) -title.offsetY / (height / 2f) else 0f
+        )
+        .setAlphaScale(alpha)
+        .build()
+
+    val shown = settingsAt(1f)
+    val hidden = settingsAt(0f)
+
+    return object : TextOverlay() {
+      override fun getText(presentationTimeUs: Long): SpannableString = span
+
+      override fun getOverlaySettings(presentationTimeUs: Long): StaticOverlaySettings {
+        val ms = presentationTimeUs / 1_000L
+        return if (ms in title.startMs until title.endMs) shown else hidden
+      }
+    }
+  }
+
   private fun sequenceOf(segments: List<Segment>, frameRate: Int, removeAudio: Boolean): EditedMediaItemSequence? {
     if (segments.isEmpty()) return null
     val builder = EditedMediaItemSequence.Builder()
@@ -414,11 +494,18 @@ class VideoExportModule : Module() {
     // One bitmap for every dip: they are all the same black, and a frame-sized
     // ARGB bitmap is not something to allocate once per cut.
     val dipOverlays = if (dips.isEmpty()) emptyList() else blackFrame(width, height).let { black -> dips.map { dipOverlay(it, black) } }
+    // Titles are composition effects, not item effects: a caption belongs over
+    // the finished picture rather than inside one clip of it.
+    val overlays = titlesOf(request).map { overlayFor(it, width, height) }
     val compositionEffects = buildList {
       // The plan's width and height are the frame the whole cut is rendered
       // into, so it belongs on the composition rather than on any one item.
       add(Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT))
+      // Dips first, then titles: effects apply in order, so a caption stays
+      // readable through a dip to black. That is what the FFmpeg graph draws
+      // and what the program monitor shows, and the three have to agree.
       if (dipOverlays.isNotEmpty()) add(OverlayEffect(dipOverlays))
+      if (overlays.isNotEmpty()) add(OverlayEffect(overlays))
     }
     val composition = Composition.Builder(sequences)
       .setEffects(Effects(emptyList(), compositionEffects))
