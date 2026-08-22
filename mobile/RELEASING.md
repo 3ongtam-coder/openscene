@@ -165,36 +165,84 @@ anonymous one the SDK keeps. Data Safety and App Privacy still have to say so:
 declare app interactions / diagnostics, collected by the developer, used for
 analytics, not linked to identity and not used for tracking. It is on by default
 with a switch in Settings, so it is disclosed rather than consented to; if this
-app ever needs GDPR consent for it, it belongs behind the same UMP flow the ads
-already use. What is sent is bounded by `src/lib/analytics.ts` — a closed list of
-event names and property values that can only be numbers, booleans or null,
-which is why no prompt, file name, path or key can reach it.
+app ever needs GDPR consent for it, it belongs behind a consent flow of its own —
+the ads no longer bring one, see below. What is sent is bounded by
+`src/lib/analytics.ts` — a closed list of event names and property values that
+can only be numbers, booleans or null, which is why no prompt, file name, path or
+key can reach it.
 
-**The app shows ads, and that changes the privacy answers.** The Google Mobile
-Ads SDK is in the binary and reports device identifiers to Google. Both stores
-ask about this directly and the answers are no longer "none":
+**The app shows ads, and that changes the privacy answers.** Ads are mediated by
+Unity LevelPlay (formerly ironSource), with Unity Ads, AppLovin, Meta Audience
+Network and Pangle bidding in through adapters. AdMob and the Google Mobile Ads
+SDK are gone. All five of those SDKs are in the binary and all five report device
+identifiers to their own network. Both stores ask about this directly and the
+answers are no longer "none":
 
 - **Data Safety / App Privacy** must declare device or other identifiers,
   collected by a third party, used for advertising. Declaring nothing here is
   the mismatch reviewers look for, and it is checked against the SDKs in the
-  binary rather than against what the form says.
-- **iOS** lists the SKAdNetwork identifiers Google publishes; they are in
-  `app.json` and reach `Info.plist` through the config plugin.
+  binary rather than against what the form says. The list of third parties is
+  now five names rather than one, and Play's Data Safety form asks for them.
+- **iOS** lists the SKAdNetwork identifiers Unity publishes for the mediated
+  networks — seven of them, in `app.json`, reaching `Info.plist` at prebuild.
+  Source and date are in `README-native.md`; do not hand-edit them.
 - **App Tracking Transparency is not implemented**, deliberately. Without it the
-  SDK serves non-personalised ads, which needs no ATT prompt. Adding
+  networks serve non-personalised ads, which needs no ATT prompt. Adding
   personalised ads means adding the prompt and the Info.plist string first.
-- **Consent** is gathered through Google's UMP before any ad is requested, and
-  the banner does not render until `canRequestAds` is true.
+- **Consent is no longer collected, because there is no longer a CMP.** Google's
+  UMP came with the AdMob binding and left with it. What replaces it is the
+  conservative default rather than a prompt: `ensureAdsReady` declares consent
+  *not* given (`LevelPlay.setConsent(false)`) and sets CCPA's do-not-sell signal
+  before initialising, so every network serves contextual inventory. It fails
+  closed — if either signal cannot be applied, the SDK is never initialised and
+  no ad is requested, rather than serving under the networks' own defaults. Personalised
+  ads in the EU require a certified CMP first — that is a decision, not an
+  omission.
+- **App Transport Security carries an app-wide exception.**
+  `NSAllowsArbitraryLoads` is set in `app.json`, which LevelPlay's integration
+  guide requires: several mediated networks still serve creatives and make
+  tracking calls over plain HTTP, and without it those requests fail silently as
+  no-fill. Apple asks for this to be justified at review, and the justification
+  is exactly that — third-party ad SDKs the app does not control the endpoints
+  of. Nothing OpenScene itself talks to uses HTTP: the AI providers, the update
+  feed and the analytics endpoint are all HTTPS, so the exception widens what the
+  ad SDKs may do and nothing else. It is also why no narrower exception works —
+  the hosts belong to five networks and change without notice.
 
-**Ads have not been seen to run.** Expo Go cannot load the SDK, so the banner,
-the consent flow and the SDK initialisation have only ever been exercised as
-code. A development build must show a test banner before a store build ships
-one — a release that reaches users with a silently broken banner earns nothing
-and still declares ad collection.
+  If review pushes back, the fallback is `NSAllowsArbitraryLoadsForMedia` plus
+  per-network `NSExceptionDomains`, which each network publishes; expect it to go
+  stale.
+
+**Both placements have been seen to serve — through the Test Suite.** On an
+Android emulator, with the Test Suite's Live/Test switch set to Test, the banner
+unit renders a creative and the interstitial unit loads and plays one. The app
+keys and all four unit ids match the dashboard.
+
+What that does not prove is the app's own banner view. The Test Suite renders ads
+with its own views; `AdBanner` mounts `LevelPlayBannerAdView`, which
+`ironsource-mediation` registers as a legacy view manager while this app runs the
+New Architecture. The failure mode is a banner that never appears rather than a
+build error, so it still needs a look before a store build ships one — a release
+that reaches users with a silently broken banner earns nothing and still declares
+ad collection.
+
+**Only four of the five networks are actually bidding.** The Test Suite lists
+ironSource, Meta, Pangle and UnityAds against both ad units; **AppLovin is
+absent** — the adapter is in the binary, but the network has no instance
+configured for this app in the LevelPlay dashboard. Set it up there, or the store
+build ships an SDK that is declared in the privacy answers and never asked to
+bid.
+
+**Two more to confirm on a real device.** Unity Ads did not initialise on the
+emulator (`gateway_universal / PUBLIC_ERROR_CODE_INIT_UNKNOWN`) even though the
+Test Suite lists it, and LevelPlay's ad-quality connector rejects every Pangle
+SDK version the adapter can use — measurement rather than delivery. Neither
+blocks the other networks; both belong on the list before reading revenue numbers
+as real.
 
 **There are two placements, and the interstitial is the one policy is strict
-about.** Reviewed against the AdMob programme policies; what the implementation
-does, and why:
+about.** Reviewed against the LevelPlay programme policies and each mediated
+network's own; what the implementation does, and why:
 
 | Policy | What the app does |
 | --- | --- |
@@ -203,16 +251,15 @@ does, and why:
 | No ad on an unsuccessful action | A failed export shows nothing and releases the ad loaded for it |
 | No impression the user cannot see | Refused unless `AppState` is `active`; an export can run for minutes and people put the phone down |
 | Not repeatedly, in succession | One every five minutes at most |
-| Consent before the request | UMP `canRequestAds` gates the *request*, not the presentation |
-| Never a live unit in a test build | Resolved in `src/lib/ads.ts`, not at the call site |
+| Initialised, with privacy signals set, before the request | `ensureAdsReady` gates the *request*, not the presentation |
+| Nothing requested from a development build | Resolved in `src/lib/ads.ts`, not at the call site — LevelPlay has no test units, so development asks for nothing at all |
 | No accidental clicks | The banner has its own block and a rule above it, clear of the tab bar's five 44pt targets, and is hidden while the keyboard is up |
 | Publisher identifiable, policy reachable | Developer, site, contact, terms and privacy in Settings |
 
-Both interstitial units are live: `.../3993164988` on iOS, `.../9641715519` on
-Android. Four live units across two placements, and each one only ever serves the
-placement it was made for — an interstitial id in a banner slot, or the reverse,
-is a policy violation rather than a rendering bug, so a test asserts all four are
-distinct and correctly shaped.
+The LevelPlay app keys and the four ad unit ids live in `src/lib/ads.ts` and
+nowhere else. Each one only ever serves the placement and the platform it was
+made for — an interstitial id in a banner slot, or the reverse, is a policy
+violation rather than a rendering bug, so a test asserts they stay distinct.
 
 **Android export is implemented but unverified.** The Media3 Transformer path
 is written, compiles, and installs; no export has been seen to produce a file.
