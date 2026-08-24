@@ -6,6 +6,8 @@ import {
   ANALYTICS_EVENTS,
   OPENPANEL_API_URL,
   OPENPANEL_CLIENT_ID,
+  OPENPANEL_ORIGIN,
+  filterOpenPanelPayload,
   isAnalyticsEvent,
   sanitiseProperties
 } from '../mobile/src/lib/analytics';
@@ -46,6 +48,27 @@ describe('analytics properties', () => {
     }
   });
 
+  it('filters SDK-added globals at the final send boundary', () => {
+    const outbound: { type: string; payload: { name: string; properties: Record<string, unknown> } } = {
+      type: 'track',
+      payload: {
+        name: 'app_opened',
+        properties: {
+          seconds: 7,
+          enabled: true,
+          __version: '0.5.0',
+          __buildNumber: '5',
+          __referrer: 'utm_campaign=free-text',
+          __path: '/editor'
+        }
+      }
+    };
+
+    expect(filterOpenPanelPayload(outbound)).toBe(true);
+    expect(outbound.payload.properties).toEqual({ seconds: 7, enabled: true });
+    expect(filterOpenPanelPayload({ type: 'identify', payload: {} })).toBe(false);
+  });
+
   it('matches whole words, so an innocent name survives', () => {
     // Substring matching dropped `keyframes` for containing "key" — a count with
     // nothing to do with credentials, vanishing silently, leaving a dashboard
@@ -75,12 +98,18 @@ describe('the event list', () => {
     expect(isAnalyticsEvent('user_typed_prompt')).toBe(false);
     expect(new Set(ANALYTICS_EVENTS).size).toBe(ANALYTICS_EVENTS.length);
   });
+
+  it('includes foreground-session boundaries', () => {
+    expect(isAnalyticsEvent('app_opened')).toBe(true);
+    expect(isAnalyticsEvent('app_closed')).toBe(true);
+  });
 });
 
 describe('the OpenPanel client', () => {
   it('carries the write key and the publisher own instance', () => {
     expect(OPENPANEL_CLIENT_ID).toBe('329420cf-2ae4-495f-a35b-3cae1412110f');
     expect(OPENPANEL_API_URL).toBe('https://panel.sanhouse.kr/api');
+    expect(OPENPANEL_ORIGIN).toBe('app://openscene');
   });
 
   it('never carries the client secret', async () => {
@@ -103,6 +132,8 @@ describe('the OpenPanel client', () => {
     // cannot provide takes the app down before a screen mounts.
     expect(client).not.toMatch(/^import .*from '@openpanel\/react-native';$/m);
     expect(client).toContain("require('@openpanel/react-native')");
+    expect(client).toContain("client.api.addHeader('Origin', OPENPANEL_ORIGIN)");
+    expect(client).toContain('filter: filterOpenPanelPayload');
   });
 
   it('treats an unreadable preference as off, and an absent one as on', async () => {
