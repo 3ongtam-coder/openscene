@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readlink } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
 
@@ -102,5 +102,94 @@ describe('the iOS signing step', () => {
     expect(yaml).toMatch(/::error::The provisioning profile is for/);
     // A wildcard profile is legitimate, so it is matched rather than refused.
     expect(yaml).toMatch(/"\$\{PROFILE_APP_ID%\\\*\}"\*\)/);
+  });
+});
+
+/**
+ * That the Swift is compiled by something.
+ *
+ * The iOS export module was changed twice without anything ever building it.
+ * The suite is TypeScript, the Android module is compiled by its own Gradle
+ * build, and Swift had no equivalent — so a green CI said nothing at all about
+ * half the native code, and a review had to point that out rather than a check.
+ */
+describe('the iOS module', () => {
+  const read = () => readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+
+  it('is built on every pull request', async () => {
+    const yaml = await read();
+    expect(yaml).toContain('ios-module:');
+    expect(yaml).toContain('npx expo prebuild --platform ios');
+    expect(yaml).toMatch(/xcodebuild[\s\S]{0,400}build/);
+  });
+
+  it('builds without needing a signing identity', async () => {
+    // Certificates and profiles belong to a release, not to "does this
+    // compile" — requiring them would make this run only where the secrets
+    // are, which is exactly where it is least useful.
+    const yaml = await read();
+    expect(yaml).toContain('CODE_SIGNING_ALLOWED=NO');
+    expect(yaml).not.toMatch(/ios-module:[\s\S]*?APPLE_DISTRIBUTION_CERTIFICATE/);
+  });
+});
+
+/**
+ * That the Android app is assembled by something.
+ *
+ * It was not, and the gap was expensive twice in one change. The LevelPlay
+ * binding does not compile against React Native 0.86 at all, and the Pangle
+ * adapter throws `NoSuchMethodError` at init against the wrong SDK version —
+ * both while the typecheck and 979 unit tests stayed green, because none of
+ * them assemble anything. A review asked for build evidence and was right to.
+ */
+describe('the Android module', () => {
+  const read = () => readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+
+  it('is assembled on every pull request', async () => {
+    const yaml = await read();
+    expect(yaml).toContain('android-module:');
+    expect(yaml).toContain('npx expo prebuild --platform android');
+    expect(yaml).toContain('./gradlew assembleDebug');
+  });
+
+  it('checks the mediation adapters actually reached the Gradle files', async () => {
+    // The unit tests read the config plugin's source, which proves what it
+    // intends rather than what it produced. An adapter that never lands in
+    // `app/build.gradle` is a network that silently never bids — and prebuild
+    // is where that would go wrong.
+    const yaml = await read();
+    expect(yaml).toContain('ads-mediation:${artifact}');
+    expect(yaml).toContain('artifact.bytedance.com/repository/pangle');
+  });
+
+  it('builds without needing the release keystore', async () => {
+    // The signing config falls back to the debug key when the Gradle properties
+    // are absent, which is what lets this run on a pull request rather than only
+    // where the secrets are.
+    const yaml = await read();
+    expect(yaml).not.toMatch(/android-module:[\s\S]*?OPENSCENE_STORE_FILE/);
+  });
+});
+
+describe('the iOS renderer', () => {
+  const read = () => readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+
+  it('is exported from and measured, not only compiled', async () => {
+    // Compiling proves a line exists. Every rendering bug this project has had
+    // was found by exporting a file and reading it back, and iOS was the one
+    // renderer nothing could export from until its composition was lifted out
+    // of the Expo module.
+    const yaml = await read();
+    expect(yaml).toContain('ios-export:');
+    expect(yaml).toContain('swift test');
+    expect(yaml).toContain('mobile/modules/video-export/composer-tests');
+  });
+
+  it('tests the file the app builds rather than a copy of it', async () => {
+    // The package's source is a symlink to `ios/VideoComposer.swift`. A copy
+    // would drift, and a drifting copy passing its tests is worse than no
+    // tests: it says the renderer works when what works is the copy.
+    const link = await readlink(new URL('../mobile/modules/video-export/composer-tests/Sources/VideoComposer/VideoComposer.swift', import.meta.url));
+    expect(link).toContain('ios/VideoComposer.swift');
   });
 });

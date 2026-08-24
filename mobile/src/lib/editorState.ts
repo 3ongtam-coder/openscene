@@ -10,12 +10,23 @@ import {
   updateClipEffects
 } from '@openvideo/shared/timelineClipLogic';
 import { addTrack, createInitialTimeline, removeTrack, timelineDurationMs } from '@openvideo/shared/timelineLogic';
+import { isValidClipEffects } from '@openvideo/shared/timelineEffects';
 import { updateAudioTrackMix } from '@openvideo/shared/timelineMetadataLogic';
 import { resolveVisibleClip } from '@openvideo/shared/timelinePlayback';
+import type { AnalyticsEvent, AnalyticsProperties } from './analytics';
+import { track } from './analyticsClient';
+import {
+  cutNearest,
+  removeTransitionAtCut,
+  setTransitionAtCut,
+  transitionForCut
+} from '@openvideo/shared/timelineTransitionLogic';
+import { clipDurationMs } from '@openvideo/shared/timelineClipGeometry';
 import type { ClipEffects } from '@openvideo/shared/timelineTypes';
 import { DEFAULT_CLIP_EFFECTS } from '@openvideo/shared/timelineTypes';
 import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/shared/timelineClipPlacement';
-import type { MediaAsset, TimelineDocument } from '@openvideo/shared/timelineTypes';
+import { addTitle, removeTitle, titleAt, updateTitle } from '@openvideo/shared/timelineTitleLogic';
+import type { MediaAsset, TimelineDocument, TimelineTitle, TransitionType } from '@openvideo/shared/timelineTypes';
 
 /**
  * The editing model is the desktop's, unchanged — every operation below is a
@@ -50,6 +61,15 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
   const [message, setMessage] = useState<string | null>(null);
   /** The last accepted timeline waiting to be written; see the effect below. */
   const pending = useRef<TimelineDocument | null>(null);
+  /**
+   * What to report about the edit that was just accepted.
+   *
+   * Reported from the same effect that writes the file, and for the same
+   * reason: `apply` decides inside a state updater, and sending anything from
+   * there is a side effect during render. It also means only accepted edits are
+   * counted — a refused tap is not use of a feature.
+   */
+  const pendingEvent = useRef<{ readonly name: AnalyticsEvent; readonly properties: AnalyticsProperties } | null>(null);
 
   const durationMs = useMemo(() => timelineDurationMs(timeline), [timeline]);
 
@@ -59,7 +79,12 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
    * nothing, which on a touch screen reads as a missed tap.
    */
   const apply = useCallback(
-    (label: string, update: (current: TimelineDocument) => TimelineDocument | null, rejection: string): void => {
+    (
+      label: string,
+      update: (current: TimelineDocument) => TimelineDocument | null,
+      rejection: string,
+      event?: { readonly name: AnalyticsEvent; readonly properties?: AnalyticsProperties }
+    ): void => {
       setTimeline((current) => {
         const next = update(current);
         if (next === null) {
@@ -76,6 +101,7 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
         // invocation. A ref is safe to set from an updater because setting it
         // twice to the same value is the same as setting it once.
         pending.current = next;
+        if (event !== undefined) pendingEvent.current = { name: event.name, properties: event.properties ?? {} };
         return next;
       });
     },
@@ -94,6 +120,11 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
     if (next === null) return;
     pending.current = null;
     persist?.(next);
+
+    const event = pendingEvent.current;
+    if (event === null) return;
+    pendingEvent.current = null;
+    track(event.name, event.properties);
   });
 
   const undo = useCallback(() => {
@@ -185,7 +216,10 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
             }
           });
         },
-        'That asset could not be placed on a track.'
+        'That asset could not be placed on a track.',
+        // Whether the media bin is used to reuse a clip, rather than importing
+        // the same file twice.
+        { name: 'library_item_added_to_timeline' }
       );
     },
     [apply, assets]
@@ -230,7 +264,8 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
                 atMs: playheadMs,
                 rightClipId: `clip-split-${Date.now().toString(36)}`
               }),
-        'Move the playhead inside the selected clip to split it.'
+        'Move the playhead inside the selected clip to split it.',
+        { name: 'clip_split' }
       ),
 
     deleteSelected: () =>
@@ -239,7 +274,8 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
         // deleteClip returns a document rather than null, and no-ops on an
         // unknown id, so the guard is ours to make.
         (current) => (selectedClipId === null ? null : deleteClip(current, selectedClipId)),
-        'Select a clip first.'
+        'Select a clip first.',
+        { name: 'clip_deleted' }
       ),
 
     trimSelected: (edge: 'left' | 'right', deltaMs: number) =>
@@ -250,13 +286,16 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
           const at = edge === 'left'
             ? selectedClip.clip.timelineStartMs + deltaMs
             : selectedClip.clip.timelineStartMs +
-              (selectedClip.clip.sourceEndMs - selectedClip.clip.sourceStartMs) +
+              clipDurationMs(selectedClip.clip) +
               deltaMs;
           return edge === 'left'
             ? trimClipLeft(current, { clipId: selectedClip.clip.id, timelineStartMs: at })
             : trimClipRight(current, { clipId: selectedClip.clip.id, timelineEndMs: at });
         },
-        'That trim would make the clip shorter than a frame.'
+        'That trim would make the clip shorter than a frame.',
+        // Which end, because dragging the head of a clip and dragging its tail
+        // are different habits and the handles are not equally reachable.
+        { name: 'clip_trimmed', properties: { left: edge === 'left' } }
       ),
 
     nudgeSelected: (deltaMs: number) =>
@@ -300,18 +339,52 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
         'That trim would make the clip shorter than a frame.'
       ),
 
-    setSelectedEffects: (effects: Partial<ClipEffects>) =>
+    setSelectedEffects: (effects: Partial<ClipEffects>) => {
+      /*
+        Two ways this can be refused, and they read nothing alike.
+
+        Until speed, an effect could only ever be out of range, so one message
+        covered it. Speed changes how much room the clip takes, so slowing one
+        down can also be refused for running into its neighbour — and being told
+        "that value is outside what the effect accepts" while looking at 1.75×,
+        which is plainly inside the range, is the editor lying about its own
+        rules. The shared rule returns `null` either way, so the difference is
+        worked out here: if the values themselves are fine, the refusal was
+        about where the clip would land.
+      */
+      const next = selectedClip === null ? null : { ...selectedClip.clip.effects, ...effects };
+      const rejection =
+        next !== null && isValidClipEffects(next)
+          ? 'A slower clip needs more room — move the next clip along first.'
+          : 'That value is outside what the effect accepts.';
+      /*
+        Which control was used, as flags rather than values.
+
+        "Someone graded a clip" is a product question; what colour they chose is
+        their footage. Flags answer the first and cannot carry the second, which
+        is the same line the sanitiser draws.
+      */
+      const touched = Object.keys(effects);
       apply(
         'Adjust',
         (current) =>
-          selectedClip === null
+          selectedClip === null || next === null
             ? null
-            : updateClipEffects(current, {
-                clipId: selectedClip.clip.id,
-                effects: { ...selectedClip.clip.effects, ...effects }
-              }),
-        'That value is outside what the effect accepts.'
-      ),
+            : updateClipEffects(current, { clipId: selectedClip.clip.id, effects: next }),
+        rejection,
+        {
+          name: 'clip_adjusted',
+          properties: {
+            speed: touched.includes('speed'),
+            colour: touched.some((key) => key === 'brightness' || key === 'contrast' || key === 'saturation'),
+            placement: touched.some((key) => key === 'rotation' || key === 'positionX' || key === 'positionY'),
+            opacity: touched.includes('opacity'),
+            scale: touched.includes('scale'),
+            volume: touched.includes('volume')
+          }
+        }
+      );
+    },
 
     setTrackMuted: (trackId: string, muted: boolean) =>
       apply(
@@ -346,7 +419,8 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
             name: `${kind === 'video' ? 'Video' : 'Audio'} ${existing}`
           });
         },
-        'That track could not be added.'
+        'That track could not be added.',
+        { name: 'track_added', properties: { video: kind === 'video' } }
       ),
 
     removeTrack: (trackId: string) =>
@@ -354,6 +428,77 @@ export function useMobileEditor(persist?: (timeline: TimelineDocument) => void) 
         'Remove track',
         (current) => removeTrack(current, trackId),
         'A timeline keeps at least one video and one audio track.'
-      )
+      ),
+
+    /*
+      Transitions.
+
+      Between two clips, so nothing on the lanes can be tapped to mean one — the
+      playhead near a cut is the whole address. A phone gets a wider tolerance
+      than a mouse would need, because a finger is worth tens of milliseconds.
+    */
+    cutAtPlayhead: cutNearest(timeline, playheadMs, 500),
+
+    transitionAtPlayhead: (() => {
+      const cut = cutNearest(timeline, playheadMs, 500);
+      return cut === null ? null : transitionForCut(timeline, cut);
+    })(),
+
+    setTransition: (type: TransitionType, durationMs?: number) => {
+      const cut = cutNearest(timeline, playheadMs, 500);
+      if (cut === null) return;
+      apply(
+        'Transition',
+        (current) =>
+          setTransitionAtCut(current, cut, durationMs === undefined ? { type } : { type, durationMs }),
+        'A transition has to fit inside both of the clips it joins.',
+        // Which kind, and how long — a length is a number about the edit, not
+        // about the footage.
+        {
+          name: 'transition_set',
+          properties: {
+            dip: type === 'dipToBlack',
+            crossfade: type === 'crossfade',
+            milliseconds: durationMs ?? null
+          }
+        }
+      );
+    },
+
+    removeTransition: () => {
+      const cut = cutNearest(timeline, playheadMs, 500);
+      if (cut === null) return;
+      apply('Remove transition', (current) => removeTransitionAtCut(current, cut), 'That transition could not be removed.');
+    },
+
+    /*
+      Titles.
+
+      Addressed by the playhead, not by selection: a title is not a clip and has
+      nothing on the lanes to tap. Park the playhead where the words belong and
+      the panel edits whichever title covers that moment — the same one the
+      preview is drawing.
+    */
+    addTitleAtPlayhead: () =>
+      apply(
+        'Add title',
+        (current) => addTitle(current, { id: `title-${Date.now().toString(36)}`, atMs: playheadMs }),
+        'That title could not be added.',
+        // The event says a title was added. What it says is the person's, and
+        // `text` is a forbidden key besides.
+        { name: 'title_added' }
+      ),
+
+    editTitle: (id: string, changes: Partial<Omit<TimelineTitle, 'id'>>) =>
+      apply(
+        'Edit title',
+        (current) => updateTitle(current, id, changes),
+        'That change would leave the title with nothing to draw.'
+      ),
+
+    removeTitle: (id: string) =>
+      apply('Remove title', (current) => removeTitle(current, id), 'That title could not be removed.'),
+
+    titleAtPlayhead: titleAt(timeline, playheadMs)
   };
 }

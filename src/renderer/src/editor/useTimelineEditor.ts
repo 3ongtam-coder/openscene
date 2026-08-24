@@ -14,7 +14,26 @@ import {
   trimClipRight,
   updateClipEffects
 } from '../../../shared/timelineLogic';
-import type { ClipEffects, LocalProjectSnapshot, LocalProjectSummary, MediaAsset, MediaKind, TimelineDocument } from '../../../shared/timelineTypes';
+import { isValidClipEffects } from '../../../shared/timelineEffects';
+import {
+  cutNearest,
+  removeTransitionAtCut,
+  setTransitionAtCut,
+  transitionForCut,
+  type TimelineCut
+} from '../../../shared/timelineTransitionLogic';
+import { DEFAULT_CLIP_EFFECTS } from '../../../shared/timelineTypes';
+import type {
+  ClipEffects,
+  LocalProjectSnapshot,
+  LocalProjectSummary,
+  MediaAsset,
+  MediaKind,
+  TimelineDocument,
+  TransitionType
+} from '../../../shared/timelineTypes';
+import { clipDurationMs, clipTimelineEndMs } from '../../../shared/timelineClipGeometry';
+import { addTitle, removeTitle, titleAt, updateTitle } from '../../../shared/timelineTitleLogic';
 import { errorMessage, type StatusMessage } from '../appTypes';
 import { createTimelineHistory, pushTimelineHistory, redoTimelineHistory, undoTimelineHistory, type TimelineHistory } from './editorTimelineHistory';
 import { clampPlayheadMs, findClipSelection, findFirstCompatibleTrack, insertionStartForTrack, nextTrackName, placeReadyAssetOnTimeline } from './editorTimelineView';
@@ -196,6 +215,80 @@ export function useTimelineEditor() {
     return timeline;
   }, [playback, project]);
 
+  /*
+    Transitions.
+
+    Addressed by the playhead, like a title and for a sharper reason: a
+    transition lives *between* two clips, and there is nothing between two clips
+    to select. Park the playhead near a cut and the controls apply to that cut.
+  */
+  const cutAtPlayhead = useMemo<TimelineCut | null>(
+    () => (project === null ? null : cutNearest(project.timeline, playback.playheadMs)),
+    [playback.playheadMs, project]
+  );
+
+  const transitionAtPlayhead = useMemo(
+    () => (project === null || cutAtPlayhead === null ? null : transitionForCut(project.timeline, cutAtPlayhead)),
+    [cutAtPlayhead, project]
+  );
+
+  const setTransitionAtPlayhead = useCallback(
+    (type: TransitionType, durationMs?: number) => {
+      if (cutAtPlayhead === null) return;
+      replaceTimeline(
+        (timeline) =>
+          setTransitionAtCut(timeline, cutAtPlayhead, durationMs === undefined ? { type } : { type, durationMs }),
+        'Set the transition.',
+        'A transition has to fit inside both of the clips it joins.'
+      );
+    },
+    [cutAtPlayhead, replaceTimeline]
+  );
+
+  const removeTransitionAtPlayhead = useCallback(() => {
+    if (cutAtPlayhead === null) return;
+    replaceTimeline((timeline) => removeTransitionAtCut(timeline, cutAtPlayhead), 'Removed the transition.');
+  }, [cutAtPlayhead, replaceTimeline]);
+
+  /*
+    Titles.
+
+    They are not clips, so they do not go through the placement rules — a title
+    overlaps whatever it likes, which is the point of a caption. What they do
+    share is the undo history and the "rejected, and here is why" path, because
+    a rule that refuses silently is the thing this editor keeps being caught by.
+  */
+  const addTitleAtPlayhead = useCallback(() => {
+    replaceTimeline(
+      (timeline) => addTitle(timeline, { id: createOpaqueId('title'), atMs: playback.playheadMs }),
+      'Added a title.'
+    );
+  }, [playback.playheadMs, replaceTimeline]);
+
+  const editTitle = useCallback(
+    (id: string, changes: Parameters<typeof updateTitle>[2]) => {
+      replaceTimeline(
+        (timeline) => updateTitle(timeline, id, changes),
+        'Updated the title.',
+        'That change would leave the title with nothing to draw.'
+      );
+    },
+    [replaceTimeline]
+  );
+
+  const deleteTitle = useCallback(
+    (id: string) => {
+      replaceTimeline((timeline) => removeTitle(timeline, id), 'Removed the title.');
+    },
+    [replaceTimeline]
+  );
+
+  /** The title under the playhead, which is the one an inspector should be showing. */
+  const titleAtPlayhead = useMemo(
+    () => (project === null ? null : titleAt(project.timeline, playback.playheadMs)),
+    [playback.playheadMs, project]
+  );
+
   const placeSelectedAsset = useCallback(() => {
     if (project === null || selectedAsset === null || selectedAsset.metadata === null) return;
     const track = findFirstCompatibleTrack(project.timeline, selectedAsset.kind);
@@ -312,7 +405,7 @@ export function useTimelineEditor() {
     if (selectedClip === null) return;
     replaceTimeline((timeline) => edge === 'left'
       ? trimClipLeft(timeline, { clipId: selectedClip.clip.id, timelineStartMs: selectedClip.clip.timelineStartMs + deltaMs })
-      : trimClipRight(timeline, { clipId: selectedClip.clip.id, timelineEndMs: selectedClip.clip.timelineStartMs + selectedClip.clip.sourceEndMs - selectedClip.clip.sourceStartMs + deltaMs }), 'Trimmed selected clip.');
+      : trimClipRight(timeline, { clipId: selectedClip.clip.id, timelineEndMs: clipTimelineEndMs(selectedClip.clip) + deltaMs }), 'Trimmed selected clip.');
   }, [replaceTimeline, selectedClip]);
 
   const trimClipTo = useCallback((clipId: string, edge: 'left' | 'right', timelineMs: number) => {
@@ -324,7 +417,7 @@ export function useTimelineEditor() {
 
   const splitSelectedClip = useCallback(() => {
     if (selectedClip === null) return;
-    const midpointMs = selectedClip.clip.timelineStartMs + Math.round((selectedClip.clip.sourceEndMs - selectedClip.clip.sourceStartMs) / 2);
+    const midpointMs = selectedClip.clip.timelineStartMs + Math.round(clipDurationMs(selectedClip.clip) / 2);
     replaceTimeline((timeline) => splitClip(timeline, { clipId: selectedClip.clip.id, atMs: midpointMs, rightClipId: createOpaqueId('clip') }), 'Split selected clip at its midpoint.');
   }, [replaceTimeline, selectedClip]);
 
@@ -340,7 +433,7 @@ export function useTimelineEditor() {
   const duplicateSelectedClip = useCallback(() => {
     if (selectedClip === null) return;
     const source = selectedClip.clip;
-    const duplicatedStartMs = source.timelineStartMs + (source.sourceEndMs - source.sourceStartMs);
+    const duplicatedStartMs = clipTimelineEndMs(source);
     const timeline = replaceTimeline(
       (current) => placeClip(current, {
         trackId: selectedClip.track.id,
@@ -353,7 +446,22 @@ export function useTimelineEditor() {
 
   const updateSelectedClipEffects = useCallback((effects: Partial<ClipEffects>) => {
     if (selectedClip === null) return;
-    replaceTimeline((timeline) => updateClipEffects(timeline, { clipId: selectedClip.clip.id, effects }), 'Updated selected clip effects.');
+    /*
+      Two ways this can be refused, and the generic message fits only one.
+
+      Until speed, an effect could only be out of range. Speed changes how much
+      room the clip takes, so slowing one down can also be refused for running
+      into its neighbour — and the shared rule returns `null` either way. If the
+      values themselves are fine, the refusal was about where the clip lands.
+    */
+    const next: ClipEffects = { ...DEFAULT_CLIP_EFFECTS, ...selectedClip.clip.effects, ...effects };
+    replaceTimeline(
+      (timeline) => updateClipEffects(timeline, { clipId: selectedClip.clip.id, effects }),
+      'Updated selected clip effects.',
+      isValidClipEffects(next)
+        ? 'A slower clip needs more room — move the next clip along first.'
+        : undefined
+    );
   }, [replaceTimeline, selectedClip]);
 
   const undoTimeline = useCallback(() => {
@@ -455,6 +563,8 @@ export function useTimelineEditor() {
   return {
     addTimelineTrack, removeTimelineTrack, renameTimelineTrack, insertTimelineTrack, createProject, deleteCurrentProject, deleteSelectedClip, duplicateSelectedClip, hasUnsavedTimeline, importAssets,
     importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
+    cutAtPlayhead, transitionAtPlayhead, setTransitionAtPlayhead, removeTransitionAtPlayhead,
+    addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead,
     openProject, openProjectFolder, renameProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,

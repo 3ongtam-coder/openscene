@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode, type SyntheticEvent } from 'react';
 
 import type { TimelineEditorController } from './useTimelineEditor';
-import { effectCssTransform } from './clipEffectControls';
+import { effectCssFilter, effectCssTransform } from './clipEffectControls';
 import { buildTimelineView } from './editorTimelineView';
 import {
   programMonitorPreviewLoadState,
@@ -14,6 +14,7 @@ import {
   type TimelineMediaEffectsElement
 } from './programMonitorMediaSync';
 import { buildProgramMonitorPreview, type ProgramMonitorAudioLayer, type ProgramMonitorVisualLayer } from './programMonitorPreview';
+import { titlePreviewLayout, titlesAt } from '../../../shared/titlePreviewLayout';
 
 type ProgramMonitorProps = {
   readonly editor: TimelineEditorController;
@@ -68,6 +69,16 @@ export function ProgramMonitor({ editor, exportControl }: ProgramMonitorProps): 
   const [resolution, setResolution] = useState('Full');
   const [showSafeMargins, setShowSafeMargins] = useState(false);
   const [readyAssetId, setReadyAssetId] = useState<string | null>(null);
+  /*
+    The preview pane's size in CSS pixels, watched rather than assumed.
+
+    A title's numbers are output-frame pixels, so drawing them needs to know how
+    far the frame was shrunk to fit this pane — and the pane changes size every
+    time a splitter moves, so a value read once is wrong for the rest of the
+    session.
+  */
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
+  const frameRef = useRef<HTMLDivElement | null>(null);
   
   const mediaRef = useRef<ProgramMonitorMediaElement | null>(null);
   const currentPreviewAttemptRef = useRef<PreviewRequestAttempt | null>(null);
@@ -90,7 +101,10 @@ export function ProgramMonitor({ editor, exportControl }: ProgramMonitorProps): 
   const mediaVolume = readyPreviewIsActivePlaybackClip ? primaryAudioLayer?.mediaVolume ?? primaryVisualLayer?.effects.volume ?? null : null;
   const activeVideoStyle: CSSProperties | undefined = activeClipEffects === null ? undefined : {
     opacity: activeClipEffects.opacity,
-    transform: effectCssTransform(activeClipEffects)
+    transform: effectCssTransform(activeClipEffects),
+    // The grade, shown where the change is meant to be visible. Undefined when
+    // the clip is neutral, so the monitor carries no filter that does nothing.
+    filter: effectCssFilter(activeClipEffects)
   };
   const blackOverlayStyle: CSSProperties | undefined = previewState === null || previewState.blackOpacity === 0 ? undefined : {
     background: '#000',
@@ -210,6 +224,19 @@ export function ProgramMonitor({ editor, exportControl }: ProgramMonitorProps): 
     setPreviewRetryRevision((current) => current + 1);
   };
 
+  useEffect(() => {
+    const element = frameRef.current;
+    if (element === null) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry?.contentRect;
+      if (box !== undefined) setFrameSize({ width: box.width, height: box.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const visibleTitles = titlesAt(editor.project?.timeline.titles, editor.playheadMs);
+
   let preview: ReactElement;
   if (asset === null || project === null) {
     preview = <div className="preview-frame__empty">Select an asset or place the playhead over a video clip.</div>;
@@ -257,6 +284,7 @@ export function ProgramMonitor({ editor, exportControl }: ProgramMonitorProps): 
       <div className="monitor-container" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 'var(--space-3)', minHeight: 0 }}>
         {/* Preview Frame */}
         <div 
+          ref={frameRef}
           className="editor-preview-frame" 
           role="group" 
           aria-label="Selected asset and active clip preview"
@@ -264,6 +292,30 @@ export function ProgramMonitor({ editor, exportControl }: ProgramMonitorProps): 
         >
           {preview}
           {blackOverlayStyle === undefined ? null : <div aria-hidden="true" style={blackOverlayStyle} />}
+          {/*
+            Titles, over the picture and under the safe margins — the margins
+            exist to be checked against the words, so they have to stay on top.
+          */}
+          {visibleTitles.length > 0 && (
+            <div className="preview-titles" aria-label="Titles at the playhead">
+              {visibleTitles.map((title) => {
+                const layout = titlePreviewLayout(title, frameSize);
+                return (
+                  <span
+                    key={title.id}
+                    className="preview-title"
+                    style={{
+                      color: title.color,
+                      fontSize: `${layout.fontSizePx}px`,
+                      transform: `translate(${layout.offsetXPx}px, ${layout.offsetYPx}px)`
+                    }}
+                  >
+                    {title.text}
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {showSafeMargins && (
             <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5 }}>
               {/* Action Safe (90%) */}

@@ -1,8 +1,9 @@
 import type { ComponentType } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { timelineDurationMs } from '@openvideo/shared/timelineLogic';
 import { AgentScreen } from './src/screens/AgentScreen';
@@ -59,9 +60,13 @@ type ExportState = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; wher
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <Shell />
-    </SafeAreaProvider>
+    // Required by the gesture handler on Android: without it the timeline's
+    // gestures never reach the handler and the editor is back to guessing.
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider>
+        <Shell />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -83,6 +88,16 @@ function Shell() {
     setConnectionsVersion((version) => version + 1);
   };
   const [exportState, setExportState] = useState<ExportState>({ kind: 'idle' });
+
+  /*
+    Once per launch, and nothing else about it.
+
+    Declared since analytics arrived and never sent, which made every other
+    number impossible to read: exports per what?
+  */
+  useEffect(() => {
+    track('app_opened');
+  }, []);
   /**
    * Where the tab body starts, measured rather than assumed.
    *
@@ -152,6 +167,10 @@ function Shell() {
     prepareExportAd();
     const rendered = await exportTimeline({
       timeline: current.timeline,
+      // The project's own choice, and absent means the footage decides — a cut
+      // of one upright clip comes out upright rather than pillarboxed inside a
+      // landscape frame, which is what this used to do to every phone video.
+      ...(current.frame === undefined ? {} : { frame: current.frame }),
       assets: current.assets.map((asset) => ({
         id: asset.id,
         uri: assetUri(current.id, asset),
@@ -185,8 +204,8 @@ function Shell() {
       Before the export would be an ad in front of an action the user just
       asked for, arriving under a thumb still travelling toward the button they
       pressed; during it would be an ad over a progress state. Both are what
-      AdMob's interstitial policies are written about. Finishing is the one
-      genuine break this app has.
+      the mediated networks' interstitial policies are written about. Finishing
+      is the one genuine break this app has.
 
       A failed export still calls this — with `false`, which shows nothing and
       releases the ad that was loaded for a moment that did not arrive.

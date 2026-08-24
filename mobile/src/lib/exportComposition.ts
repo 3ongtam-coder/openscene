@@ -1,4 +1,6 @@
+import { outputFrameFor, type FramePreference } from '@openvideo/shared/outputFrame';
 import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/videoCompositionPlan';
+import type { CompositionSegment } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
 import * as Sharing from 'expo-sharing';
 import VideoExport, { areStillsRenderable } from '../../modules/video-export';
@@ -37,8 +39,11 @@ export type ExportOutcome =
 export async function exportTimeline(input: {
   readonly timeline: TimelineDocument;
   readonly assets: readonly EditorAsset[];
-  readonly width?: number;
-  readonly height?: number;
+  /**
+   * The frame to render into. Absent means the footage decides — a cut of one
+   * upright clip comes out upright, which is what a phone editor owes its user.
+   */
+  readonly frame?: FramePreference;
   readonly frameRate?: number;
 }): Promise<ExportOutcome> {
   let plan;
@@ -48,8 +53,14 @@ export async function exportTimeline(input: {
       // The plan is built from the timeline, which does not record what an asset
       // is. Without this the native renderer opens a still as a movie.
       stillAssetIds: new Set(input.assets.filter((asset) => asset.kind === 'image').map((asset) => asset.id)),
-      width: input.width ?? 1920,
-      height: input.height ?? 1080,
+      // A video clip's own sound, which used to be dropped: a cut came out
+      // silent unless someone had separately placed an audio clip.
+      //
+      // This is a kind, and a video can perfectly well be silent — so it is a
+      // proposal rather than a fact. The native renderer checks each file before
+      // using its audio, which is the only place the answer actually lives.
+      audibleAssetIds: new Set(input.assets.filter((asset) => asset.kind !== 'image').map((asset) => asset.id)),
+      ...outputFrameFor({ timeline: input.timeline, assets: input.assets, ...(input.frame === undefined ? {} : { preference: input.frame }) }),
       frameRate: input.frameRate ?? 30
     });
   } catch (error) {
@@ -95,14 +106,62 @@ export async function exportTimeline(input: {
     still: stillSources.has(segment.sourceIndex)
   });
 
+  /*
+    What Adjust set, carried through to the renderer.
+
+    The shared plan computes these and the desktop honours all of them, but this
+    bridge used to forward position and timing only — so opacity and scale were
+    dropped here, before any native module could have applied them. A control
+    that changes a stored number and nothing a user can see is worse than one
+    that is absent, and this is where the values were being lost.
+  */
+  const withEffects = (segment: CompositionSegment) => ({
+    ...withUri(segment),
+    // Which layer this is in, bottom first. iOS and the desktop read it off the
+    // order; Android cannot, because a Media3 sequence plays its items in turn
+    // and needs to know where one layer ends and the next begins.
+    layer: segment.layer,
+    opacity: segment.opacity,
+    scale: segment.scale,
+    offsetX: segment.offsetX,
+    offsetY: segment.offsetY,
+    rotationDegrees: segment.rotationDegrees,
+    // Retiming reaches the native modules the same way the other effects do —
+    // through this bridge, which is where opacity and scale were once dropped.
+    speed: segment.speed,
+    // Colour, forwarded like every other effect. Both renderers grade now:
+    // Android with Media3 effects, iOS through a custom compositor, because
+    // AVFoundation's layer instructions carry no colour at all.
+    brightness: segment.brightness,
+    contrast: segment.contrast,
+    saturation: segment.saturation
+  });
+
   try {
     const result = await VideoExport.exportComposition({
       width: plan.width,
       height: plan.height,
       frameRate: plan.frameRate,
       durationMs: plan.durationMs,
-      videoSegments: plan.videoSegments.map(withUri),
-      audioSegments: plan.audioSegments.map((segment) => ({ ...withUri(segment), gain: segment.gain }))
+      videoSegments: plan.videoSegments.map(withEffects),
+      // Sound carries the clip's own rate, so it is retimed with the picture
+      // rather than left running behind it.
+      audioSegments: plan.audioSegments.map((segment) => ({ ...withUri(segment), gain: segment.gain, speed: segment.speed })),
+      // Transitions, already reduced by the plan to the black they put on the
+      // frame. Forwarded rather than derived here: the bridge dropping what the
+      // plan computed is exactly how the clip effects went missing.
+      dips: plan.dips.map((dip) => ({ startMs: dip.startMs, durationMs: dip.durationMs })),
+      // Words over the finished picture. Already in output-frame pixels and
+      // timeline milliseconds, so there is nothing to convert.
+      titles: plan.titles.map((title) => ({
+        text: title.text,
+        timelineStartMs: title.timelineStartMs,
+        timelineEndMs: title.timelineEndMs,
+        sizePx: title.sizePx,
+        color: title.color,
+        positionX: title.positionX,
+        positionY: title.positionY
+      }))
     });
     return { ok: true, uri: result.uri };
   } catch (error) {

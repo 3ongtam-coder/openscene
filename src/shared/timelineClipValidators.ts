@@ -16,7 +16,7 @@ function getBoundedNumber(record: Record<string, unknown>, key: string, min: num
 }
 
 function parseClipEffects(value: unknown): ClipEffects | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['opacity', 'scale', 'positionX', 'positionY', 'rotation', 'volume'])) {
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['opacity', 'scale', 'positionX', 'positionY', 'rotation', 'volume', 'speed', 'brightness', 'contrast', 'saturation'])) {
     return null;
   }
   const opacity = getBoundedNumber(value, 'opacity', CLIP_EFFECT_RANGES.opacity.min, CLIP_EFFECT_RANGES.opacity.max);
@@ -25,9 +25,37 @@ function parseClipEffects(value: unknown): ClipEffects | null {
   const positionY = getBoundedNumber(value, 'positionY', CLIP_EFFECT_RANGES.positionY.min, CLIP_EFFECT_RANGES.positionY.max);
   const rotation = getBoundedNumber(value, 'rotation', CLIP_EFFECT_RANGES.rotation.min, CLIP_EFFECT_RANGES.rotation.max);
   const volume = getBoundedNumber(value, 'volume', CLIP_EFFECT_RANGES.volume.min, CLIP_EFFECT_RANGES.volume.max);
-  return opacity === null || scale === null || positionX === null || positionY === null || rotation === null || volume === null
-    ? null
-    : { opacity, scale, positionX, positionY, rotation, volume };
+  /*
+    Speed is optional, and the two ways it can be absent mean different things.
+
+    Not present at all is every project written before speed existed, and reads
+    as 1 — the key stays off so the document round-trips unchanged. Present but
+    out of range is a document claiming something the editor cannot render, and
+    that is refused like any other bad effect rather than quietly clamped.
+  */
+  const hasSpeed = value.speed !== undefined;
+  const speed = hasSpeed
+    ? getBoundedNumber(value, 'speed', CLIP_EFFECT_RANGES.speed.min, CLIP_EFFECT_RANGES.speed.max)
+    : null;
+
+  /*
+    Colour, on the same terms as speed: absent stays absent so the document
+    round-trips, and present-but-impossible is refused rather than clamped.
+  */
+  const colour: { -readonly [K in 'brightness' | 'contrast' | 'saturation']?: number } = {};
+  for (const key of ['brightness', 'contrast', 'saturation'] as const) {
+    if (value[key] === undefined) continue;
+    const range = CLIP_EFFECT_RANGES[key];
+    const parsed = getBoundedNumber(value, key, range.min, range.max);
+    if (parsed === null) return null;
+    colour[key] = parsed;
+  }
+  if (opacity === null || scale === null || positionX === null || positionY === null || rotation === null || volume === null) {
+    return null;
+  }
+  if (hasSpeed && speed === null) return null;
+  const base = { opacity, scale, positionX, positionY, rotation, volume, ...colour };
+  return speed === null ? base : { ...base, speed };
 }
 
 function parseClipTiming(value: Record<string, unknown>): ClipTiming | null {

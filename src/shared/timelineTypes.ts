@@ -18,6 +18,15 @@ export const CLIP_EFFECT_RANGES = {
   positionY: { min: -10_000, max: 10_000 },
   rotation: { min: 0, max: 360 },
   volume: { min: 0, max: 1 },
+  // Slower than a quarter is a slideshow of held frames, and faster than four
+  // is a source read faster than it can be decoded on a phone.
+  speed: { min: 0.25, max: 4 },
+  // Added, so 0 is neutral and the ends are a stop either way.
+  brightness: { min: -1, max: 1 },
+  // Multiplied, so 1 is neutral. Zero contrast is a flat grey card and zero
+  // saturation is black and white, which is a filter rather than a mistake.
+  contrast: { min: 0, max: 2 },
+  saturation: { min: 0, max: 2 },
   volumeDb: { min: -40, max: 0 }
 } as const;
 
@@ -33,6 +42,30 @@ export type ClipEffects = {
   readonly positionY: number;
   readonly rotation: number;
   readonly volume: number;
+  /**
+   * Playback rate. 2 is twice as fast and half as long on the timeline.
+   *
+   * Optional, because every project written before speed existed has no such
+   * key and must still open unchanged. Absent means 1 everywhere, and
+   * `clipSpeed` is the only place that decides that.
+   *
+   * Unlike every other effect this one changes how much room the clip takes,
+   * which is why the timeline length and the source window are now two separate
+   * questions rather than the same subtraction.
+   */
+  readonly speed?: number;
+  /**
+   * Colour, as three numbers that mean what every grading control means.
+   *
+   * `brightness` is added, `contrast` and `saturation` are multiplied, and all
+   * three are optional: absent is neutral, so a project written before colour
+   * existed opens and saves back byte-identical. Neutral also renders
+   * identically on all three renderers, which is what lets one of them not have
+   * the feature yet without changing anybody's export.
+   */
+  readonly brightness?: number;
+  readonly contrast?: number;
+  readonly saturation?: number;
 };
 
 export const DEFAULT_CLIP_EFFECTS: ClipEffects = Object.freeze({
@@ -42,6 +75,8 @@ export const DEFAULT_CLIP_EFFECTS: ClipEffects = Object.freeze({
   positionY: 0,
   rotation: 0,
   volume: 1
+  // No `speed`. Absent is 1, and leaving the key off keeps every document
+  // written before speed existed byte-identical when it is opened and saved.
 });
 
 export type ClipEffectProperty = (typeof CLIP_EFFECT_PROPERTIES)[number];
@@ -127,10 +162,48 @@ export type AudioTimelineTrack = TimelineTrackBase & {
 
 export type TimelineTrack = VideoTimelineTrack | AudioTimelineTrack;
 
+/**
+ * Words on the picture.
+ *
+ * A title is not an asset — there is no file to import — so it does not fit the
+ * clip model, which is a range of a source. It belongs to the document: what it
+ * says, when it says it, and where.
+ *
+ * The geometry is in output-frame pixels rather than fractions, matching
+ * `ClipEffects.positionX/Y`, so a title placed against a 1920-wide render means
+ * the same distance to every renderer. `positionX/Y` are offsets from the centre
+ * of the frame, which is where a title sits when nobody has moved it.
+ */
+export type TimelineTitle = {
+  readonly id: string;
+  readonly text: string;
+  readonly timelineStartMs: number;
+  readonly timelineEndMs: number;
+  /** Cap height in output-frame pixels. */
+  readonly sizePx: number;
+  /** `#rrggbb`. Validators refuse anything else, because every renderer parses it differently. */
+  readonly color: string;
+  readonly positionX: number;
+  readonly positionY: number;
+};
+
+export const DEFAULT_TITLE: Omit<TimelineTitle, 'id' | 'timelineStartMs' | 'timelineEndMs'> = {
+  text: 'Title',
+  sizePx: 72,
+  color: '#ffffff',
+  positionX: 0,
+  positionY: 0
+};
+
 export type TimelineDocument = {
   readonly schemaVersion: typeof TIMELINE_SCHEMA_VERSION;
   readonly tracks: readonly TimelineTrack[];
   readonly transitions: readonly TransitionDescriptor[];
+  /**
+   * Optional, because every project written before titles existed has none and
+   * must still open. Absent and empty mean the same thing.
+   */
+  readonly titles?: readonly TimelineTitle[];
 };
 
 export type LocalProjectSnapshot = {

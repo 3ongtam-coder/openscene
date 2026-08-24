@@ -5,7 +5,15 @@
  * binding without the composition logic being written twice.
  */
 import { timelineDurationMs } from './timelineLogic';
-import type { AudioTimelineTrack, PersistedTimelineClip, TimelineDocument } from './timelineTypes';
+import { clipColour, isGraded } from './clipColour';
+import { clipSourceSpanMs, clipSpeed, clipTimelineEndMs } from './timelineClipGeometry';
+import type {
+  AudioTimelineTrack,
+  PersistedTimelineClip,
+  TimelineDocument,
+  TimelineTitle,
+  TransitionDescriptor
+} from './timelineTypes';
 
 export type CompileFfmpegTimelineInput = {
   readonly timeline: TimelineDocument;
@@ -20,6 +28,26 @@ export type CompileFfmpegTimelineInput = {
    * written before stills existed means.
    */
   readonly stillAssetIds?: ReadonlySet<string>;
+  /**
+   * Ids of assets that carry an audio stream.
+   *
+   * A video clip's own sound is part of the clip and is placed like any other
+   * audio — but only where there is some. `[i:a:0]` on a source without an audio
+   * stream fails the whole graph, and a still never has one, so a clip whose
+   * asset is not named here contributes picture only.
+   *
+   * Absent means none, which is what every export before this did: a cut came
+   * out silent unless somebody had separately placed an audio clip.
+   */
+  readonly audibleAssetIds?: ReadonlySet<string>;
+  /**
+   * A font file for `drawtext`, which cannot draw without one.
+   *
+   * The desktop renders with whichever FFmpeg the user has, so neither the
+   * filter nor a font is guaranteed. Absent with titles present is refused by
+   * name rather than discovered as a failed export.
+   */
+  readonly titleFontPath?: string;
   readonly outputPath: string;
   readonly width: number;
   readonly height: number;
@@ -39,6 +67,14 @@ function seconds(milliseconds: number): string {
   return Number((milliseconds / 1_000).toFixed(6)).toString();
 }
 
+function findClip(timeline: TimelineDocument, clipId: string): PersistedTimelineClip | null {
+  for (const track of timeline.tracks) {
+    const clip = track.clips.find((candidate) => candidate.id === clipId);
+    if (clip !== undefined) return clip;
+  }
+  return null;
+}
+
 function requireAssetPath(assetPaths: ReadonlyMap<string, string>, assetId: string): string {
   const path = assetPaths.get(assetId);
   if (path === undefined || path.includes('\0')) {
@@ -47,19 +83,198 @@ function requireAssetPath(assetPaths: ReadonlyMap<string, string>, assetId: stri
   return path;
 }
 
-function videoFilter(clip: PersistedTimelineClip, inputIndex: number, outputLabel: string): string {
+/**
+ * The grade, as `eq`, or nothing at all.
+ *
+ * Omitted entirely when the clip is neutral: an `eq` that changes nothing still
+ * costs a pass over every frame, and a graph that reads the same as it did
+ * before colour existed is easier to compare against an older export.
+ */
+function colourFilter(clip: PersistedTimelineClip): readonly string[] {
+  if (!isGraded(clip.effects)) return [];
+  const colour = clipColour(clip.effects);
+  return [
+    `eq=brightness=${colour.brightness}:contrast=${colour.contrast}:saturation=${colour.saturation}`
+  ];
+}
+
+function videoFilter(
+  clip: PersistedTimelineClip,
+  inputIndex: number,
+  outputLabel: string,
+  fades: readonly string[] = []
+): string {
   const start = seconds(clip.sourceStartMs);
   const end = seconds(clip.sourceEndMs);
   const offset = seconds(clip.timelineStartMs);
+  const speed = clipSpeed(clip);
   const rotation = Number((clip.effects.rotation * Math.PI / 180).toFixed(8));
   return [
     `[${inputIndex}:v:0]trim=start=${start}:end=${end}`,
-    `setpts=PTS-STARTPTS+${offset}/TB`,
+    // Retimed before it is offset, so the clip lands where the timeline says
+    // rather than where its original length would have put it.
+    `setpts=(PTS-STARTPTS)/${speed}+${offset}/TB`,
     `scale=w='iw*${clip.effects.scale}':h='ih*${clip.effects.scale}'`,
     'format=rgba',
     `rotate=${rotation}:fillcolor=black@0`,
-    `colorchannelmixer=aa=${clip.effects.opacity}[${outputLabel}]`
+    // Colour before compositing, so the grade applies to the picture rather
+    // than to the picture already faded against black — a clip at 50% opacity
+    // and +0.2 brightness is a brightened clip that is then faded, which is the
+    // order every editor means and the order the other renderers use.
+    ...colourFilter(clip),
+    // The transition ramps come after the clip's own opacity, so they scale it
+    // rather than replace it: a clip held at 50% still dips to nothing.
+    `colorchannelmixer=aa=${clip.effects.opacity}`,
+    ...fades
+  ].join(',') + `[${outputLabel}]`;
+}
+
+/**
+ * A video clip's own sound, which has no track fader behind it.
+ *
+ * An audio track carries a mix — gain, pan, mute — and a video track does not,
+ * so the clip's own volume is the whole story. Written as its own function
+ * rather than a null-check inside the other, because "there is no mix" is a
+ * different fact from "the mix is neutral".
+ */
+function clipOnlyGain(clip: PersistedTimelineClip): number {
+  return Number(clip.effects.volume.toFixed(8));
+}
+
+/**
+ * `atempo`, chained, because one of them only spans half to double.
+ *
+ * FFmpeg's tempo filter refuses anything outside 0.5–2.0, and the honest way to
+ * reach a quarter or four times is to apply it more than once — 4× is two
+ * doublings. Written as a list so a rate inside the range still costs exactly
+ * one filter.
+ */
+function tempoFilters(speed: number): readonly string[] {
+  if (speed === 1) return [];
+  const filters: string[] = [];
+  let remaining = speed;
+  while (remaining > 2) {
+    filters.push('atempo=2');
+    remaining /= 2;
+  }
+  while (remaining < 0.5) {
+    filters.push('atempo=0.5');
+    remaining *= 2;
+  }
+  filters.push(`atempo=${Number(remaining.toFixed(6))}`);
+  return filters;
+}
+
+function videoAudioFilter(clip: PersistedTimelineClip, inputIndex: number, outputLabel: string): string {
+  return [
+    `[${inputIndex}:a:0]atrim=start=${seconds(clip.sourceStartMs)}:end=${seconds(clip.sourceEndMs)}`,
+    'asetpts=PTS-STARTPTS',
+    // Sound follows the picture. A clip at 2× whose audio still runs at 1× is a
+    // sync bug that reads as a broken export.
+    ...tempoFilters(clipSpeed(clip)),
+    `volume=${clipOnlyGain(clip)}`,
+    'aformat=channel_layouts=stereo',
+    `adelay=${clip.timelineStartMs}:all=1[${outputLabel}]`
   ].join(',');
+}
+
+/**
+ * The alpha ramps a transition puts on the clips either side of a cut.
+ *
+ * Timed the way the program monitor times them: the window is the cut plus and
+ * minus half the duration, the outgoing clip fades to nothing over the first
+ * half, and the incoming clip arrives over the second. The base layer is black,
+ * so what a viewer sees is a dip through black — which is what adjacent clips
+ * can honestly do. They do not overlap on the timeline (the rules refuse it), so
+ * there is no instant where both have a picture to dissolve between.
+ *
+ * `fade` rather than `colorchannelmixer`, because the mixer takes a constant and
+ * a transition is the one thing here that is not one. The timestamps are
+ * timeline time: `setpts` has already offset the clip by then.
+ */
+function transitionFades(clip: PersistedTimelineClip, transitions: readonly TransitionDescriptor[]): readonly string[] {
+  const fades: string[] = [];
+  for (const transition of transitions) {
+    // A dip to black is drawn as its own layer over the finished picture, the
+    // way the preview draws it — the clips keep their own opacity.
+    if (transition.type === 'dipToBlack') continue;
+    const halfMs = transition.durationMs / 2;
+    if (halfMs <= 0) continue;
+    if (transition.fromClipId === clip.id) {
+      // The clip's end on the *timeline*: a retimed clip finishes earlier than
+      // its source span would suggest, and a fade timed from the wrong end runs
+      // after the picture has already gone.
+      const startMs = clipTimelineEndMs(clip) - halfMs;
+      fades.push(`fade=t=out:st=${seconds(startMs)}:d=${seconds(halfMs)}:alpha=1`);
+    }
+    if (transition.toClipId === clip.id) {
+      fades.push(`fade=t=in:st=${seconds(clip.timelineStartMs)}:d=${seconds(halfMs)}:alpha=1`);
+    }
+  }
+  return fades;
+}
+
+/**
+ * A dip to black, as a black layer that arrives and leaves.
+ *
+ * Over everything rather than inside one clip: the preview draws it as a scrim
+ * across the whole frame, so a second video track underneath dips too. Matching
+ * that matters more than the fact that a per-clip fade would have been shorter
+ * to write — an export that disagrees with the preview is the bug this whole
+ * change exists to fix.
+ */
+function dipToBlackFilters(
+  transition: TransitionDescriptor,
+  cutMs: number,
+  input: { readonly width: number; readonly height: number; readonly frameRate: number },
+  inputLabel: string,
+  sourceLabel: string,
+  outputLabel: string
+): readonly string[] {
+  const halfMs = transition.durationMs / 2;
+  const startMs = cutMs - halfMs;
+  return [
+    [
+      `color=c=black:s=${input.width}x${input.height}:r=${input.frameRate}:d=${seconds(transition.durationMs)}`,
+      'format=rgba',
+      `fade=t=in:st=0:d=${seconds(halfMs)}:alpha=1`,
+      `fade=t=out:st=${seconds(halfMs)}:d=${seconds(halfMs)}:alpha=1`,
+      `setpts=PTS-STARTPTS+${seconds(startMs)}/TB[${sourceLabel}]`
+    ].join(','),
+    `[${inputLabel}][${sourceLabel}]overlay=x=0:y=0:enable='between(t,${seconds(startMs)},${seconds(cutMs + halfMs)})':eof_action=pass[${outputLabel}]`
+  ];
+}
+
+/**
+ * Escapes a string for `drawtext`'s `text=` option.
+ *
+ * The filter graph is one string, so a colon ends an option, a backslash escapes
+ * and a single quote ends the quoting — a title containing any of them would
+ * otherwise rewrite the command rather than appear in the picture.
+ */
+export function escapeDrawtext(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/%/g, '\\%')
+    .replace(/\n/g, ' ');
+}
+
+function titleFilter(title: TimelineTitle, fontPath: string, inputLabel: string, outputLabel: string): string {
+  // Centred, then offset — the same convention `overlay` uses for a clip, so a
+  // number means the same distance wherever it is applied.
+  const x = `(w-text_w)/2+${Math.round(title.positionX)}`;
+  const y = `(h-text_h)/2+${Math.round(title.positionY)}`;
+  return [
+    `[${inputLabel}]drawtext=fontfile='${fontPath}'`,
+    `text='${escapeDrawtext(title.text)}'`,
+    `fontsize=${Math.round(title.sizePx)}`,
+    `fontcolor=${title.color}`,
+    `x=${x}`,
+    `y=${y}`,
+    `enable='between(t,${seconds(title.timelineStartMs)},${seconds(title.timelineEndMs)})'[${outputLabel}]`
+  ].join(':');
 }
 
 function trackGain(track: AudioTimelineTrack, clip: PersistedTimelineClip): number {
@@ -76,6 +291,7 @@ function audioFilter(track: AudioTimelineTrack, clip: PersistedTimelineClip, inp
   return [
     `[${inputIndex}:a:0]atrim=start=${seconds(clip.sourceStartMs)}:end=${seconds(clip.sourceEndMs)}`,
     'asetpts=PTS-STARTPTS',
+    ...tempoFilters(clipSpeed(clip)),
     `volume=${trackGain(track, clip)}`,
     'aformat=channel_layouts=stereo',
     `pan=stereo|c0=${left}*c0|c1=${right}*c1`,
@@ -97,6 +313,8 @@ export function compileFfmpegTimeline(input: CompileFfmpegTimelineInput): Compil
   const filters: string[] = [];
   const videoClips: Array<{ readonly clip: PersistedTimelineClip; readonly inputIndex: number }> = [];
   const audioClips: Array<{ readonly track: AudioTimelineTrack; readonly clip: PersistedTimelineClip; readonly inputIndex: number }> = [];
+  /** Video clips that carry sound of their own; see `audibleAssetIds`. */
+  const videoAudioClips: Array<{ readonly clip: PersistedTimelineClip; readonly inputIndex: number }> = [];
   let inputIndex = 0;
   // Inputs are declared in timeline order so -i indexes stay stable and
   // predictable; layer order is decided separately, below.
@@ -107,12 +325,20 @@ export function compileFfmpegTimeline(input: CompileFfmpegTimelineInput): Compil
       // The hold has to cover the clip, and the clip cannot run past its source
       // — which for a still is the hold itself — so the two are the same number.
       if (input.stillAssetIds?.has(clip.assetId) === true) {
-        args.push('-loop', '1', '-t', seconds(clip.sourceEndMs - clip.sourceStartMs));
+        // The *source* span, not the timeline length: the frames are trimmed
+        // and then retimed, so a still played at 2× still needs the material
+        // the trim asks for before `setpts` compresses it.
+        args.push('-loop', '1', '-t', seconds(clipSourceSpanMs(clip)));
       }
       args.push('-i', requireAssetPath(input.assetPaths, clip.assetId));
       if (track.kind === 'video') {
         if (clip.effects.opacity > 0 && clip.effects.scale > 0) {
           layer.push({ clip, inputIndex });
+        }
+        // Sound is placed whatever the picture is doing: a clip faded to nothing
+        // still carries its voice, which is how a cutaway works.
+        if (input.audibleAssetIds?.has(clip.assetId) === true && clip.effects.volume > 0) {
+          videoAudioClips.push({ clip, inputIndex });
         }
       } else {
         audioClips.push({ track, clip, inputIndex });
@@ -136,19 +362,57 @@ export function compileFfmpegTimeline(input: CompileFfmpegTimelineInput): Compil
   videoClips.forEach(({ clip, inputIndex: clipInputIndex }, index) => {
     const clipLabel = `video-clip-${index}`;
     const nextLabel = `video-layer-${index}`;
-    filters.push(videoFilter(clip, clipInputIndex, clipLabel));
-    const endMs = clip.timelineStartMs + clip.sourceEndMs - clip.sourceStartMs;
+    filters.push(videoFilter(clip, clipInputIndex, clipLabel, transitionFades(clip, input.timeline.transitions)));
+    // Timeline end, which at anything but 1× is not the source span.
+    const endMs = clipTimelineEndMs(clip);
     const x = `(main_w-overlay_w)/2+${clip.effects.positionX}`;
     const y = `(main_h-overlay_h)/2+${clip.effects.positionY}`;
     filters.push(`[${currentVideoLabel}][${clipLabel}]overlay=x='${x}':y='${y}':enable='between(t,${seconds(clip.timelineStartMs)},${seconds(endMs)})':eof_action=pass[${nextLabel}]`);
     currentVideoLabel = nextLabel;
   });
+  // Dips to black go over the finished picture, in cut order so two of them
+  // cannot fight over the same label.
+  const dips = input.timeline.transitions.filter((transition) => transition.type === 'dipToBlack');
+  dips.forEach((transition, index) => {
+    const toClip = findClip(input.timeline, transition.toClipId);
+    if (toClip === null) return;
+    const nextLabel = `video-dip-${index}`;
+    filters.push(
+      ...dipToBlackFilters(transition, toClip.timelineStartMs, input, currentVideoLabel, `dip-source-${index}`, nextLabel)
+    );
+    currentVideoLabel = nextLabel;
+  });
+  /*
+    Titles last, over everything.
+
+    They are drawn after the clip overlays because a title belongs on top of the
+    picture rather than in it — a caption under a cutaway is still a caption.
+  */
+  const titles = input.timeline.titles ?? [];
+  if (titles.length > 0) {
+    if (input.titleFontPath === undefined || input.titleFontPath.length === 0) {
+      throw new FfmpegTimelineError(
+        'This timeline has titles, and no font was supplied to draw them with.'
+      );
+    }
+    titles.forEach((title, index) => {
+      const next = `title-${index}`;
+      filters.push(titleFilter(title, input.titleFontPath as string, currentVideoLabel, next));
+      currentVideoLabel = next;
+    });
+  }
+
   filters.push(`[${currentVideoLabel}]format=yuv420p[video-out]`);
 
   const audioLabels: string[] = [];
   audioClips.forEach(({ track, clip, inputIndex: clipInputIndex }, index) => {
     const label = `audio-clip-${index}`;
     filters.push(audioFilter(track, clip, clipInputIndex, label));
+    audioLabels.push(`[${label}]`);
+  });
+  videoAudioClips.forEach(({ clip, inputIndex: clipInputIndex }, index) => {
+    const label = `video-audio-${index}`;
+    filters.push(videoAudioFilter(clip, clipInputIndex, label));
     audioLabels.push(`[${label}]`);
   });
   if (audioLabels.length > 0) {

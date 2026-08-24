@@ -3,6 +3,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { formatDuration } from '../format';
 import { buildTimelineView, clientXToTimelineMs } from './editorTimelineView';
 import { buildRulerTicks } from './timelineRulerTicks';
+import { useClipThumbnails } from './clipThumbnails';
+import { useClipWaveform } from './clipWaveform';
+import type { ThumbnailClip } from '../../../shared/clipThumbnails';
+import { clipDurationMs } from '../../../shared/timelineClipGeometry';
 import type { TimelineEditorController } from './useTimelineEditor';
 
 type TimelineCanvasProps = {
@@ -137,6 +141,125 @@ function trackToggleStyle(isOn: boolean, tone: 'danger' | 'warning' | 'primary')
   };
 }
 
+/**
+ * The frames drawn inside a clip.
+ *
+ * Its own component because it holds state — the frames arrive after a decode —
+ * and a clip that re-rendered the whole canvas each time one landed would make
+ * the timeline stutter while it filled in.
+ *
+ * Width comes from the lane, because the clip is sized as a percentage of it and
+ * how many frames fit is a question about pixels.
+ */
+/**
+ * The playback URL for an asset, and never the one before it.
+ *
+ * Held as `{assetId, url}` rather than as a bare string on purpose. A clip
+ * changing which asset it points at leaves the previous URL in state while the
+ * next lookup is in flight, and the reader downstream caches what it decodes
+ * under the *new* id — so one stale render is enough to remember the wrong file
+ * against the right clip, and it stays wrong until the cache is evicted. Pairing
+ * the two makes the mismatch unrepresentable: until the answer matches the asked
+ * question, the answer is null.
+ */
+function useAssetPlaybackUrl(projectId: string, assetId: string): string | null {
+  const [resolved, setResolved] = useState<{ readonly assetId: string; readonly url: string } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void window.videoTool.getAssetPlaybackUrl({ projectId, assetId }).then((response) => {
+      if (live && response.ok) setResolved({ assetId, url: response.value.url });
+    });
+    return () => {
+      live = false;
+    };
+  }, [assetId, projectId]);
+
+  return resolved?.assetId === assetId ? resolved.url : null;
+}
+
+function ClipFilmstrip({
+  assetId,
+  clip,
+  laneWidthPx,
+  projectId,
+  widthPercent
+}: {
+  readonly assetId: string;
+  // Only the source window matters here — which frames to show is a question
+  // about the clip's window into its media, not about its effects.
+  readonly clip: ThumbnailClip;
+  readonly laneWidthPx: number;
+  readonly projectId: string;
+  readonly widthPercent: number;
+}): ReactElement | null {
+  const url = useAssetPlaybackUrl(projectId, assetId);
+
+  const frames = useClipThumbnails({
+    assetId,
+    url,
+    clip,
+    widthPx: (laneWidthPx * widthPercent) / 100
+  });
+  if (frames.length === 0) return null;
+
+  return (
+    <span aria-hidden="true" className="timeline-clip__filmstrip">
+      {frames.map((frame: string, index: number) => (
+        <img key={`${index}-${frame.length}`} src={frame} alt="" />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The shape of a sound, on an audio clip.
+ *
+ * An audio clip was a coloured block with a filename on it, which is nothing to
+ * aim at — the phone drew this first and the desktop kept scrubbing to find a
+ * beat. What to draw comes from `shared/audioPeaks`, so one clip has one shape
+ * on both surfaces; how it is read is each surface's own business.
+ */
+function ClipWaveform({
+  assetId,
+  clip,
+  laneWidthPx,
+  overFrames,
+  projectId,
+  widthPercent
+}: {
+  readonly assetId: string;
+  readonly clip: { readonly sourceStartMs: number; readonly sourceEndMs: number };
+  readonly laneWidthPx: number;
+  /** A video clip keeps its frames; the sound sits in a band along the bottom. */
+  readonly overFrames: boolean;
+  readonly projectId: string;
+  readonly widthPercent: number;
+}): ReactElement | null {
+  const url = useAssetPlaybackUrl(projectId, assetId);
+
+  const peaks = useClipWaveform({
+    assetId,
+    url,
+    clip,
+    widthPx: (laneWidthPx * widthPercent) / 100
+  });
+  if (peaks.length === 0) return null;
+
+  return (
+    <span
+      aria-hidden="true"
+      className={overFrames ? 'timeline-clip__waveform timeline-clip__waveform--strip' : 'timeline-clip__waveform'}
+    >
+      {peaks.map((height: number, index: number) => (
+        // Mirrored about the middle, the way every waveform is drawn: the eye
+        // reads the envelope rather than the individual bar.
+        <span key={index} style={{ height: `${Math.round(height * 90)}%` }} />
+      ))}
+    </span>
+  );
+}
+
 export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElement {
   const project = editor.project;
   const view = project === null ? null : buildTimelineView(project.timeline, project.assets);
@@ -201,6 +324,15 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
   // the pointer stays anchored while the content width scales. Plain and shift
   // wheel keep native scrolling. Attached natively so preventDefault is honored.
   const stackRef = useRef<HTMLDivElement | null>(null);
+  /*
+    The lane's width in pixels, watched rather than assumed.
+
+    Clips are laid out as percentages of the lane, but how many frames fit
+    inside one is a question about pixels — and the answer changes with every
+    splitter drag and zoom step, so a value read once is wrong for the rest of
+    the session.
+  */
+  const [laneWidthPx, setLaneWidthPx] = useState(0);
   const zoomAnchorRef = useRef<{ anchorX: number; scrollLeft: number; previousZoom: number } | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
   zoomLevelRef.current = zoomLevel;
@@ -463,7 +595,10 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
       ) : (
         <div
           className="timeline-stack"
-          ref={stackRef}
+          ref={(element) => {
+            stackRef.current = element;
+            if (element !== null) setLaneWidthPx(element.clientWidth);
+          }}
           onPointerDown={onStackPointerDown}
           onPointerMove={onStackPointerMove}
           onPointerUp={onStackPointerUp}
@@ -808,11 +943,35 @@ export function TimelineCanvas({ editor, id }: TimelineCanvasProps): ReactElemen
                       }}
                       style={{ left: `${block.leftPercent}%`, width: `${Math.max(block.widthPercent, 2)}%`, cursor: activeTool === 'razor' ? 'crosshair' : undefined }}
                       title={`${block.assetName} starts at ${formatDuration(block.clip.timelineStartMs)}`}
-                      aria-label={`${block.assetName}, ${block.kind} clip from ${formatDuration(block.clip.timelineStartMs)} for ${formatDuration(block.clip.sourceEndMs - block.clip.sourceStartMs)}`}
+                      aria-label={`${block.assetName}, ${block.kind} clip from ${formatDuration(block.clip.timelineStartMs)} for ${formatDuration(clipDurationMs(block.clip))}`}
                     >
+                      {track.kind === 'video' && editor.project !== null && (
+                        <ClipFilmstrip
+                          assetId={block.clip.assetId}
+                          clip={block.clip}
+                          laneWidthPx={laneWidthPx}
+                          projectId={editor.project.id}
+                          widthPercent={block.widthPercent}
+                        />
+                      )}
+                      {/*
+                        On both kinds, because a video clip's own sound is most
+                        of the sound in a cut — the phone draws it the same way,
+                        as a band along the bottom where the frames stay visible.
+                      */}
+                      {editor.project !== null && (
+                        <ClipWaveform
+                          assetId={block.clip.assetId}
+                          clip={block.clip}
+                          laneWidthPx={laneWidthPx}
+                          overFrames={track.kind === 'video'}
+                          projectId={editor.project.id}
+                          widthPercent={block.widthPercent}
+                        />
+                      )}
                       <span className="timeline-clip__handle timeline-clip__handle--left" draggable={!lockedTracks[track.id] && activeTool === 'select'} onDragStart={(event) => writeTimelineDrag(event, { kind: 'trim', clipId: block.clip.id, edge: 'left' })} aria-hidden="true" />
                       <strong>{block.assetName}</strong>
-                      <small>{formatDuration(block.clip.sourceEndMs - block.clip.sourceStartMs)}</small>
+                      <small>{formatDuration(clipDurationMs(block.clip))}</small>
                       <span className="timeline-clip__handle timeline-clip__handle--right" draggable={!lockedTracks[track.id] && activeTool === 'select'} onDragStart={(event) => writeTimelineDrag(event, { kind: 'trim', clipId: block.clip.id, edge: 'right' })} aria-hidden="true" />
                     </button>
                   ))}

@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Dimensions, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Gesture, GestureDetector, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 
 import { nextVisualBoundaryMs } from '@openvideo/shared/timelinePlayback';
+import { clipDurationMs, clipTimelineEndMs } from '@openvideo/shared/timelineClipGeometry';
+import { titlesAt } from '@openvideo/shared/titlePreviewLayout';
+import { track } from '../lib/analyticsClient';
 import { theme } from '../lib/theme';
 import { useMobileEditor, type EditorAsset } from '../lib/editorState';
 import {
@@ -19,10 +23,89 @@ import { TimelineClip } from '../components/TimelineClip';
 import { MediaLibrary } from '../components/MediaLibrary';
 import { TimelineRuler } from '../components/TimelineRuler';
 import { PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from '../components/Icon';
-import { press, slopFor } from '../lib/touch';
+import { MIN_TAP, press, slopFor } from '../lib/touch';
+import { dipToBlackOpacityAt, transitionAlphaForClip } from '@openvideo/shared/timelineTransitionLogic';
+import { TRANSITION_TYPES } from '@openvideo/shared/timelineTypes';
+import type { TransitionDescriptor, TransitionType } from '@openvideo/shared/timelineTypes';
+
+/** Named here rather than at the buttons, so the two surfaces read the same. */
+const TRANSITION_LABELS: Readonly<Record<TransitionType, string>> = {
+  fade: 'Fade',
+  crossfade: 'Crossfade',
+  dipToBlack: 'Dip to black'
+};
+import { CLIP_EFFECT_RANGES } from '@openvideo/shared/timelineTypes';
+import { outputFrameFor, type FramePreference } from '@openvideo/shared/outputFrame';
+
+/** In the order the row cycles: the common answer first. */
+const FRAME_ORDER = ['source', 'portrait', 'landscape', 'square'] as const;
+
+const FRAME_LABELS: Readonly<Record<FramePreference, string>> = {
+  source: 'Source',
+  portrait: 'Portrait',
+  landscape: 'Landscape',
+  square: 'Square'
+};
+
+/**
+ * Whether this phone's renderer applies a grade.
+ *
+ * Both do now. Android grades with Media3 effects; iOS draws its own frames
+ * through Core Image, because AVFoundation's layer instructions carry a
+ * transform and an opacity and no colour at all — which is why these controls
+ * spent a release disabled on iOS with the reason on screen.
+ */
+const COLOUR_IS_RENDERED = true;
+
+/**
+ * A quarter turn, wrapped.
+ *
+ * The stored range is 0–360 and 360 is the same picture as 0, so turning past
+ * either end comes back round rather than stopping — a control that refuses the
+ * fourth tap after three would read as broken.
+ */
+function turn(rotation: number, by: number): number {
+  return (Math.round(rotation) + by + 360) % 360;
+}
+
+/** How far one tap moves a clip, in output-frame pixels. */
+const POSITION_STEP_PX = 40;
+
+/** A nudge, held inside what the renderers accept. */
+function nudge(value: number, delta: number): number {
+  const range = CLIP_EFFECT_RANGES.positionX;
+  return Math.min(range.max, Math.max(range.min, Math.round(value) + delta));
+}
+
+/** One step of a colour control, held inside what the renderers accept. */
+function stepColour(value: number, delta: number, key: 'brightness' | 'contrast' | 'saturation'): number {
+  const range = CLIP_EFFECT_RANGES[key];
+  return Number(Math.min(range.max, Math.max(range.min, value + delta)).toFixed(2));
+}
+import type { TimelineTitle } from '@openvideo/shared/timelineTypes';
+
+/**
+ * The colours a title may be, as swatches.
+ *
+ * A hex field on a touch keyboard is a way to type `#fffff` and be told no, so
+ * the choice is made from a row instead — white and black for captions over any
+ * picture, and the app's own accents for the rest.
+ */
+const TITLE_COLORS = ['#ffffff', '#000000', theme.accent, theme.mint, theme.warn, theme.danger] as const;
 
 const TRACK_HEIGHT = { video: 60, audio: 44 } as const;
-const RAIL = 92;
+/*
+  A chip, not a rail.
+
+  92pt of track headers is a quarter of a phone's width spent repeating
+  "Video 1" and "Audio 1". Identity is worth keeping — a clip on the wrong track
+  is a real mistake — but it is worth two characters, not a column. Track-level
+  actions move to a sheet the chip opens, which is where a phone editor puts
+  things that apply to the thing you just touched.
+*/
+const RAIL = 36;
+/** Matches `TimelineRuler`'s own height, so the two columns stay in step. */
+const RULER_HEIGHT = 29;
 
 /**
  * The timeline controls stay small on purpose — a row of 44pt buttons above the
@@ -35,6 +118,17 @@ const STEPPER_SLOP = slopFor(36);
 // horizontal slop on both would overlap and the taps would land on whichever
 // happened to be drawn last.
 const RAIL_SLOP = { top: 11, bottom: 11, left: 2, right: 2 } as const;
+
+/**
+ * "Video 1" in the width of a chip.
+ *
+ * The number is what distinguishes one track from another; the word is the same
+ * on every row and can be carried by a letter.
+ */
+function shortTrackName(name: string, kind: 'video' | 'audio'): string {
+  const digits = name.match(/\d+/)?.[0] ?? '';
+  return `${kind === 'video' ? 'V' : 'A'}${digits}`;
+}
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms / 100) / 10);
@@ -61,8 +155,65 @@ export function EditScreen({
   const [playing, setPlaying] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [inspecting, setInspecting] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const [titling, setTitling] = useState(false);
+  const [framePreference, setFramePreference] = useState<FramePreference>('source');
+
+  // Read once per project: the choice belongs to the project, not to this screen.
+  useEffect(() => {
+    if (projectId === null) return;
+    setFramePreference(readProject(projectId)?.frame ?? 'source');
+  }, [projectId, reloadToken]);
+
+  /*
+    What this cut would export as, so the row shows a size rather than a word.
+
+    From the editor's own assets rather than the media bin's list: the bin is
+    loaded when the project opens and is stale the moment something is imported,
+    which had this row claiming 1920×1080 over a clip that was plainly upright.
+    The editor's list is the one the timeline is drawn from, so it is the one
+    that agrees with what the export will do.
+  */
+  const exportFrame = outputFrameFor({
+    timeline: editor.timeline,
+    assets: editor.assets,
+    preference: framePreference
+  });
+
+  const cycleFrame = useCallback(() => {
+    if (projectId === null) return;
+    const next = FRAME_ORDER[(FRAME_ORDER.indexOf(framePreference) + 1) % FRAME_ORDER.length] as FramePreference;
+    setFramePreference(next);
+    // Whether people leave the frame to the footage or ask for something else,
+    // as flags — the choice is a small closed set, not free text.
+    track('export_frame_changed', {
+      source: next === 'source',
+      portrait: next === 'portrait',
+      landscape: next === 'landscape',
+      square: next === 'square'
+    });
+    const project = readProject(projectId);
+    if (project !== null) writeProject({ ...project, frame: next });
+  }, [framePreference, projectId]);
+  /** The title covering the playhead, which is the one the panel and preview both show. */
+  const activeTitle = editor.titleAtPlayhead;
   const [dragging, setDragging] = useState(false);
   const [zooming, setZooming] = useState(false);
+  /** Which track's actions are open, if any. */
+  const [trackSheet, setTrackSheet] = useState<string | null>(null);
+  /** The tools that are not the four anyone reaches for. */
+  const [moreOpen, setMoreOpen] = useState(false);
+  /** A third of the screen: enough for three steppers, never enough to swallow the lanes. */
+  const inspectorMaxHeight = Math.round(Dimensions.get('window').height / 3);
+  /*
+    The lane scroller's own gesture, named so a clip drag can outrank it.
+
+    Precedence used to be settled by whoever won the responder race, and the
+    winner was not the same twice: one drag moved a clip, the next scrolled the
+    timeline and left the clip alone. Declaring it removes the race rather than
+    tuning it.
+  */
+  const laneScroll = useMemo(() => Gesture.Native(), []);
   /** Visible width of the lane area, for the fit-to-window zoom. */
   const laneWidth = useRef(0);
   const scroller = useRef<ScrollView>(null);
@@ -214,7 +365,7 @@ export function EditScreen({
     }
     const edges = editor.timeline.tracks
       .filter((track) => track.kind === 'video')
-      .flatMap((track) => track.clips.flatMap((clip) => [clip.timelineStartMs, clip.sourceEndMs - clip.sourceStartMs + clip.timelineStartMs]))
+      .flatMap((track) => track.clips.flatMap((clip) => [clip.timelineStartMs, clipTimelineEndMs(clip)]))
       .filter((edge) => edge < editor.playheadMs - 1);
     setPlayheadMs(edges.length === 0 ? 0 : Math.max(...edges));
   };
@@ -246,6 +397,12 @@ export function EditScreen({
       kind: 'video'
     });
     writeProject({ ...project, assets: [...project.assets, stored] });
+    // How long a clip people bring in, and the shape of it. Never its name or
+    // where it came from.
+    track('clip_imported', {
+      seconds: stored.durationMs / 1_000,
+      portrait: stored.height > stored.width
+    });
 
     const asset: EditorAsset = {
       id: stored.id,
@@ -282,6 +439,29 @@ export function EditScreen({
         playing={playing && visible !== null && visibleAsset?.kind !== 'image'}
         onProgress={onProgress}
         onEnded={onEnded}
+        // What Adjust changes, shown where the change is supposed to be visible.
+        // 1920 is the width `exportComposition` renders into when a project does
+        // not say otherwise, and `positionX/Y` are pixels in that frame.
+        effects={
+          visible === null
+            ? undefined
+            : {
+                // The transition ramp multiplies the clip's own opacity, which
+                // is what the export does — the preview has to agree with the
+                // file or the control is a lie.
+                opacity:
+                  visible.clip.effects.opacity *
+                  transitionAlphaForClip(editor.timeline, visible.clip.id, editor.playheadMs),
+                scale: visible.clip.effects.scale,
+                positionX: visible.clip.effects.positionX,
+                positionY: visible.clip.effects.positionY,
+                rotation: visible.clip.effects.rotation
+              }
+        }
+        frameWidth={1920}
+        // A dip to black sits over everything, the way it does on the desktop.
+        dimOpacity={dipToBlackOpacityAt(editor.timeline, editor.playheadMs)}
+        titles={titlesAt(editor.timeline.titles, editor.playheadMs)}
       />
 
       <View style={styles.transport}>
@@ -363,11 +543,40 @@ export function EditScreen({
         <Tool label="Split" onPress={editor.splitAtPlayhead} disabled={selected === null} />
         <Tool label="Adjust" onPress={() => setInspecting((open) => !open)} disabled={selected === null} />
         <Tool label="Delete" tone="danger" onPress={editor.deleteSelected} disabled={selected === null} />
-        <Tool label="Undo" onPress={editor.undo} disabled={!editor.canUndo} />
-        <Tool label="Redo" onPress={editor.redo} disabled={!editor.canRedo} />
-        <Tool label="Media" onPress={() => setMediaOpen((open) => !open)} disabled={projectId === null} />
-        <Tool label="+ Video" onPress={() => editor.addTrack('video')} />
-        <Tool label="+ Audio" onPress={() => editor.addTrack('audio')} />
+        {/*
+          Transition earns a place in the toolbar rather than the More sheet: it
+          is an edit you make while looking at a cut, and a sheet closes the
+          timeline you were looking at. Disabled away from a cut rather than
+          hidden — a control that appears and disappears as the playhead moves
+          reads as a glitch, not as a rule.
+        */}
+        <Tool
+          label="Transition"
+          onPress={() => {
+            setTransitioning((open) => !open);
+            setInspecting(false);
+          }}
+          disabled={editor.cutAtPlayhead === null}
+        />
+        {/*
+          One button for two things, because on a phone they are the same
+          intention: caption this moment. If a title already covers the
+          playhead it opens for editing; if none does, one is made first, so
+          the words appear without a second tap on a second control.
+
+          In the toolbar rather than the More sheet, for the reason Transition
+          is: it is an edit you make while looking at the picture, and a sheet
+          covers what you were looking at.
+        */}
+        <Tool
+          label="Title"
+          onPress={() => {
+            if (editor.titleAtPlayhead === null) editor.addTitleAtPlayhead();
+            setTitling(true);
+            setInspecting(false);
+          }}
+        />
+        <Tool label="More" onPress={() => setMoreOpen((open) => !open)} />
       </ScrollView>
 
       {editor.message !== null && <Text style={styles.message}>{editor.message}</Text>}
@@ -388,8 +597,260 @@ export function EditScreen({
         />
       )}
 
+      <ScrollView
+        style={styles.timelineVertical}
+        contentContainerStyle={styles.timelineRow}
+        onLayout={(event) => {
+          laneWidth.current = event.nativeEvent.layout.width - RAIL;
+        }}
+      >
+        {/*
+          The track headers are pinned beside the lanes rather than scrolling
+          with them.
+
+          They used to sit inside the horizontal ScrollView, so a few hundred
+          pixels of scrolling took "Video 1" and "Audio 1" off screen and the
+          clips ran to the edge with nothing to say which track they were on.
+          A header that scrolls away is a header that is not doing its job.
+        */}
+        <View style={styles.railColumn}>
+          <View style={styles.rulerRail} />
+          {editor.timeline.tracks.map((track) => (
+            <Pressable
+              key={track.id}
+              accessibilityRole="button"
+              accessibilityLabel={`${track.name} options`}
+              onPress={() => setTrackSheet(track.id)}
+              style={press([styles.rail, { minHeight: TRACK_HEIGHT[track.kind] }])}
+            >
+              {/*
+                Muting is shown by dimming the label rather than by a second,
+                smaller word. Text small enough to fit under this one would be
+                below the size anything on this surface is allowed to be, and a
+                label nobody can read is not a label.
+              */}
+              <Text style={[styles.railName, track.kind === 'audio' && track.mix.muted && styles.railMuted]}>
+                {shortTrackName(track.name, track.kind)}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <GestureDetector gesture={laneScroll}>
+        <GestureScrollView
+          ref={scroller}
+          style={styles.laneScroller}
+          horizontal
+          showsHorizontalScrollIndicator
+          // Frozen while a clip is being dragged or the timeline is being
+          // pinched, or the scroll view steals the pan the moment a finger
+          // moves sideways.
+          scrollEnabled={!dragging && !zooming}
+          scrollEventThrottle={16}
+          onScroll={(event) => {
+            scrollX.current = event.nativeEvent.contentOffset.x;
+          }}
+          contentContainerStyle={{ width: timelineWidth }}
+        >
+          <View style={styles.lanes} {...zoomResponder.panHandlers}>
+            {/* Scrubbing lives on the ruler because a timeline whose lanes are
+                full of clips has no empty lane left to tap. */}
+            <Pressable
+              style={styles.rulerLane}
+              onPress={(event) => setPlayheadMs(Math.max(0, event.nativeEvent.locationX / pxPerMs))}
+            >
+              <TimelineRuler durationMs={editor.durationMs} pxPerMs={pxPerMs} width={timelineWidth} />
+            </Pressable>
+            {editor.timeline.tracks.map((track) => (
+              <View key={track.id} style={[styles.lane, { minHeight: TRACK_HEIGHT[track.kind] }]}>
+                {/*
+                  The scrub target sits *behind* the clips rather than around
+                  them.
+
+                  As their parent it took their touches: a drag on a clip came
+                  back as a lane press, which scrubbed and cleared the selection —
+                  and an unselected clip cannot be dragged, so the next drag did
+                  the same thing again. A background is the right shape for
+                  "tapping where there is no clip".
+                */}
+                <Pressable
+                  style={styles.laneBackground}
+                  onPress={(event) => {
+                    setPlayheadMs(Math.max(0, event.nativeEvent.locationX / pxPerMs));
+                    editor.setSelectedClipId(null);
+                  }}
+                />
+                {track.clips.map((clip) => (
+                  <TimelineClip
+                    key={clip.id}
+                    clip={clip}
+                    kind={track.kind}
+                    pxPerMs={pxPerMs}
+                    selected={clip.id === editor.selectedClipId}
+                    label={editor.assetFor(clip.assetId)?.displayName ?? clip.assetId}
+                    assetUri={editor.assetFor(clip.assetId)?.uri ?? null}
+                    still={editor.assetFor(clip.assetId)?.kind === 'image'}
+                    onSelect={() => editor.setSelectedClipId(clip.id)}
+                    onMove={(startMs) => editor.moveClipTo(clip.id, track.id, startMs)}
+                    onTrim={(edge, atMs) => editor.trimClipTo(clip.id, edge, atMs)}
+                    scrollGesture={laneScroll}
+                    onDragStateChange={setDragging}
+                  />
+                ))}
+              </View>
+            ))}
+            <View pointerEvents="none" style={[styles.playhead, { left: editor.playheadMs * pxPerMs }]} />
+          </View>
+        </GestureScrollView>
+        </GestureDetector>
+
+        {projectId === null ? (
+          <Text style={styles.empty}>Open a project from the Projects tab to start editing.</Text>
+        ) : (
+          editor.timeline.tracks.every((track) => track.clips.length === 0) && (
+            <Text style={styles.empty}>
+              Import a clip, or generate one under Video. Drag a clip to move it; drag its ends to trim.
+            </Text>
+          )
+        )}
+      </ScrollView>
+      {transitioning && editor.cutAtPlayhead !== null && (
+        <TransitionPanel
+          cutMs={editor.cutAtPlayhead.cutMs}
+          transition={editor.transitionAtPlayhead}
+          maxHeight={inspectorMaxHeight}
+          onSet={(type, durationMs) => editor.setTransition(type, durationMs)}
+          onRemove={() => {
+            editor.removeTransition();
+            setTransitioning(false);
+          }}
+          onClose={() => setTransitioning(false)}
+        />
+      )}
+      {/*
+        Track actions, where the track was touched.
+
+        They used to be two buttons crammed into a 92pt rail on every row; most
+        of that column existed to hold them. A sheet costs a tap and gives the
+        width back to the thing being edited.
+      */}
+      {/*
+        The rest of the tools, behind one.
+
+        Nine in a horizontal scroll meant four or five on screen and the others
+        behind a bar that does not look scrollable — undo and redo among them,
+        which is not where a person expects to hunt. The four that carry an edit
+        stay out; the rest are a tap away and, being a list, are all visible at
+        once when they are.
+      */}
+      {moreOpen && (
+        <View style={styles.trackSheet}>
+          <Text style={styles.inspectorTitle}>More</Text>
+          <Pressable accessibilityRole="button" disabled={!editor.canUndo} onPress={editor.undo} style={press(styles.sheetRow)}>
+            <Text style={[styles.sheetRowText, !editor.canUndo && styles.sheetDisabled]}>Undo</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" disabled={!editor.canRedo} onPress={editor.redo} style={press(styles.sheetRow)}>
+            <Text style={[styles.sheetRowText, !editor.canRedo && styles.sheetDisabled]}>Redo</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={projectId === null}
+            onPress={() => {
+              setMediaOpen((open) => !open);
+              setMoreOpen(false);
+            }}
+            style={press(styles.sheetRow)}
+          >
+            <Text style={[styles.sheetRowText, projectId === null && styles.sheetDisabled]}>Media bin</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => editor.addTrack('video')} style={press(styles.sheetRow)}>
+            <Text style={styles.sheetRowText}>Add a video track</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => editor.addTrack('audio')} style={press(styles.sheetRow)}>
+            <Text style={styles.sheetRowText}>Add an audio track</Text>
+          </Pressable>
+          {/*
+            The shape the export comes out.
+
+            One row that cycles rather than four that sit there: the answer is
+            usually "the footage", and the other three exist for a cut made for
+            somewhere in particular. The frame it would use right now is shown
+            beside the choice, because "Source" on its own tells you nothing
+            about what you are going to get.
+          */}
+          <Pressable accessibilityRole="button" onPress={cycleFrame} style={press(styles.sheetRow)}>
+            <Text style={styles.sheetRowText}>
+              {`Frame: ${FRAME_LABELS[framePreference]} · ${exportFrame.width}×${exportFrame.height}`}
+            </Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => setMoreOpen(false)} style={press(styles.sheetRow)}>
+            <Text style={styles.sheetRowText}>Close</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {trackSheet !== null && (
+        <View style={styles.trackSheet}>
+          {(() => {
+            const track = editor.timeline.tracks.find((candidate) => candidate.id === trackSheet);
+            if (track === undefined) return null;
+            return (
+              <>
+                <Text style={styles.inspectorTitle}>{track.name}</Text>
+                {track.kind === 'audio' && (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => editor.setTrackMuted(track.id, !track.mix.muted)}
+                    style={press(styles.sheetRow)}
+                  >
+                    <Text style={styles.sheetRowText}>{track.mix.muted ? 'Unmute this track' : 'Mute this track'}</Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    editor.removeTrack(track.id);
+                    setTrackSheet(null);
+                  }}
+                  style={press(styles.sheetRow)}
+                >
+                  <Text style={[styles.sheetRowText, styles.sheetDanger]}>Remove this track</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => setTrackSheet(null)} style={press(styles.sheetRow)}>
+                  <Text style={styles.sheetRowText}>Close</Text>
+                </Pressable>
+              </>
+            );
+          })()}
+        </View>
+      )}
+
+      {titling && activeTitle !== null && (
+        <TitlePanel
+          title={activeTitle}
+          maxHeight={inspectorMaxHeight}
+          onChange={(changes) => editor.editTitle(activeTitle.id, changes)}
+          onRemove={() => {
+            editor.removeTitle(activeTitle.id);
+            setTitling(false);
+          }}
+          onClose={() => setTitling(false)}
+        />
+      )}
       {inspecting && selected !== null && (
-        <View style={styles.inspector}>
+        /*
+          Scrolls, and is capped.
+
+          Five steppers pushed the lanes down behind the ad banner, leaving a
+          strip of timeline too short to work in — the panel took the space from
+          the thing it was meant to be adjusting. Now it takes at most a third
+          of the screen and scrolls inside that, so the timeline keeps its room.
+        */
+        <ScrollView
+          style={[styles.inspector, { maxHeight: inspectorMaxHeight }]}
+          contentContainerStyle={styles.inspectorContent}
+          keyboardShouldPersistTaps="handled"
+        >
           <Text style={styles.inspectorTitle}>Selected clip</Text>
           <Stepper
             label="Opacity"
@@ -403,119 +864,290 @@ export function EditScreen({
             onDown={() => editor.setSelectedEffects({ scale: Math.max(0.1, selected.clip.effects.scale - 0.1) })}
             onUp={() => editor.setSelectedEffects({ scale: Math.min(4, selected.clip.effects.scale + 0.1) })}
           />
+          {/*
+            Straightening a clip, and moving it in the frame.
+
+            Quarter turns rather than a fine angle: what a phone actually needs
+            is a clip filmed sideways set upright, and a degree at a time on a
+            stepper is a control nobody finishes using. The odd angle stays a
+            desktop job.
+
+            The position steps are output-frame pixels — the units the plan and
+            all three renderers already mean — so 40 is the same distance here
+            as it is in an exported file.
+          */}
+          <Stepper
+            label="Rotate"
+            value={`${Math.round(selected.clip.effects.rotation)}°`}
+            onDown={() => editor.setSelectedEffects({ rotation: turn(selected.clip.effects.rotation, -90) })}
+            onUp={() => editor.setSelectedEffects({ rotation: turn(selected.clip.effects.rotation, 90) })}
+          />
+          <Stepper
+            label="Left/Right"
+            value={`${Math.round(selected.clip.effects.positionX)}px`}
+            onDown={() => editor.setSelectedEffects({ positionX: nudge(selected.clip.effects.positionX, -POSITION_STEP_PX) })}
+            onUp={() => editor.setSelectedEffects({ positionX: nudge(selected.clip.effects.positionX, POSITION_STEP_PX) })}
+          />
+          <Stepper
+            label="Up/Down"
+            value={`${Math.round(selected.clip.effects.positionY)}px`}
+            onDown={() => editor.setSelectedEffects({ positionY: nudge(selected.clip.effects.positionY, -POSITION_STEP_PX) })}
+            onUp={() => editor.setSelectedEffects({ positionY: nudge(selected.clip.effects.positionY, POSITION_STEP_PX) })}
+          />
+          {/*
+            Length and start as numbers, because the handles are not always
+            reachable.
+
+            Trimming was only ever possible by grabbing a 22pt edge, and zooming
+            in to place a cut precisely is exactly what pushes that edge off
+            screen — so the more precisely someone wanted to trim, the less able
+            they were to. A tenth of a second per press is the resolution the
+            readout already shows.
+          */}
+          <Stepper
+            label="Start"
+            value={formatMs(selected.clip.timelineStartMs)}
+            onDown={() => editor.moveClipTo(selected.clip.id, selected.trackId, selected.clip.timelineStartMs - 100)}
+            onUp={() => editor.moveClipTo(selected.clip.id, selected.trackId, selected.clip.timelineStartMs + 100)}
+          />
+          <Stepper
+            label="Length"
+            value={formatMs(clipDurationMs(selected.clip))}
+            onDown={() =>
+              editor.trimClipTo(
+                selected.clip.id,
+                'right',
+                clipTimelineEndMs(selected.clip) - 100
+              )
+            }
+            onUp={() =>
+              editor.trimClipTo(
+                selected.clip.id,
+                'right',
+                clipTimelineEndMs(selected.clip) + 100
+              )
+            }
+          />
+          {/*
+            Speed changes how much room the clip takes, so the Length readout
+            above it moves as this does — which is the clearest way to say what
+            retiming actually means.
+          */}
+          <Stepper
+            label="Speed"
+            value={`${(selected.clip.effects.speed ?? 1).toFixed(2)}×`}
+            onDown={() =>
+              editor.setSelectedEffects({
+                speed: Math.max(CLIP_EFFECT_RANGES.speed.min, Number(((selected.clip.effects.speed ?? 1) - 0.25).toFixed(2)))
+              })
+            }
+            onUp={() =>
+              editor.setSelectedEffects({
+                speed: Math.min(CLIP_EFFECT_RANGES.speed.max, Number(((selected.clip.effects.speed ?? 1) + 0.25).toFixed(2)))
+              })
+            }
+          />
+          {/*
+            Colour, and the one thing this app cannot do on every phone.
+
+            Android grades; iOS composes with layer instructions, which carry a
+            transform and an opacity and no colour at all, so grading there
+            needs a compositor that does not exist yet. The controls are shown
+            disabled with the reason rather than hidden — a control that is
+            absent on one platform and present on another is a bug report
+            waiting to happen, and one that silently does nothing is worse.
+          */}
+          <Stepper
+            label="Brightness"
+            value={(selected.clip.effects.brightness ?? 0).toFixed(2)}
+            onDown={() => editor.setSelectedEffects({ brightness: stepColour(selected.clip.effects.brightness ?? 0, -0.1, 'brightness') })}
+            onUp={() => editor.setSelectedEffects({ brightness: stepColour(selected.clip.effects.brightness ?? 0, 0.1, 'brightness') })}
+          />
+          <Stepper
+            label="Contrast"
+            value={(selected.clip.effects.contrast ?? 1).toFixed(2)}
+            onDown={() => editor.setSelectedEffects({ contrast: stepColour(selected.clip.effects.contrast ?? 1, -0.1, 'contrast') })}
+            onUp={() => editor.setSelectedEffects({ contrast: stepColour(selected.clip.effects.contrast ?? 1, 0.1, 'contrast') })}
+          />
+          <Stepper
+            label="Saturation"
+            value={(selected.clip.effects.saturation ?? 1).toFixed(2)}
+            onDown={() => editor.setSelectedEffects({ saturation: stepColour(selected.clip.effects.saturation ?? 1, -0.1, 'saturation') })}
+            onUp={() => editor.setSelectedEffects({ saturation: stepColour(selected.clip.effects.saturation ?? 1, 0.1, 'saturation') })}
+          />
+          {/*
+            Said out loud rather than approximated. React Native has no colour
+            filter, and a preview that showed roughly the right brightness and
+            nothing of saturation would be a preview that disagrees with the
+            file — which is the failure this editor keeps being caught by.
+          */}
+          <Text style={styles.panelNote}>Colour applies to the export. The preview does not show it yet.</Text>
           <Stepper
             label="Volume"
             value={`${Math.round(selected.clip.effects.volume * 100)}%`}
             onDown={() => editor.setSelectedEffects({ volume: Math.max(0, selected.clip.effects.volume - 0.1) })}
             onUp={() => editor.setSelectedEffects({ volume: Math.min(2, selected.clip.effects.volume + 0.1) })}
           />
-        </View>
-      )}
-
-      <ScrollView
-        style={styles.timelineVertical}
-        onLayout={(event) => {
-          laneWidth.current = event.nativeEvent.layout.width - RAIL;
-        }}
-      >
-        <ScrollView
-          ref={scroller}
-          horizontal
-          showsHorizontalScrollIndicator
-          // Frozen while a clip is being dragged or the timeline is being
-          // pinched, or the scroll view steals the pan the moment a finger
-          // moves sideways.
-          scrollEnabled={!dragging && !zooming}
-          scrollEventThrottle={16}
-          onScroll={(event) => {
-            scrollX.current = event.nativeEvent.contentOffset.x;
-          }}
-          contentContainerStyle={{ width: timelineWidth + RAIL }}
-        >
-          <View style={styles.tracks} {...zoomResponder.panHandlers}>
-            {/* Scrubbing lives on the ruler because a timeline whose lanes are
-                full of clips has no empty lane left to tap. */}
-            <View style={styles.rulerRow}>
-              <View style={styles.rulerRail} />
-              <Pressable
-                style={styles.rulerLane}
-                onPress={(event) => setPlayheadMs(Math.max(0, event.nativeEvent.locationX / pxPerMs))}
-              >
-                <TimelineRuler durationMs={editor.durationMs} pxPerMs={pxPerMs} width={timelineWidth} />
-              </Pressable>
-            </View>
-            {editor.timeline.tracks.map((track) => (
-              <View key={track.id} style={[styles.track, { minHeight: TRACK_HEIGHT[track.kind] }]}>
-                <View style={styles.rail}>
-                  <Text style={styles.railName} numberOfLines={1}>
-                    {track.name}
-                  </Text>
-                  <View style={styles.railRow}>
-                    {track.kind === 'audio' && (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`${track.mix.muted ? 'Unmute' : 'Mute'} ${track.name}`}
-                        onPress={() => editor.setTrackMuted(track.id, !track.mix.muted)}
-                        hitSlop={RAIL_SLOP}
-                        style={press(styles.railButton)}
-                      >
-                        <Text style={[styles.railButtonText, track.mix.muted && styles.railMuted]}>
-                          {track.mix.muted ? 'muted' : 'live'}
-                        </Text>
-                      </Pressable>
-                    )}
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove ${track.name}`}
-                      onPress={() => editor.removeTrack(track.id)}
-                      hitSlop={RAIL_SLOP}
-                      style={press(styles.railButton)}
-                    >
-                      <Text style={styles.railButtonText}>✕</Text>
-                    </Pressable>
-                  </View>
-                </View>
-                <Pressable
-                  style={styles.lane}
-                  onPress={(event) => {
-                    // Tapping empty lane scrubs, which is the only way to move the
-                    // playhead without a separate scrub bar stealing vertical space.
-                    setPlayheadMs(Math.max(0, event.nativeEvent.locationX / pxPerMs));
-                    editor.setSelectedClipId(null);
-                  }}
-                >
-                  {track.clips.map((clip) => (
-                    <TimelineClip
-                      key={clip.id}
-                      clip={clip}
-                      kind={track.kind}
-                      pxPerMs={pxPerMs}
-                      selected={clip.id === editor.selectedClipId}
-                      label={editor.assetFor(clip.assetId)?.displayName ?? clip.assetId}
-                      onSelect={() => editor.setSelectedClipId(clip.id)}
-                      onMove={(startMs) => editor.moveClipTo(clip.id, track.id, startMs)}
-                      onTrim={(edge, atMs) => editor.trimClipTo(clip.id, edge, atMs)}
-                      onDragStateChange={setDragging}
-                    />
-                  ))}
-                </Pressable>
-              </View>
-            ))}
-            <View pointerEvents="none" style={[styles.playhead, { left: RAIL + editor.playheadMs * pxPerMs }]} />
-          </View>
         </ScrollView>
-
-        {projectId === null ? (
-          <Text style={styles.empty}>Open a project from the Projects tab to start editing.</Text>
-        ) : (
-          editor.timeline.tracks.every((track) => track.clips.length === 0) && (
-            <Text style={styles.empty}>
-              Import a clip, or generate one under Video. Drag a clip to move it; drag its ends to trim.
-            </Text>
-          )
-        )}
-      </ScrollView>
+      )}
     </View>
+  );
+}
+
+/**
+ * The transition on the cut nearest the playhead.
+ *
+ * Three buttons and a length, because that is the whole feature. What matters
+ * on a phone is that the cut being edited is named — the playhead is thin and a
+ * timeline zoomed out puts two cuts within a thumb of each other, so the panel
+ * says which moment it is talking about.
+ */
+function TransitionPanel({
+  cutMs,
+  transition,
+  maxHeight,
+  onSet,
+  onRemove,
+  onClose
+}: {
+  cutMs: number;
+  transition: TransitionDescriptor | null;
+  maxHeight: number;
+  onSet: (type: TransitionType, durationMs?: number) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ScrollView
+      style={[styles.inspector, { maxHeight }]}
+      contentContainerStyle={styles.inspectorContent}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.panelHeader}>
+        <Text style={styles.inspectorTitle}>Transition at {formatMs(cutMs)}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Close the transition panel" onPress={onClose} hitSlop={SMALL_SLOP}>
+          <Text style={styles.smallText}>×</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.choiceRow}>
+        {TRANSITION_TYPES.map((type) => (
+          <Pressable
+            key={type}
+            accessibilityRole="button"
+            accessibilityState={{ selected: transition?.type === type }}
+            onPress={() => onSet(type)}
+            style={press([styles.choice, transition?.type === type && styles.choiceOn])}
+          >
+            <Text style={[styles.choiceText, transition?.type === type && styles.choiceTextOn]}>
+              {TRANSITION_LABELS[type]}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {transition === null ? (
+        <Text style={styles.panelNote}>No transition here yet. Pick one and it lands on this cut.</Text>
+      ) : (
+        <>
+          <Stepper
+            label="Length"
+            value={formatMs(transition.durationMs)}
+            onDown={() => onSet(transition.type, transition.durationMs - 100)}
+            onUp={() => onSet(transition.type, transition.durationMs + 100)}
+          />
+          <Pressable accessibilityRole="button" onPress={onRemove} style={press([styles.tool, styles.toolDanger])}>
+            <Text style={[styles.toolText, styles.toolDangerText]}>Remove transition</Text>
+          </Pressable>
+        </>
+      )}
+    </ScrollView>
+  );
+}
+
+/**
+ * Editing the words on a cut, on a phone.
+ *
+ * A text field and steppers, because those are the two things a thumb is good
+ * at — and the colours are a row of swatches rather than a picker, since a hex
+ * field on a touch keyboard is a way to type `#fffff` and get a rejection.
+ *
+ * The panel floats over the lanes and is capped like the clip inspector, for the
+ * same reason: it must not take the timeline's height away while you work.
+ */
+function TitlePanel({
+  title,
+  maxHeight,
+  onChange,
+  onRemove,
+  onClose
+}: {
+  title: TimelineTitle;
+  maxHeight: number;
+  onChange: (changes: Partial<Omit<TimelineTitle, 'id'>>) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const lengthMs = title.timelineEndMs - title.timelineStartMs;
+  return (
+    <ScrollView
+      style={[styles.inspector, { maxHeight }]}
+      contentContainerStyle={styles.inspectorContent}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.titleHeader}>
+        <Text style={styles.inspectorTitle}>Title</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Close the title panel" onPress={onClose} hitSlop={SMALL_SLOP}>
+          <Text style={styles.smallText}>×</Text>
+        </Pressable>
+      </View>
+      <TextInput
+        accessibilityLabel="Title text"
+        style={styles.titleInput}
+        value={title.text}
+        placeholder="Title"
+        placeholderTextColor={theme.textWeaker}
+        onChangeText={(text) => onChange({ text })}
+      />
+      <View style={styles.swatchRow}>
+        {TITLE_COLORS.map((color) => (
+          <Pressable
+            key={color}
+            accessibilityRole="button"
+            accessibilityLabel={`Title colour ${color}`}
+            onPress={() => onChange({ color })}
+            style={press([styles.swatch, { backgroundColor: color }, title.color === color && styles.swatchOn])}
+          />
+        ))}
+      </View>
+      <Stepper
+        label="Size"
+        value={`${Math.round(title.sizePx)}px`}
+        onDown={() => onChange({ sizePx: Math.max(8, title.sizePx - 8) })}
+        onUp={() => onChange({ sizePx: Math.min(512, title.sizePx + 8) })}
+      />
+      <Stepper
+        label="Up/Down"
+        value={`${Math.round(title.positionY)}px`}
+        onDown={() => onChange({ positionY: title.positionY - 20 })}
+        onUp={() => onChange({ positionY: title.positionY + 20 })}
+      />
+      <Stepper
+        label="Left/Right"
+        value={`${Math.round(title.positionX)}px`}
+        onDown={() => onChange({ positionX: title.positionX - 20 })}
+        onUp={() => onChange({ positionX: title.positionX + 20 })}
+      />
+      <Stepper
+        label="Length"
+        value={formatMs(lengthMs)}
+        onDown={() => onChange({ timelineEndMs: title.timelineEndMs - 200 })}
+        onUp={() => onChange({ timelineEndMs: title.timelineEndMs + 200 })}
+      />
+      <Pressable accessibilityRole="button" onPress={onRemove} style={press([styles.tool, styles.toolDanger])}>
+        <Text style={[styles.toolText, styles.toolDangerText]}>Remove title</Text>
+      </Pressable>
+    </ScrollView>
   );
 }
 
@@ -523,23 +1155,44 @@ function Stepper({
   label,
   value,
   onDown,
-  onUp
+  onUp,
+  disabled
 }: {
   label: string;
   value: string;
   onDown: () => void;
   onUp: () => void;
+  /** Shown but not usable, for a control this platform's renderer ignores. */
+  disabled?: boolean;
 }) {
+  const off = disabled === true;
   return (
-    <View style={styles.stepper}>
+    <View style={[styles.stepper, off && styles.stepperOff]}>
       <Text style={styles.stepperLabel}>{label}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Decrease ${label}`} onPress={onDown} hitSlop={STEPPER_SLOP} style={press(styles.stepperButton)}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Decrease ${label}`}
+        accessibilityState={{ disabled: off }}
+        disabled={off}
+        onPress={onDown}
+        hitSlop={STEPPER_SLOP}
+        style={press(styles.stepperButton)}
+      >
         <Text style={styles.stepperButtonText}>−</Text>
       </Pressable>
       <Text style={styles.stepperValue}>{value}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Increase ${label}`} onPress={onUp} hitSlop={STEPPER_SLOP} style={press(styles.stepperButton)}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Increase ${label}`}
+        accessibilityState={{ disabled: off }}
+        disabled={off}
+        onPress={onUp}
+        hitSlop={STEPPER_SLOP}
+        style={press(styles.stepperButton)}
+      >
         <Text style={styles.stepperButtonText}>+</Text>
       </Pressable>
+
     </View>
   );
 }
@@ -583,26 +1236,80 @@ const styles = StyleSheet.create({
   toolText: { color: theme.text, fontSize: 14, fontWeight: '600' },
   toolDangerText: { color: theme.danger },
   message: { color: theme.warn, fontSize: 13, paddingHorizontal: 16, paddingBottom: 8 },
-  inspector: { paddingHorizontal: 16, paddingBottom: 10, gap: 6 },
+  /*
+    Floats over the lanes rather than pushing them down.
+
+    Five rows of controls left the timeline a strip too short to work in — the
+    panel took its space from the thing it was adjusting. Over it, the lanes keep
+    their height and the panel is dismissed with the same button that opened it.
+  */
+  trackSheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: theme.bg,
+    borderTopWidth: 1,
+    borderTopColor: theme.line,
+    paddingHorizontal: 16,
+    paddingVertical: 8
+  },
+  sheetRow: { minHeight: MIN_TAP, justifyContent: 'center' },
+  sheetRowText: { color: theme.text, fontSize: 15 },
+  sheetDanger: { color: theme.danger },
+  sheetDisabled: { color: theme.textWeaker },
+  inspector: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexGrow: 0,
+    backgroundColor: theme.bg,
+    borderTopWidth: 1,
+    borderTopColor: theme.line
+  },
+  inspectorContent: { paddingHorizontal: 16, paddingBottom: 10, gap: 6 },
   inspectorTitle: { color: theme.textWeak, fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },
+  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  panelNote: { color: theme.textWeaker, fontSize: 13 },
+  stepperOff: { opacity: 0.4 },
+  choiceRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  choice: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface },
+  choiceOn: { borderColor: theme.accent, backgroundColor: theme.accent },
+  choiceText: { color: theme.text, fontSize: 14, fontWeight: '600' },
+  choiceTextOn: { color: theme.bg },
+  titleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // 44 tall because it is typed into, and 16pt because iOS zooms a smaller field.
+  titleInput: { minHeight: 44, borderWidth: 1, borderColor: theme.line, borderRadius: 10, paddingHorizontal: 12, color: theme.text, fontSize: 16, backgroundColor: theme.bg },
+  swatchRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  swatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.line },
+  swatchOn: { borderWidth: 3, borderColor: theme.text },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 },
   stepperLabel: { flex: 1, color: theme.text, fontSize: 14 },
   stepperButton: { width: 36, height: 36, borderRadius: 9, borderWidth: 1, borderColor: theme.line, alignItems: 'center', justifyContent: 'center' },
   stepperButtonText: { color: theme.text, fontSize: 16, fontWeight: '700' },
   stepperValue: { width: 52, textAlign: 'center', color: theme.textWeak, fontSize: 13, fontVariant: ['tabular-nums'] },
   timelineVertical: { flex: 1 },
-  tracks: { position: 'relative', paddingBottom: 8 },
-  rulerRow: { flexDirection: 'row' },
-  rulerRail: { width: RAIL, borderRightWidth: 1, borderRightColor: theme.line },
-  rulerLane: { flex: 1 },
-  track: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: theme.line },
-  rail: { width: RAIL, paddingHorizontal: 10, justifyContent: 'center', gap: 3, borderRightWidth: 1, borderRightColor: theme.line },
-  railName: { color: theme.text, fontSize: 12, fontWeight: '600' },
+  // Headers beside the lanes, not inside them: the row is the two columns.
+  // `flexGrow` rather than `flex`, so the row still measures its own height
+  // inside a vertical scroller while filling the width.
+  timelineRow: { flexDirection: 'row', flexGrow: 1, paddingBottom: 8 },
+  // Fixed beside a lane column that takes whatever is left. Without the explicit
+  // pair, a zoomed timeline makes the scroller size to its content and pushes
+  // the headers off the row entirely.
+  railColumn: { width: RAIL, flexShrink: 0, borderRightWidth: 1, borderRightColor: theme.line },
+  laneScroller: { flex: 1 },
+  lanes: { position: 'relative' },
+  rulerRail: { height: RULER_HEIGHT, borderBottomWidth: 1, borderBottomColor: theme.line },
+  rulerLane: { height: RULER_HEIGHT },
+  rail: { alignItems: 'center', justifyContent: 'center', gap: 2, borderBottomWidth: 1, borderBottomColor: theme.line },
+  railName: { color: theme.text, fontSize: 12, fontWeight: '700' },
   railRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   railButton: { minHeight: 22, justifyContent: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: theme.line },
   railButtonText: { color: theme.textWeaker, fontSize: 11, fontWeight: '700' },
   railMuted: { color: theme.warn },
-  lane: { flex: 1, position: 'relative', backgroundColor: theme.surface },
+  lane: { position: 'relative', backgroundColor: theme.surface, borderBottomWidth: 1, borderBottomColor: theme.line },
+  laneBackground: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   playhead: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: theme.text },
   empty: { color: theme.textWeak, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 20 }
 });

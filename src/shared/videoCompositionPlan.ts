@@ -1,5 +1,8 @@
 import { timelineDurationMs } from './timelineLogic';
-import type { TimelineDocument } from './timelineTypes';
+import { cuts, transitionForCut } from './timelineTransitionLogic';
+import { clipColour } from './clipColour';
+import { clipSpeed } from './timelineClipGeometry';
+import type { TimelineDocument, TimelineTitle } from './timelineTypes';
 
 /**
  * A platform-neutral description of what a timeline renders to.
@@ -18,6 +21,16 @@ import type { TimelineDocument } from './timelineTypes';
 export type CompositionSegment = {
   /** Index into the plan's `sources`, not a path — paths belong to the host. */
   readonly sourceIndex: number;
+  /**
+   * Which layer this belongs to, bottom first: 0 is drawn under 1.
+   *
+   * The order of `videoSegments` has always said this, and a renderer that
+   * stacks in order needs nothing more. Android does: it builds a Media3
+   * sequence, which plays one item after another by definition, so it needs to
+   * know where one layer ends and the next begins rather than infer it from
+   * timings that happen not to overlap.
+   */
+  readonly layer: number;
   /** Where this segment starts in the finished video. */
   readonly timelineStartMs: number;
   /** The slice taken from the source. */
@@ -28,6 +41,15 @@ export type CompositionSegment = {
   readonly offsetX: number;
   readonly offsetY: number;
   readonly rotationDegrees: number;
+  /** Playback rate. 1 is the rate it was shot at, and what every older plan meant. */
+  readonly speed: number;
+  /**
+   * Colour. Neutral is `0, 1, 1` and renders identically everywhere, which is
+   * what lets a renderer without grading still be right for an ungraded clip.
+   */
+  readonly brightness: number;
+  readonly contrast: number;
+  readonly saturation: number;
 };
 
 export type AudioSegment = {
@@ -37,6 +59,8 @@ export type AudioSegment = {
   readonly sourceEndMs: number;
   /** Linear gain, already folded from the track mix and the clip's volume. */
   readonly gain: number;
+  /** Playback rate, so sound is retimed with the picture rather than left behind it. */
+  readonly speed: number;
 };
 
 export type CompositionPlan = {
@@ -62,6 +86,33 @@ export type CompositionPlan = {
    */
   readonly videoSegments: readonly CompositionSegment[];
   readonly audioSegments: readonly AudioSegment[];
+  /**
+   * Transitions, reduced to what a renderer actually has to draw: a dip through
+   * black, centred on a cut.
+   *
+   * All three types collapse to the same thing here, and that is not a
+   * shortcut. The timeline refuses overlapping clips, so at no instant do two
+   * pictures exist to dissolve between — the outgoing clip going to nothing and
+   * the incoming one arriving *is* a dip through the black underneath. The
+   * desktop program monitor has always drawn it that way; this hands the native
+   * renderers the same conclusion instead of making each of them derive it.
+   */
+  readonly dips: readonly CompositionDip[];
+  /**
+   * Words drawn over the finished picture.
+   *
+   * Passed through rather than transformed: a title is already expressed in
+   * output-frame pixels and timeline milliseconds, which is what every renderer
+   * wants, so there is nothing for the plan to decide.
+   */
+  readonly titles: readonly TimelineTitle[];
+};
+
+export type CompositionDip = {
+  /** When the black starts arriving. */
+  readonly startMs: number;
+  /** Black is total at the midpoint and gone again at the end. */
+  readonly durationMs: number;
 };
 
 export class CompositionPlanError extends Error {
@@ -72,6 +123,17 @@ function decibelsToGain(gainDb: number): number {
   return 10 ** (gainDb / 20);
 }
 
+/** Each transition, as the black it puts on the frame. */
+function dipsFor(timeline: TimelineDocument): readonly CompositionDip[] {
+  const dips: CompositionDip[] = [];
+  for (const cut of cuts(timeline)) {
+    const transition = transitionForCut(timeline, cut);
+    if (transition === null || transition.durationMs <= 0) continue;
+    dips.push({ startMs: Math.max(0, cut.cutMs - transition.durationMs / 2), durationMs: transition.durationMs });
+  }
+  return dips;
+}
+
 export function buildCompositionPlan(input: {
   readonly timeline: TimelineDocument;
   readonly width: number;
@@ -79,6 +141,21 @@ export function buildCompositionPlan(input: {
   readonly frameRate: number;
   /** Ids of assets that are stills; absent means none, as older projects have. */
   readonly stillAssetIds?: ReadonlySet<string>;
+  /**
+   * Ids of assets that carry an audio stream.
+   *
+   * A video clip's own sound is part of the clip, so it is placed like any other
+   * audio — but only when there is some. The plan is a pure function and cannot
+   * open a file to ask, so the caller says, the way it already says which assets
+   * are stills.
+   *
+   * Absent means "do not place any", which is what every project exported before
+   * this did. That is the safe direction: emitting a segment for a silent source
+   * breaks the render outright — FFmpeg's graph fails on a missing `[i:a]`, and
+   * Media3 handed a video-only source with the video removed has nothing left to
+   * encode — whereas omitting one loses sound that was already being lost.
+   */
+  readonly audibleAssetIds?: ReadonlySet<string>;
 }): CompositionPlan {
   const durationMs = timelineDurationMs(input.timeline);
   if (durationMs <= 0) {
@@ -105,6 +182,9 @@ export function buildCompositionPlan(input: {
         if (clip.effects.opacity <= 0 || clip.effects.scale <= 0) continue;
         layer.push({
           sourceIndex: sourceIndexFor(clip.assetId),
+          // Filled in below: which layer this is depends on how many video
+          // tracks there turn out to be, and the tracks are read top-first.
+          layer: 0,
           timelineStartMs: clip.timelineStartMs,
           sourceStartMs: clip.sourceStartMs,
           sourceEndMs: clip.sourceEndMs,
@@ -112,10 +192,37 @@ export function buildCompositionPlan(input: {
           scale: clip.effects.scale,
           offsetX: clip.effects.positionX,
           offsetY: clip.effects.positionY,
-          rotationDegrees: clip.effects.rotation
+          rotationDegrees: clip.effects.rotation,
+          speed: clipSpeed(clip),
+          ...clipColour(clip.effects)
         });
       }
       videoLayers.push(layer);
+
+      /*
+        A video clip's own sound.
+
+        It used to be dropped: this branch took the video and moved on, so an
+        exported cut was silent unless someone had separately placed an audio
+        clip on an audio track. `effects.volume` has been on every clip the whole
+        time, and the Adjust panel has been offering it, for something that never
+        happened.
+
+        A video track has no mix of its own, so the clip's volume is the whole
+        gain — there is no track fader to fold in.
+      */
+      for (const clip of track.clips) {
+        if (input.audibleAssetIds?.has(clip.assetId) !== true) continue;
+        if (clip.effects.volume <= 0) continue;
+        audioSegments.push({
+          sourceIndex: sourceIndexFor(clip.assetId),
+          timelineStartMs: clip.timelineStartMs,
+          sourceStartMs: clip.sourceStartMs,
+          sourceEndMs: clip.sourceEndMs,
+          gain: clip.effects.volume,
+          speed: clipSpeed(clip)
+        });
+      }
       continue;
     }
 
@@ -128,7 +235,8 @@ export function buildCompositionPlan(input: {
         sourceEndMs: clip.sourceEndMs,
         // Muting the track wins over the clip's own volume, as it does in the
         // editor: a muted track is a decision about the whole track.
-        gain: track.mix.muted ? 0 : trackGain * clip.effects.volume
+        gain: track.mix.muted ? 0 : trackGain * clip.effects.volume,
+        speed: clipSpeed(clip)
       });
     }
   }
@@ -143,8 +251,13 @@ export function buildCompositionPlan(input: {
       .map((assetId, index) => (input.stillAssetIds?.has(assetId) === true ? index : -1))
       .filter((index) => index !== -1),
     // Bottom row first, so a pipeline that stacks in order puts the timeline's
-    // top track on top.
-    videoSegments: [...videoLayers].reverse().flat(),
-    audioSegments
+    // top track on top — and each segment is told which row it is in, for the
+    // renderer that cannot read it off the order.
+    videoSegments: [...videoLayers]
+      .reverse()
+      .flatMap((layer, index) => layer.map((segment) => ({ ...segment, layer: index }))),
+    audioSegments,
+    dips: dipsFor(input.timeline),
+    titles: input.timeline.titles ?? []
   };
 }

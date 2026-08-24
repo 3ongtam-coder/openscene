@@ -31,6 +31,34 @@ export type NativeExportRequest = {
   /** Bottom layer first. */
   videoSegments: NativeSegment[];
   audioSegments: (NativeSegment & { gain: number })[];
+  /**
+   * Transitions, as black over the finished picture: total at the midpoint,
+   * gone at either end.
+   *
+   * Older builds of the native module ignore a key they do not know, which is
+   * the right way for this to degrade — an export without the dip rather than
+   * no export at all.
+   */
+  dips?: { startMs: number; durationMs: number }[];
+  /**
+   * Words over the finished picture.
+   *
+   * Geometry is in output-frame pixels measured from the centre, the same
+   * convention a clip's `offsetX/Y` uses, so a number means the same distance
+   * whichever renderer draws it.
+   */
+  titles: NativeTitle[];
+};
+
+export type NativeTitle = {
+  text: string;
+  timelineStartMs: number;
+  timelineEndMs: number;
+  sizePx: number;
+  /** `#rrggbb`. */
+  color: string;
+  positionX: number;
+  positionY: number;
 };
 
 export type NativeExportResult = { uri: string; durationMs: number };
@@ -52,6 +80,13 @@ type VideoExportModuleType = {
   exportComposition(request: NativeExportRequest): Promise<NativeExportResult>;
   /** Negative `atMs` means the last frame. */
   extractFrame(uri: string, atMs: number): Promise<NativeFrame>;
+  /**
+   * One peak per bar for a clip's window, each 0–1.
+   *
+   * Empty when the file will not decode, which is a clip drawn the way it was
+   * before waveforms existed rather than an error anyone can act on.
+   */
+  readAudioPeaks(uri: string, startMs: number, endMs: number, bars: number): Promise<number[]>;
 };
 
 /**
@@ -96,5 +131,12 @@ export default {
       throw new Error('This build cannot read frames out of a clip. Rebuild the development client.');
     }
     return nativeModule.extractFrame(uri, atMs);
+  },
+  async readAudioPeaks(uri: string, startMs: number, endMs: number, bars: number): Promise<number[]> {
+    // Empty rather than an error: a build without the reader draws the clip the
+    // way every build did before waveforms, which is a missing decoration and
+    // not a broken editor.
+    if (nativeModule === null || typeof nativeModule.readAudioPeaks !== 'function') return [];
+    return nativeModule.readAudioPeaks(uri, startMs, endMs, bars);
   }
 } satisfies VideoExportModuleType;

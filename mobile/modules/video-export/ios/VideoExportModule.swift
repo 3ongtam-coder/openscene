@@ -18,6 +18,38 @@ struct SegmentInput: Record {
   @Field var sourceStartMs: Double = 0
   @Field var sourceEndMs: Double = 0
   @Field var gain: Double = 1
+  /// What Adjust set. Defaults are "unchanged", so an older caller still renders.
+  @Field var opacity: Double = 1
+  @Field var scale: Double = 1
+  @Field var offsetX: Double = 0
+  @Field var offsetY: Double = 0
+  @Field var rotationDegrees: Double = 0
+  /// Playback rate. 1 is the rate it was shot at, and what an older caller means.
+  @Field var speed: Double = 1
+  /// Whether the source is a photograph, which has to be held rather than played.
+  @Field var still: Bool = false
+  /// The grade. Neutral is `0, 1, 1`, which is also what an older caller means.
+  @Field var brightness: Double = 0
+  @Field var contrast: Double = 1
+  @Field var saturation: Double = 1
+}
+
+/// A transition, as the black it puts over the picture: total at the midpoint.
+struct DipInput: Record {
+  @Field var startMs: Double = 0
+  @Field var durationMs: Double = 0
+}
+
+/// Words over the finished picture, in output-frame pixels from the centre.
+struct TitleInput: Record {
+  @Field var text: String = ""
+  @Field var timelineStartMs: Double = 0
+  @Field var timelineEndMs: Double = 0
+  @Field var sizePx: Double = 72
+  /// `#rrggbb`.
+  @Field var color: String = "#ffffff"
+  @Field var positionX: Double = 0
+  @Field var positionY: Double = 0
 }
 
 struct ExportRequest: Record {
@@ -27,11 +59,10 @@ struct ExportRequest: Record {
   @Field var durationMs: Double = 0
   @Field var videoSegments: [SegmentInput] = []
   @Field var audioSegments: [SegmentInput] = []
+  @Field var dips: [DipInput] = []
+  @Field var titles: [TitleInput] = []
 }
 
-private func time(_ milliseconds: Double) -> CMTime {
-  CMTime(value: CMTimeValue(max(0, milliseconds).rounded()), timescale: 1000)
-}
 
 public final class VideoExportModule: Module {
   public func definition() -> ModuleDefinition {
@@ -39,12 +70,27 @@ public final class VideoExportModule: Module {
 
     Property("isSupported") { true }
 
+    /*
+      The switch that lets a timeline with a photograph on it be exported.
+
+      `areStillsRenderable` in the JS bridge reads this, and refuses the export
+      where it is false — because a renderer that cannot hold a still opens it as
+      a movie and contributes nothing, which is an export quietly shorter than
+      the cut. True now that `stillMovie` encodes one before the composition is
+      assembled.
+    */
+    Property("supportsStills") { true }
+
     AsyncFunction("exportComposition") { (request: ExportRequest) -> [String: Any] in
       try await Self.export(request)
     }
 
     AsyncFunction("extractFrame") { (uri: String, atMs: Double) -> [String: Any] in
       try await Self.extractFrame(uri: uri, atMs: atMs)
+    }
+
+    AsyncFunction("readAudioPeaks") { (uri: String, startMs: Double, endMs: Double, bars: Int) -> [Double] in
+      await AudioPeaks.read(uri: uri, startMs: startMs, endMs: endMs, bars: bars)
     }
   }
 
@@ -89,76 +135,70 @@ public final class VideoExportModule: Module {
     ]
   }
 
+  /**
+   The boundary, and nothing else.
+
+   Records in, plain values out, and the composer's errors turned into the ones
+   the JavaScript side knows. What gets rendered lives in `VideoComposer`, which
+   has no Expo in it — so a macOS test can run the same code a phone runs, which
+   is the only way anything here gets proven rather than merely compiled.
+   */
   private static func export(_ request: ExportRequest) async throws -> [String: Any] {
-    if request.videoSegments.isEmpty && request.audioSegments.isEmpty {
+    do {
+      let output = try await VideoComposer.export(request.asComposerRequest())
+      return ["uri": output.absoluteString, "durationMs": request.durationMs]
+    } catch ComposerError.emptyComposition {
       throw Exception(name: "EmptyComposition", description: "The timeline has no media to export.")
-    }
-
-    let composition = AVMutableComposition()
-    let renderSize = CGSize(width: request.width, height: request.height)
-    var layerInstructions: [AVMutableVideoCompositionLayerInstruction] = []
-
-    // Each video segment gets its own track. Sharing one track would serialise
-    // clips that are meant to overlap, which is exactly what a multi-track
-    // timeline is for.
-    for segment in request.videoSegments {
-      guard let url = URL(string: segment.uri) ?? URL(string: "file://\(segment.uri)") else { continue }
-      let asset = AVURLAsset(url: url)
-      guard let sourceTrack = try await asset.loadTracks(withMediaCharacteristic: .visual).first else { continue }
-      guard let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
-
-      let range = CMTimeRange(start: time(segment.sourceStartMs), end: time(segment.sourceEndMs))
-      try track.insertTimeRange(range, of: sourceTrack, at: time(segment.timelineStartMs))
-
-      let instruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-      instruction.setTransform(try await sourceTrack.load(.preferredTransform), at: .zero)
-      // The plan hands layers bottom-first, and AVFoundation draws the first
-      // layer instruction on top — so the order is reversed when they are
-      // assembled below rather than here.
-      layerInstructions.append(instruction)
-    }
-
-    for segment in request.audioSegments where segment.gain > 0 {
-      guard let url = URL(string: segment.uri) ?? URL(string: "file://\(segment.uri)") else { continue }
-      let asset = AVURLAsset(url: url)
-      guard let sourceTrack = try await asset.loadTracks(withMediaType: .audio).first else { continue }
-      guard let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
-      let range = CMTimeRange(start: time(segment.sourceStartMs), end: time(segment.sourceEndMs))
-      try track.insertTimeRange(range, of: sourceTrack, at: time(segment.timelineStartMs))
-    }
-
-    let instruction = AVMutableVideoCompositionInstruction()
-    instruction.timeRange = CMTimeRange(start: .zero, duration: time(request.durationMs))
-    instruction.layerInstructions = layerInstructions.reversed()
-
-    let videoComposition = AVMutableVideoComposition()
-    videoComposition.renderSize = renderSize
-    videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, request.frameRate)))
-    videoComposition.instructions = [instruction]
-
-    let output = FileManager.default.temporaryDirectory
-      .appendingPathComponent("openvideo-export-\(Int(Date().timeIntervalSince1970)).mp4")
-
-    guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+    } catch ComposerError.exportUnavailable {
       throw Exception(name: "ExportUnavailable", description: "This device cannot create an export session.")
+    } catch ComposerError.exportFailed(let reason) {
+      throw Exception(name: "ExportFailed", description: reason)
     }
-    session.outputURL = output
-    session.outputFileType = .mp4
-    if !layerInstructions.isEmpty {
-      session.videoComposition = videoComposition
-    }
+  }
+}
 
-    await session.export()
+/// Records are the bridge's shape; the composer takes plain values.
+private extension SegmentInput {
+  var asComposerSegment: ComposerSegment {
+    ComposerSegment(
+      uri: uri,
+      timelineStartMs: timelineStartMs,
+      sourceStartMs: sourceStartMs,
+      sourceEndMs: sourceEndMs,
+      gain: gain,
+      opacity: opacity,
+      scale: scale,
+      offsetX: offsetX,
+      offsetY: offsetY,
+      rotationDegrees: rotationDegrees,
+      speed: speed,
+      still: still,
+      colour: ComposerColour(brightness: brightness, contrast: contrast, saturation: saturation)
+    )
+  }
+}
 
-    // A cancelled or failed session leaves no usable file; reporting success
-    // would hand the user a path to nothing.
-    guard session.status == .completed else {
-      throw Exception(
-        name: "ExportFailed",
-        description: session.error?.localizedDescription ?? "The export did not complete."
-      )
-    }
-
-    return ["uri": output.absoluteString, "durationMs": request.durationMs]
+private extension ExportRequest {
+  func asComposerRequest() -> ComposerRequest {
+    ComposerRequest(
+      width: width,
+      height: height,
+      frameRate: frameRate,
+      durationMs: durationMs,
+      videoSegments: videoSegments.map(\.asComposerSegment),
+      audioSegments: audioSegments.map(\.asComposerSegment),
+      dips: dips.map { ComposerDip(startMs: $0.startMs, durationMs: $0.durationMs) },
+      titles: titles.map {
+        ComposerTitle(
+          text: $0.text,
+          timelineStartMs: $0.timelineStartMs,
+          timelineEndMs: $0.timelineEndMs,
+          sizePx: $0.sizePx,
+          color: $0.color,
+          positionX: $0.positionX,
+          positionY: $0.positionY
+        )
+      }
+    )
   }
 }

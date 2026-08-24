@@ -13,7 +13,11 @@ export function hasOnlyClipEffectKeys(effects: Partial<ClipEffects>): boolean {
       key === 'positionX' ||
       key === 'positionY' ||
       key === 'rotation' ||
-      key === 'volume'
+      key === 'volume' ||
+      key === 'speed' ||
+      key === 'brightness' ||
+      key === 'contrast' ||
+      key === 'saturation'
   );
 }
 
@@ -24,7 +28,18 @@ export function isValidClipEffects(effects: ClipEffects): boolean {
     isBounded(effects.positionX, CLIP_EFFECT_RANGES.positionX.min, CLIP_EFFECT_RANGES.positionX.max) &&
     isBounded(effects.positionY, CLIP_EFFECT_RANGES.positionY.min, CLIP_EFFECT_RANGES.positionY.max) &&
     isBounded(effects.rotation, CLIP_EFFECT_RANGES.rotation.min, CLIP_EFFECT_RANGES.rotation.max) &&
-    isBounded(effects.volume, CLIP_EFFECT_RANGES.volume.min, CLIP_EFFECT_RANGES.volume.max)
+    isBounded(effects.volume, CLIP_EFFECT_RANGES.volume.min, CLIP_EFFECT_RANGES.volume.max) &&
+    // Absent is 1, so a clip that has never been retimed is valid without
+    // carrying the key. Present but outside the range is refused, not clamped:
+    // a rate this cannot render is a rate it must not claim to have.
+    (effects.speed === undefined || isBounded(effects.speed, CLIP_EFFECT_RANGES.speed.min, CLIP_EFFECT_RANGES.speed.max)) &&
+    // Absent is neutral, the same bargain speed strikes.
+    (effects.brightness === undefined ||
+      isBounded(effects.brightness, CLIP_EFFECT_RANGES.brightness.min, CLIP_EFFECT_RANGES.brightness.max)) &&
+    (effects.contrast === undefined ||
+      isBounded(effects.contrast, CLIP_EFFECT_RANGES.contrast.min, CLIP_EFFECT_RANGES.contrast.max)) &&
+    (effects.saturation === undefined ||
+      isBounded(effects.saturation, CLIP_EFFECT_RANGES.saturation.min, CLIP_EFFECT_RANGES.saturation.max))
   );
 }
 
@@ -43,6 +58,10 @@ export function clipEffectsEqual(left: ClipEffects, right: ClipEffects): boolean
     left.positionX === right.positionX &&
     left.positionY === right.positionY &&
     left.rotation === right.rotation &&
-    left.volume === right.volume
+    left.volume === right.volume &&
+    (left.speed ?? 1) === (right.speed ?? 1) &&
+    (left.brightness ?? 0) === (right.brightness ?? 0) &&
+    (left.contrast ?? 1) === (right.contrast ?? 1) &&
+    (left.saturation ?? 1) === (right.saturation ?? 1)
   );
 }
