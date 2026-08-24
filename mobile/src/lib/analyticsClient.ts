@@ -4,6 +4,8 @@ import { Directory, File, Paths } from 'expo-file-system';
 import {
   OPENPANEL_API_URL,
   OPENPANEL_CLIENT_ID,
+  OPENPANEL_ORIGIN,
+  filterOpenPanelPayload,
   isAnalyticsEvent,
   sanitiseProperties,
   type AnalyticsEvent,
@@ -58,6 +60,7 @@ function writeEnabled(enabled: boolean): void {
 type Client = {
   track(name: string, properties?: Record<string, unknown>): Promise<unknown> | void;
   clear(): void;
+  api: { addHeader(key: string, value: string): void };
 };
 
 let client: Client | null | undefined;
@@ -83,7 +86,16 @@ function load(): Client | null {
       // persist its queue across restarts. Events that could not be delivered
       // are dropped instead of following the user into the next session — a
       // smaller record for a question nobody is asking.
-      client = new candidate({ clientId: OPENPANEL_CLIENT_ID, apiUrl: OPENPANEL_API_URL });
+      client = new candidate({
+        clientId: OPENPANEL_CLIENT_ID,
+        apiUrl: OPENPANEL_API_URL,
+        // The SDK adds device details after track() receives a sanitised event.
+        // Filter its final payload too, before it can be serialised.
+        filter: filterOpenPanelPayload
+      });
+      // OpenPanel's self-hosted CORS policy admits the native app through this
+      // explicit identity. React Native does not supply a browser Origin itself.
+      client.api.addHeader('Origin', OPENPANEL_ORIGIN);
     }
   } catch {
     client = null;
