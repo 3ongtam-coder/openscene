@@ -13,6 +13,7 @@ import { readKey, type ProviderSlot } from '../lib/credentials';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { saveGeneratedImage } from '../lib/projectStore';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
+import { chargeReservation, releaseReservation, reserveAgainstCap } from '../lib/spendLedger';
 import { ModelSelect } from '../components/ModelSelect';
 import { SpendPrompt } from '../components/SpendPrompt';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
@@ -75,14 +76,31 @@ export function ImageScreen({
 
   const doGenerate = async (): Promise<void> => {
     if (model === undefined || binding === undefined) return;
+    /*
+      The ceiling, before the key.
+
+      A limit that is only checked after a provider has been called is not a
+      limit; the charge is already made. "Always" on this feature means every
+      future image, and this is what bounds it.
+    */
+    const reservation = reserveAgainstCap(cost, new Date().toISOString());
+    if (!reservation.ok) {
+      setResult({ kind: 'failed', message: reservation.reason });
+      return;
+    }
     const apiKey = await readKey(binding.slot);
     if (apiKey === null) {
+      // Nothing was asked of a provider, so the room goes back.
+      releaseReservation(reservation.id);
       setResult({ kind: 'failed', message: `${model.providerLabel} is not connected. Add its key in Settings.` });
       return;
     }
     setResult({ kind: 'running' });
     try {
       // The same adapter the desktop app calls, over the same shared module.
+      // Kept as the request goes out, which is where the money is committed —
+      // not when the screen decided to ask for one.
+      chargeReservation(reservation.id);
       const image = await binding.request({ apiKey, modelId: model.id, prompt: prompt.trim(), aspectRatio } as never);
       // Kept before it is shown. A still that only exists on screen is lost the
       // moment the tab changes, and it was paid for.
@@ -94,6 +112,9 @@ export function ImageScreen({
       });
       setResult({ kind: 'done', image, saved: saved !== null });
     } catch (error) {
+      // Only takes back a reservation that is still pending, so a provider
+      // that failed after being called still counts as a charge.
+      releaseReservation(reservation.id);
       setResult({
         kind: 'failed',
         message: error instanceof Error ? error.message : 'Image generation failed.'

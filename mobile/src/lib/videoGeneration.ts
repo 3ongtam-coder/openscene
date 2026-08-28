@@ -8,7 +8,10 @@ import {
 } from '@openvideo/shared/videoGeneration';
 import { getDomainModel } from '@openvideo/shared/aiDomainModels';
 
+import { estimateVideoCost } from '@openvideo/shared/mediaGenerationPricing';
+
 import { readKey, type ProviderSlot } from './credentials';
+import { chargeReservation, releaseReservation, reserveAgainstCap } from './spendLedger';
 import { projectMediaDir, type MobileAsset } from './projectStore';
 import videoExport, { isFrameExtractionAvailable } from '../../modules/video-export';
 
@@ -58,8 +61,23 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
     return { ok: false, message: `${model.providerLabel} has no adapter on this device yet.` };
   }
 
+  /*
+    The monthly ceiling, before anything is asked of a provider.
+
+    A shot sequence is the loop this is really for: each shot is approved once
+    by whoever pressed the button, and then a plan of ten runs them all. The
+    limit is what stops the tenth when the fourth already crossed it.
+  */
+  const estimate = estimateVideoCost({ modelId: model.id, durationSeconds: input.durationSeconds });
+  const reservation = reserveAgainstCap(estimate, new Date().toISOString());
+  if (!reservation.ok) return { ok: false, message: reservation.reason };
+
   const apiKey = await readKey(slot);
-  if (apiKey === null) return { ok: false, message: `${model.providerLabel} is not connected. Add its key in Settings.` };
+  if (apiKey === null) {
+    // Nothing was asked of a provider, so the room goes back.
+    releaseReservation(reservation.id);
+    return { ok: false, message: `${model.providerLabel} is not connected. Add its key in Settings.` };
+  }
 
   try {
     // A reference frame is dropped rather than sent to a provider that cannot
@@ -70,6 +88,9 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
         ? input.referenceImage
         : undefined;
 
+    // Kept as the request goes out: that is where the money is committed, and
+    // a shot refused for a missing key cost nothing.
+    chargeReservation(reservation.id);
     const ready = await adapter({
       apiKey,
       modelId: model.id,
@@ -124,6 +145,9 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
       }
     };
   } catch (error) {
+    // Only takes back a reservation that is still pending, so a shot that
+    // failed after the provider was called still counts as a charge.
+    releaseReservation(reservation.id);
     return { ok: false, message: error instanceof Error ? error.message : 'Video generation failed.' };
   }
 }
