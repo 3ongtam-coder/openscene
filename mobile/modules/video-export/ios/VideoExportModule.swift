@@ -81,6 +81,16 @@ public final class VideoExportModule: Module {
     */
     Property("supportsStills") { true }
 
+    /*
+      Whether two clips covering the same moment are composited.
+
+      True here: the composer gives every segment its own track and stacks them
+      with layer instructions, which is what opacity and cross-dissolves are
+      already built on. Android reports false, and the shared preflight refuses
+      the cut there rather than losing a layer inside the export.
+    */
+    Property("supportsLayeredVideo") { true }
+
     AsyncFunction("exportComposition") { (request: ExportRequest) -> [String: Any] in
       try await Self.export(request)
     }
@@ -91,6 +101,17 @@ public final class VideoExportModule: Module {
 
     AsyncFunction("readAudioPeaks") { (uri: String, startMs: Double, endMs: Double, bars: Int) -> [Double] in
       await AudioPeaks.read(uri: uri, startMs: startMs, endMs: endMs, bars: bars)
+    }
+
+    /*
+      What a finished file actually is, so an export can be checked against the
+      cut it came from rather than trusted because it was written.
+
+      Nothing measured comes back as nothing, and the shared rule reports that
+      as unchecked — a file this cannot open is not thereby a bad file.
+    */
+    AsyncFunction("describeVideo") { (uri: String) -> [String: Any]? in
+      await VideoFacts.describe(uri: uri)?.dictionary
     }
   }
 

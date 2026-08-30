@@ -12,6 +12,8 @@ import type {
   VideoGenerationRequest
 } from '../shared/providerSeams';
 import { getDefaultDomainModelId, getDomainModel, type AiDomainModelConfig } from '../shared/aiDomainModels';
+import { estimateImageCost, estimateSpeechCost, estimateVideoCost, type CostEstimate } from '../shared/mediaGenerationPricing';
+import { GenerationSpendStore } from './generationSpendStore';
 import { discoverFfmpeg } from './ffmpegDiscovery';
 import type { CredentialStore } from './credentialStore';
 import {
@@ -35,6 +37,57 @@ const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
 const imageJobs = new Map<string, ImageGenerationJob>();
 let activeCredentialStore: CredentialStore | undefined;
+let activeSpendStore: GenerationSpendStore | undefined;
+
+/**
+ * A charge refused before it was made.
+ *
+ * Its own type because the callers have to tell it apart from a provider
+ * failure: nothing was generated, nothing was spent, and the user can act on
+ * it by raising the ceiling or picking a cheaper model.
+ */
+export class GenerationSpendError extends Error {
+  override readonly name = 'GenerationSpendError';
+}
+
+export function setAiJobManagerSpendStore(store?: GenerationSpendStore | undefined): void {
+  activeSpendStore = store;
+}
+
+/**
+ * The ceiling, checked and claimed in one step before a job is created.
+ *
+ * A check on its own is not a limit: two jobs asked for at once would both read
+ * the same total, both pass, and both spend. The store takes the room out of
+ * the ceiling as it answers, and the caller either keeps it — `settleSpend`,
+ * once the request has gone to a provider — or hands it back.
+ *
+ * A machine with no ledger wired in — every test, and any host that has not set
+ * one — is unlimited, which is what the app did before there were limits at all.
+ */
+async function reserveSpend(estimate: CostEstimate, acceptUnknownCost: boolean | undefined): Promise<string | null> {
+  if (activeSpendStore === undefined) return null;
+  const reservation = await activeSpendStore.reserve(estimate, acceptUnknownCost);
+  if (!reservation.ok) throw new GenerationSpendError(reservation.reason);
+  return reservation.id;
+}
+
+/**
+ * Settled where the money is actually committed — as the request goes to the
+ * provider, not when the job is queued. A job that never got that far because a
+ * key was missing cost nothing, so its room goes back rather than being kept.
+ */
+async function settleSpend(reservationId: string | null, outcome: 'charged' | 'released'): Promise<void> {
+  if (activeSpendStore === undefined || reservationId === null) return;
+  try {
+    if (outcome === 'charged') await activeSpendStore.charge(reservationId);
+    else await activeSpendStore.release(reservationId);
+  } catch {
+    // A ledger that cannot be written must not take a generation down with it.
+    // An unsettled reservation is treated as a charge once it goes stale, which
+    // errs toward the user's wallet rather than against it.
+  }
+}
 
 export function setAiJobManagerCredentialStore(store?: CredentialStore | undefined): void {
   activeCredentialStore = store;
@@ -223,6 +276,8 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   const providerMapping = VIDEO_MODEL_PROVIDERS[model.providerId];
   const provider: VideoGenerationProviderId = providerMapping?.seam ?? 'gemini_veo';
   const modelId = model.id;
+  const estimate = estimateVideoCost({ modelId, durationSeconds: request.durationSeconds ?? 5 });
+  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
   const { videoDir } = await ensureAiDirectories();
   const id = `video-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -259,6 +314,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
         throw new Error(`API key is required for ${VIDEO_PROVIDER_LABELS[provider]} cloud generation. Connect the provider in Settings first.`);
       }
 
+      await settleSpend(reservationId, 'charged');
       const cloudResult = await invokeCloudVideoProvider(model, apiKey, request, join(videoDir, `${id}.mp4`));
       if (!cloudResult.ok) {
         throw new Error(cloudResult.error);
@@ -275,6 +331,10 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
     } catch (err) {
+      // Handing the room back is safe whether or not it was already kept:
+      // release only takes back a reservation that is still pending, so a
+      // failure after the request went out leaves the charge standing.
+      await settleSpend(reservationId, 'released');
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : 'Video generation failed';
       job.updatedAt = new Date().toISOString();
@@ -293,6 +353,9 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   const model = resolveGenerationModel('image-generation', request.modelId);
   const providerMapping = IMAGE_MODEL_PROVIDERS[model.providerId];
   const provider: ImageGenerationProviderId = providerMapping?.seam ?? 'openai_images';
+  // One image per job, which is what this seam creates.
+  const estimate = estimateImageCost({ modelId: model.id, imageCount: 1 });
+  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
   const { imageDir } = await ensureAiDirectories();
   const id = `image-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const now = new Date().toISOString();
@@ -327,6 +390,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
         );
       }
 
+      await settleSpend(reservationId, 'charged');
       const result = await invokeCloudImageProvider(model, apiKey, request);
       if (!result.ok) {
         throw new Error(result.error);
@@ -347,6 +411,10 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
         updatedAt: new Date().toISOString()
       });
     } catch (err) {
+      // Handing the room back is safe whether or not it was already kept:
+      // release only takes back a reservation that is still pending, so a
+      // failure after the request went out leaves the charge standing.
+      await settleSpend(reservationId, 'released');
       imageJobs.set(id, {
         ...running,
         status: 'failed',
@@ -386,6 +454,8 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
   const speechMapping = SPEECH_MODEL_PROVIDERS[model.providerId];
   const provider: TextToSpeechJob['provider'] = speechMapping?.seam ?? 'elevenlabs';
   const modelId = model.id;
+  const estimate = estimateSpeechCost({ modelId });
+  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
   const { speechDir } = await ensureAiDirectories();
   const id = `speech-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const now = new Date().toISOString();
@@ -419,6 +489,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
         throw new Error(`API key is required for ${speechMapping?.label ?? 'cloud'} speech synthesis. Connect the provider in Settings first.`);
       }
 
+      await settleSpend(reservationId, 'charged');
       const cloudResult = await invokeCloudSpeechProvider(model, apiKey, request, join(speechDir, `${id}.mp3`));
       if (!cloudResult.ok) {
         throw new Error(cloudResult.error);
@@ -432,6 +503,10 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       job.updatedAt = new Date().toISOString();
       speechJobs.set(id, job);
     } catch (err) {
+      // Handing the room back is safe whether or not it was already kept:
+      // release only takes back a reservation that is still pending, so a
+      // failure after the request went out leaves the charge standing.
+      await settleSpend(reservationId, 'released');
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : 'Speech synthesis failed';
       job.updatedAt = new Date().toISOString();

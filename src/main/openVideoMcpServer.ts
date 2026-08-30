@@ -21,7 +21,12 @@ import {
   type ExtractedFrame
 } from './videoFrameAnalysis';
 import { estimateVideoPlanCost, formatCostEstimate, estimateImageCost, estimateSpeechCost } from '../shared/mediaGenerationPricing';
+import { describeSpend } from '../shared/generationSpend';
+import type { GenerationSpendStore } from './generationSpendStore';
 import { MAX_SUPPORTED_SHOT_SECONDS, planVideoStoryboard, supportedShotSeconds } from '../shared/videoStoryboardPlan';
+// Aliased because the tool below carries the same name: the tool is the seam,
+// the rule is what it calls.
+import { composeShotPrompt as composeShotPromptRule, refineShotPrompt, revisionsOf } from '../shared/shotPrompt';
 import { checkNarrationFit, narrationBudget, detectScriptKind } from '../shared/narrationTiming';
 import { getDomainModel, getDefaultDomainModelId } from '../shared/aiDomainModels';
 import {
@@ -60,6 +65,7 @@ export class OpenVideoMcpServer {
   private exportIpcService: ExportIpcService | undefined;
   private watchFrameExtractor: WatchFrameExtractor = defaultWatchFrameExtractor;
   private resultImports: ResultAssetImportService | undefined;
+  private spendStore: GenerationSpendStore | undefined;
   private notifyProjectTimelineChanged: ((projectId: string) => void) | undefined;
 
   /**
@@ -79,6 +85,16 @@ export class OpenVideoMcpServer {
     this.projectStore = projectStore;
     this.exportIpcService = exportIpcService;
     this.watchFrameExtractor = watchFrameExtractor ?? defaultWatchFrameExtractor;
+  }
+
+  /**
+   * The spending record, so the agent can see the ceiling it is working under.
+   *
+   * Read-only on purpose: raising the limit is the user's decision, and an
+   * agent that could raise its own does not have one.
+   */
+  public setSpendStore(store: GenerationSpendStore): void {
+    this.spendStore = store;
   }
 
   /** Lets the agent finish a generation by importing its result, as the UI does. */
@@ -162,6 +178,73 @@ export class OpenVideoMcpServer {
 
   @McpTool({
     description:
+      'Build the prompt for one shot, or the prompt for its next take after a change. Use this rather than ' +
+      'writing the prompt yourself: the phone and the desktop studio compose the same way, and a shot asked ' +
+      'for differently is a different shot. To refine, pass the previous take\'s exact prompt and a note about ' +
+      'what to change — the previous prompt is kept whole and the change added to it, because rewriting loses ' +
+      'the wardrobe, lens and location nobody mentioned. Read-only, spends nothing.',
+    input: z.object({
+      scenario: z.string().min(1).optional().describe('The whole piece, in the user\'s words. Required unless refining.'),
+      description: z.string().optional().describe('What happens in this shot in particular.'),
+      shotIndex: z.number().int().min(1).optional(),
+      shotCount: z.number().int().min(1).optional(),
+      durationSeconds: z.number().min(1).optional(),
+      continuesFromFrame: z
+        .boolean()
+        .optional()
+        .describe('True when the previous shot\'s last frame is supplied as this one\'s first.'),
+      previousPrompt: z.string().optional().describe('The exact prompt of the take being refined.'),
+      change: z.string().optional().describe('What to change about that take.')
+    })
+  })
+  composeShotPrompt(params: {
+    scenario?: string;
+    description?: string;
+    shotIndex?: number;
+    shotCount?: number;
+    durationSeconds?: number;
+    continuesFromFrame?: boolean;
+    previousPrompt?: string;
+    change?: string;
+  }) {
+    if (params.previousPrompt !== undefined || params.change !== undefined) {
+      if (params.previousPrompt === undefined || params.change === undefined) {
+        return { success: false, error: 'Refining needs both the previous take\'s prompt and what to change about it.' };
+      }
+      const refined = refineShotPrompt(params.previousPrompt, params.change);
+      if (!refined.ok) return { success: false, error: refined.reason };
+      return {
+        success: true,
+        prompt: refined.prompt,
+        revisions: revisionsOf(refined.prompt),
+        message:
+          'Pass this to createVideoJob as the prompt. Show the user the change list before spending, and reuse the ' +
+          'same length, aspect ratio and reference frame the previous take used, or it is a different shot.'
+      };
+    }
+
+    if (params.scenario === undefined || params.scenario.trim().length === 0) {
+      return { success: false, error: 'A shot prompt needs a scenario, or a previous prompt and a change.' };
+    }
+    const count = params.shotCount ?? 1;
+    const prompt = composeShotPromptRule({
+      scenario: params.scenario,
+      index: params.shotIndex ?? 1,
+      count,
+      durationSeconds: params.durationSeconds ?? 5,
+      ...(params.description === undefined ? {} : { description: params.description }),
+      continuity: count === 1 ? 'none' : params.continuesFromFrame === true ? 'from-frame' : 'restate'
+    });
+    return {
+      success: true,
+      prompt,
+      revisions: [],
+      message: 'Pass this to createVideoJob as the prompt. Price it with estimateGenerationCost first.'
+    };
+  }
+
+  @McpTool({
+    description:
       'Price a generation plan. Call before createVideoJob, createImageJob, createSpeechJob; show result to ' +
       'user. Read-only, spends nothing. Never state a price you did not get from this tool: recalled figures ' +
       'are not real prices. Shot comes back unpriced: say so, ask user to confirm unknown charge.',
@@ -227,6 +310,33 @@ export class OpenVideoMcpServer {
         ? 'Show this to the user and wait for approval before generating.'
         : 'Cost is unknown. Ask the user to confirm they accept an unknown charge before generating.'
     };
+  }
+
+  @McpTool({
+    description:
+      'Read what generation has cost this month and the monthly limit, if the user set one. Read this before ' +
+      'proposing a batch of shots: a plan that would be refused halfway through is worse than a smaller plan. ' +
+      'The limit can only be changed by the user in Settings.',
+    input: z.object({})
+  })
+  async getGenerationSpend() {
+    if (!this.spendStore) return { success: false, error: 'The spending record is not available.' };
+    try {
+      const ledger = await this.spendStore.read();
+      const total = await this.spendStore.monthToDate();
+      return {
+        success: true,
+        total,
+        capUsd: ledger.capUsd,
+        summary: describeSpend(total, ledger.capUsd),
+        message:
+          ledger.capUsd === undefined
+            ? 'No monthly limit is set. Still show the user an estimate and wait for approval before generating.'
+            : `Jobs that would take this month past $${ledger.capUsd.toFixed(2)} are refused before they reach a provider.`
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to read the spending record' };
+    }
   }
 
   @McpTool({

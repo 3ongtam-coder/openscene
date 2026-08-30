@@ -1,9 +1,11 @@
+import { preflightExport, preflightSummary } from '@openvideo/shared/exportPreflight';
+import { reviewExport, type ExportReview } from '@openvideo/shared/exportReview';
 import { outputFrameFor, type FramePreference } from '@openvideo/shared/outputFrame';
 import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/videoCompositionPlan';
 import type { CompositionSegment } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
 import * as Sharing from 'expo-sharing';
-import VideoExport, { areStillsRenderable } from '../../modules/video-export';
+import VideoExport, { areLayersComposited, areStillsRenderable } from '../../modules/video-export';
 import type { EditorAsset } from './editorState';
 
 /**
@@ -27,7 +29,19 @@ function loadMediaLibrary(): typeof import('expo-media-library') | null {
 }
 
 export type ExportOutcome =
-  | { readonly ok: true; readonly uri: string }
+  | {
+      readonly ok: true;
+      readonly uri: string;
+      /**
+       * What the finished file turned out to be, read back off the file.
+       *
+       * A written file and a renderer that did not throw is what every
+       * truncated, silent or wrongly shaped export on this platform also
+       * produced. An older build that cannot measure reports unchecked, which
+       * is not the same as passing.
+       */
+      readonly review: ExportReview;
+    }
   | { readonly ok: false; readonly message: string };
 
 /**
@@ -46,6 +60,23 @@ export async function exportTimeline(input: {
   readonly frame?: FramePreference;
   readonly frameRate?: number;
 }): Promise<ExportOutcome> {
+  /*
+    Whether this renderer can make this cut, before anything is rendered.
+
+    The stills rule used to live below, after the plan was built, and the
+    layering one lived inside the Android renderer where it surfaced as a coded
+    error partway through an export. They are the same question, so they are
+    asked here, once, against what this build actually reports it can do.
+  */
+  const problems = preflightExport({
+    timeline: input.timeline,
+    assets: input.assets,
+    capabilities: { stills: areStillsRenderable, layeredVideo: areLayersComposited }
+  });
+  if (problems.length > 0) {
+    return { ok: false, message: preflightSummary(problems) };
+  }
+
   let plan;
   try {
     plan = buildCompositionPlan({
@@ -67,18 +98,6 @@ export async function exportTimeline(input: {
     return {
       ok: false,
       message: error instanceof CompositionPlanError ? error.message : 'The timeline could not be prepared for export.'
-    };
-  }
-
-  // A renderer that cannot hold a still would open it as a movie and contribute
-  // a single frame, so the export would be shorter than the timeline with
-  // nothing to say why. Refusing names the limit instead.
-  if (plan.stillSourceIndexes.length > 0 && !areStillsRenderable) {
-    return {
-      ok: false,
-      message:
-        `This build cannot render stills — ${plan.stillSourceIndexes.length} on the timeline. ` +
-        'Remove them, or rebuild the development client once still rendering lands.'
     };
   }
 
@@ -163,7 +182,27 @@ export async function exportTimeline(input: {
         positionY: title.positionY
       }))
     });
-    return { ok: true, uri: result.uri };
+    /*
+      Read the file back before calling it done.
+
+      The plan already says what the file is supposed to be, so checking costs
+      one metadata read — and this is the check that would have caught the cut
+      that came out at a third of its length with a title on it.
+    */
+    const review = reviewExport(
+      {
+        widthPx: plan.width,
+        heightPx: plan.height,
+        frameRate: plan.frameRate,
+        durationMs: plan.durationMs,
+        // Placed sound only. A video clip's own audio is decided natively per
+        // file, so promising it here would raise a fault against a recording
+        // that is simply silent.
+        hasSound: plan.audioSegments.length > 0
+      },
+      await VideoExport.describeVideo(result.uri)
+    );
+    return { ok: true, uri: result.uri, review };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'Export failed.' };
   }
