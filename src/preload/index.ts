@@ -49,6 +49,7 @@ import type {
   AgentChatTurnState
 } from '../shared/agentChat';
 import type { ChatGptOAuthStatus, OpenAiAuthMode } from '../shared/openAiAuth';
+import type { BrowserSessionProviderId, BrowserSessionStatus } from '../shared/browserSession';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -102,6 +103,9 @@ export interface VideoToolApi {
   startChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
   cancelChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
   logoutChatGptOAuth(): Promise<ApiResponse<ChatGptOAuthStatus>>;
+  getBrowserSessionStatuses(): Promise<ApiResponse<readonly BrowserSessionStatus[]>>;
+  startBrowserSession(providerId: BrowserSessionProviderId): Promise<ApiResponse<BrowserSessionStatus>>;
+  clearBrowserSession(providerId: BrowserSessionProviderId): Promise<ApiResponse<BrowserSessionStatus>>;
   executeLlmPrompt(request: {
     modelId: string;
     prompt: string;
@@ -221,6 +225,12 @@ const videoTool: VideoToolApi = {
     ipcRenderer.invoke(IPC_CHANNELS.cancelChatGptOAuth) as Promise<ApiResponse<ChatGptOAuthStatus>>,
   logoutChatGptOAuth: () =>
     ipcRenderer.invoke(IPC_CHANNELS.logoutChatGptOAuth) as Promise<ApiResponse<ChatGptOAuthStatus>>,
+  getBrowserSessionStatuses: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getBrowserSessionStatuses) as Promise<ApiResponse<readonly BrowserSessionStatus[]>>,
+  startBrowserSession: (providerId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.startBrowserSession, providerId) as Promise<ApiResponse<BrowserSessionStatus>>,
+  clearBrowserSession: (providerId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.clearBrowserSession, providerId) as Promise<ApiResponse<BrowserSessionStatus>>,
   executeLlmPrompt: (request) =>
     ipcRenderer.invoke(IPC_CHANNELS.executeLlmPrompt, request) as Promise<
       ApiResponse<{ ok: boolean; modelId: string; providerId: string; completion?: string; error?: string }>

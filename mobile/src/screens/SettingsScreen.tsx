@@ -175,6 +175,14 @@ export function SettingsScreen({ topInset }: { readonly topInset: number }) {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Browser sessions</Text>
+        <Text style={styles.sectionBlurb}>
+          Gemini and Grok browser-session sign-in is desktop-only because it needs an isolated Electron profile and OS
+          safeStorage. Mobile keeps this path disabled; use provider API keys stored in Keychain or Keystore here.
+        </Text>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>Spending permissions</Text>
         <Text style={styles.sectionBlurb}>
           Generation charges your own provider account, so each kind asks before the first one. “Always” is remembered
