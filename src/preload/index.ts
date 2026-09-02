@@ -50,6 +50,7 @@ import type {
 } from '../shared/agentChat';
 import type { ChatGptOAuthStatus, OpenAiAuthMode } from '../shared/openAiAuth';
 import type { BrowserSessionProviderId, BrowserSessionStatus } from '../shared/browserSession';
+import type { SaveAiProjectDocumentInput } from '../shared/aiProjectDomain';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -86,6 +87,7 @@ export interface VideoToolApi {
   updateAssetMetadata(input: UpdateAssetMetadataInput): Promise<ApiResponse<MediaAsset>>;
   getAssetPlaybackUrl(input: GetAssetPlaybackUrlInput): Promise<ApiResponse<AssetPlaybackUrl>>;
   saveTimeline(input: SaveTimelineInput): Promise<ApiResponse<LocalProjectSnapshot>>;
+  saveAiProjectDocument(input: SaveAiProjectDocumentInput): Promise<ApiResponse<LocalProjectSnapshot>>;
   getFfmpegRuntimeStatus(): Promise<ApiResponse<LocalFfmpegRuntimeStatus>>;
   startExportJob(input: StartExportJobInput): Promise<ApiResponse<LocalExportJob>>;
   getExportJob(input: ExportJobActionInput): Promise<ApiResponse<LocalExportJob>>;
@@ -199,6 +201,8 @@ const videoTool: VideoToolApi = {
   getAssetPlaybackUrl: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetPlaybackUrl, input) as Promise<ApiResponse<AssetPlaybackUrl>>,
   saveTimeline: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectTimelineSave, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
+  saveAiProjectDocument: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.projectAiDocumentSave, input) as Promise<ApiResponse<LocalProjectSnapshot>>,
   getFfmpegRuntimeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getFfmpegRuntimeStatus) as Promise<ApiResponse<LocalFfmpegRuntimeStatus>>,
   startExportJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.startExportJob, input) as Promise<ApiResponse<LocalExportJob>>,
   getExportJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.getExportJob, input) as Promise<ApiResponse<LocalExportJob>>,
