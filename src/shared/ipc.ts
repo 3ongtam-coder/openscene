@@ -51,6 +51,7 @@ export const IPC_CHANNELS = {
   startBrowserSession: 'browser-session:start',
   clearBrowserSession: 'browser-session:clear',
   executeLlmPrompt: 'llm:execute-prompt',
+  writerGenerate: 'writer:generate',
   mcpGetTools: 'mcp:get-tools',
   mcpExecuteTool: 'mcp:execute-tool',
   agentChatSend: 'agent-chat:send',
