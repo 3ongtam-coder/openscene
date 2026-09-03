@@ -3,8 +3,8 @@ import {
   WRITER_RESPONSE_JSON_SCHEMA,
   WRITER_SYSTEM_PROMPT,
   compileWriterPrompt,
-  parseWriterDraft,
   parseWriterRequest,
+  validateWriterDraft,
   type WriterDraft,
   type WriterModelId,
   type WriterRequest
@@ -67,7 +67,9 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
   } catch {
     throw new Error('Gemini Writer returned invalid JSON.');
   }
-  const draft = parseWriterDraft(decoded);
-  if (draft === null) throw new Error('Gemini Writer returned a script that does not match the project contract.');
-  return draft;
+  const validation = validateWriterDraft(decoded);
+  if (!validation.ok) {
+    throw new Error(`Gemini Writer returned an invalid project draft at ${validation.issue.path}: ${validation.issue.message}`);
+  }
+  return validation.value;
 }

@@ -60,6 +60,10 @@ unsaved timeline edits.
 - Source text is bracketed as untrusted material in the prompt.
 - Unknown request fields, unsupported model IDs, oversized values, partial
   drafts, dangling character names, and malformed JSON fail closed.
+- Provider-supported schema bounds constrain scenes, shots, list sizes, and
+  each shot duration before generation. Semantic failures report only a safe
+  field path and rule (for example, an undeclared character reference), never
+  the generated screenplay value itself.
 - Provider errors are length-bounded. API keys are only sent in the
   `x-goog-api-key` header and are never included in error text.
 - A visible Generate action is required for every paid network request.

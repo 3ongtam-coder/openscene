@@ -8,6 +8,7 @@ import {
   parseWriterDraft,
   parseWriterGenerationInput,
   parseWriterRequest,
+  validateWriterDraft,
   writerDraftDurationSeconds,
   type WriterDraft,
   type WriterRequest
@@ -61,6 +62,12 @@ describe('Writer workflow', () => {
     expect(prompt).toContain('Target finished duration: 12 seconds');
     expect(WRITER_RESPONSE_JSON_SCHEMA.additionalProperties).toBe(false);
     expect(WRITER_RESPONSE_JSON_SCHEMA.required).toContain('scenes');
+    expect(WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.minItems).toBe(1);
+    expect(WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.maxItems).toBe(100);
+    const shotSchema = WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.items.properties.shots;
+    expect(shotSchema.minItems).toBe(1);
+    expect(shotSchema.maxItems).toBe(100);
+    expect(shotSchema.items.properties.durationSeconds).toMatchObject({ type: 'integer', minimum: 1, maximum: 120 });
   });
 
   it('rejects partial drafts, duplicate characters, and unknown scene characters', () => {
@@ -69,6 +76,24 @@ describe('Writer workflow', () => {
     expect(parseWriterDraft({ ...draft, characters: [...draft.characters, draft.characters[0]!] })).toBeNull();
     expect(parseWriterDraft({ ...draft, scenes: [{ ...draft.scenes[0]!, characterNames: ['Missing'] }] })).toBeNull();
     expect(parseWriterDraft({ ...draft, scenes: [{ ...draft.scenes[0]!, shots: [] }] })).toBeNull();
+    expect(validateWriterDraft({ ...draft, scenes: [{ ...draft.scenes[0]!, characterNames: ['Missing'] }] })).toEqual({
+      ok: false,
+      issue: {
+        path: 'scenes[0].characterNames[0]',
+        code: 'unknown_character',
+        message: 'must exactly match a name declared in characters.'
+      }
+    });
+    expect(validateWriterDraft({
+      ...draft,
+      scenes: [{
+        ...draft.scenes[0]!,
+        shots: [{ ...draft.scenes[0]!.shots[0]!, durationSeconds: 121 }]
+      }]
+    })).toMatchObject({
+      ok: false,
+      issue: { path: 'scenes[0].shots[0].durationSeconds', code: 'invalid_number' }
+    });
   });
 
   it('applies a reviewed draft as a valid script, scene, shot, character, and style graph', () => {
