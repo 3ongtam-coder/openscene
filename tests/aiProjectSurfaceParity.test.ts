@@ -25,12 +25,12 @@ describe('AI project domain surface parity', () => {
     expect(mobile).toContain('removeAssetFromAiProjectDocument(project.ai, assetId)');
   });
 
-  it('keeps the phase foundational rather than claiming an unimplemented writer UI', async () => {
-    const [desktopSettings, mobileSettings] = await Promise.all([
-      readRepo('src/renderer/src/SettingsWorkspace.tsx'),
-      readRepo('mobile/src/screens/SettingsScreen.tsx')
+  it('puts Writer on both project surfaces instead of hiding it in settings', async () => {
+    const [desktop, mobile] = await Promise.all([
+      readRepo('src/renderer/src/App.tsx'),
+      readRepo('mobile/App.tsx')
     ]);
-    expect(desktopSettings).not.toContain('AI project document editor');
-    expect(mobileSettings).not.toContain('AI project document editor');
+    expect(desktop).toContain('<WriterWorkspace document={editor.project.ai} onSave={editor.saveAiProjectDocument} />');
+    expect(mobile).toContain('<WriterScreen topInset={0} keyboardOffset={bodyTop} projectId={route.projectId}');
   });
 });

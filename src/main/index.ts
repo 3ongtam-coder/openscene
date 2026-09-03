@@ -44,6 +44,7 @@ import { registerChatGptOAuthIpcHandlers } from './registerChatGptOAuthIpcHandle
 import { ChatGptCodexAdapter } from './chatGptCodexAdapter';
 import { LlmPromptRouter } from './llmPromptRouter';
 import { registerLlmPromptIpcHandler } from './registerLlmPromptIpcHandler';
+import { registerWriterIpcHandler } from './registerWriterIpcHandler';
 import { BrowserSessionVault } from './browserSessionVault';
 import { BrowserSessionService } from './browserSessionService';
 import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHandlers';
@@ -296,6 +297,10 @@ async function installIpcHandlers(): Promise<void> {
   });
   registerLlmPromptIpcHandler({
     router: llmPromptRouter,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
+  registerWriterIpcHandler({
+    credentialStore,
     registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
   });
 

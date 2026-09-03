@@ -51,6 +51,7 @@ import type {
 import type { ChatGptOAuthStatus, OpenAiAuthMode } from '../shared/openAiAuth';
 import type { BrowserSessionProviderId, BrowserSessionStatus } from '../shared/browserSession';
 import type { SaveAiProjectDocumentInput } from '../shared/aiProjectDomain';
+import type { WriterDraft, WriterGenerationInput } from '../shared/writerWorkflow';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -115,6 +116,7 @@ export interface VideoToolApi {
     ollamaBaseUrl?: string;
     openAiAuthMode?: OpenAiAuthMode;
   }): Promise<ApiResponse<{ ok: boolean; modelId: string; providerId: string; completion?: string; error?: string }>>;
+  generateWriterDraft(input: WriterGenerationInput): Promise<ApiResponse<WriterDraft>>;
   mcpGetTools(): Promise<ApiResponse<unknown>>;
   mcpExecuteTool(toolName: string, params: unknown): Promise<ApiResponse<unknown>>;
   agentChatSend(input: AgentChatSendInput): Promise<ApiResponse<AgentChatTurnState>>;
@@ -239,6 +241,8 @@ const videoTool: VideoToolApi = {
     ipcRenderer.invoke(IPC_CHANNELS.executeLlmPrompt, request) as Promise<
       ApiResponse<{ ok: boolean; modelId: string; providerId: string; completion?: string; error?: string }>
     >,
+  generateWriterDraft: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.writerGenerate, input) as Promise<ApiResponse<WriterDraft>>,
   mcpGetTools: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetTools) as Promise<ApiResponse<unknown>>,
   mcpExecuteTool: (toolName: string, params: unknown) =>
     ipcRenderer.invoke(IPC_CHANNELS.mcpExecuteTool, toolName, params) as Promise<ApiResponse<unknown>>,
