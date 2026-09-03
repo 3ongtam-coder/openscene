@@ -50,3 +50,7 @@
 - Electron development startup passed. Interactive visual QA was unavailable
   because no in-app Browser, Chrome session, or mobile development client was
   connected; startup evidence must not be described as visual verification.
+- Follow-up Issue #10 strengthens the Gemini response schema with supported
+  array/duration bounds and replaces the generic contract failure with a safe,
+  field-level diagnostic after a real 480-second Flash-Lite test exposed the
+  original message's lack of actionable detail.
