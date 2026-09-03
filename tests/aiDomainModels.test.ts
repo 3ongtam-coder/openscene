@@ -30,8 +30,14 @@ describe('AI domain model catalog', () => {
     expect(ids).toContain('deepseek/deepseek-chat');
     expect(getAvailableDomainModels('writer').map((model) => model.id)).toEqual([
       'gemini-3.1-pro-preview',
-      'gemini-3.1-flash-lite'
+      'gemini-3.1-flash-lite',
+      'agentrouter/claude-opus-4-8',
+      'agentrouter/claude-opus-5',
+      'agentrouter/deepseek-v4-flash',
+      'agentrouter/glm-5.3',
+      'agentrouter/gpt-5.6-sol'
     ]);
+    expect(ids).toContain('agentrouter/gpt-5.6-sol');
   });
 
   it('keeps the local model as the edit-agent default ahead of cloud providers', () => {

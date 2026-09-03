@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { requestGeminiWriter } from '../src/shared/writerGeneration';
+import { requestAgentRouterWriter, requestGeminiWriter } from '../src/shared/writerGeneration';
 import type { WriterDraft, WriterRequest } from '../src/shared/writerWorkflow';
 
 const request: WriterRequest = {
@@ -66,5 +66,35 @@ describe('Gemini Writer generation', () => {
     } catch (error) {
       expect(String(error)).not.toContain('never-log-me');
     }
+  });
+});
+
+describe('AgentRouter Writer generation', () => {
+  it('uses the current gateway, dual auth headers, native model alias, and accepts multipart fenced JSON', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://co.agentrouter.org/v1/chat/completions');
+      expect(String(url)).not.toContain('router-secret');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe('Bearer router-secret');
+      expect(headers.apiKey).toBe('router-secret');
+      const body = JSON.parse(String(init?.body)) as { model: string; messages: readonly { content: string }[] };
+      expect(body.model).toBe('gpt-5.6-sol');
+      expect(body.messages[1]?.content).toContain('exact JSON Schema');
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: [{ type: 'text', text: `\`\`\`json\n${JSON.stringify(draft)}\n\`\`\`` }] } }]
+      }), { status: 200 });
+    });
+    await expect(requestAgentRouterWriter({
+      apiKey: 'router-secret', modelId: 'agentrouter/gpt-5.6-sol', request, fetchImpl
+    })).resolves.toEqual(draft);
+  });
+
+  it('redacts the AgentRouter key from provider errors', async () => {
+    const fetchImpl = async () => new Response(JSON.stringify({
+      error: { message: 'Rejected router-secret' }
+    }), { status: 429 });
+    await expect(requestAgentRouterWriter({
+      apiKey: 'router-secret', modelId: 'agentrouter/glm-5.3', request, fetchImpl
+    })).rejects.toThrow('Rejected [REDACTED]');
   });
 });

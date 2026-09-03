@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
-import { requestGeminiWriter } from '@openvideo/shared/writerGeneration';
+import { requestWriter } from '@openvideo/shared/writerGeneration';
+import { getLlmProvider } from '@openvideo/shared/llmProviders';
 import {
   WRITER_MODEL_IDS,
   applyWriterDraft,
@@ -14,7 +15,7 @@ import {
 import { FormScreen } from '../components/FormScreen';
 import { ModelSelect } from '../components/ModelSelect';
 import { useRevealOnFocus } from '../components/KeyboardAwareScroll';
-import { readKey } from '../lib/credentials';
+import { readSlot } from '../lib/credentials';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { readProject, writeProject } from '../lib/projectStore';
 import { MIN_TAP, press } from '../lib/touch';
@@ -84,15 +85,16 @@ export function WriterScreen({
         ? { parentScriptId: parent.id, currentScreenplay: parent.screenplay }
         : {})
     };
-    const apiKey = await readKey('geminiApiKey');
+    const provider = getLlmProvider(model.providerId);
+    const apiKey = provider?.credentialKey === undefined ? null : await readSlot(provider.credentialKey);
     if (apiKey === null) {
-      setMessage('Google Gemini is not connected. Add its API key in Settings.');
+      setMessage(`${model.providerLabel} is not connected. Add its API key in Settings.`);
       return;
     }
     setBusy(true);
     setMessage('');
     try {
-      const draft = await requestGeminiWriter({
+      const draft = await requestWriter({
         apiKey,
         modelId: model.id as (typeof WRITER_MODEL_IDS)[number],
         request
@@ -100,7 +102,7 @@ export function WriterScreen({
       setPreview({ draft, request });
       setMessage('Draft ready. Review it before saving.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Gemini Writer failed.');
+      setMessage(error instanceof Error ? error.message : `${model.providerLabel} Writer failed.`);
     } finally {
       setBusy(false);
     }
@@ -128,7 +130,7 @@ export function WriterScreen({
     }
   };
 
-  const canGenerate = !busy && project !== null && connected.google_gemini === true && sourceText.trim().length > 0 &&
+  const canGenerate = !busy && project !== null && model !== undefined && connected[model.providerId] === true && sourceText.trim().length > 0 &&
     language.trim().length > 0 && audience.trim().length > 0 && tone.trim().length > 0 &&
     Number.isSafeInteger(targetDurationSeconds) && targetDurationSeconds >= 4 && targetDurationSeconds <= 7_200 &&
     (mode !== 'rewrite' || parent !== undefined);
@@ -136,7 +138,7 @@ export function WriterScreen({
   return (
     <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
       <Text style={styles.h1}>Writer & Storyboard</Text>
-      <Text style={styles.sub}>Gemini 3.1 creates a structured draft. Nothing changes until you review and save it.</Text>
+      <Text style={styles.sub}>The selected Writer model creates a structured draft. Nothing changes until you review and save it.</Text>
 
       <Text style={styles.label}>Model</Text>
       <ModelSelect
@@ -200,7 +202,7 @@ export function WriterScreen({
       <TextInput value={audience} onChangeText={setAudience} style={styles.input} />
       <Text style={styles.label}>Tone</Text>
       <TextInput value={tone} onChangeText={setTone} style={styles.input} />
-      <Text style={styles.note}>Generate is an explicit Gemini API request and may incur text-generation charges.</Text>
+      <Text style={styles.note}>Generate is an explicit request to the selected provider and may incur text-generation charges.</Text>
 
       <Pressable accessibilityRole="button" disabled={!canGenerate} onPress={() => void generate()} style={press([styles.primary, !canGenerate && styles.off])}>
         {busy ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.primaryText}>Generate draft</Text>}

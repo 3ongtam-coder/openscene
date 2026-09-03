@@ -8,13 +8,19 @@ import {
   type ScriptVersion
 } from './aiProjectDomain';
 import { hasAllowedKeys, isPlainRecord } from './timelineValidationPrimitives';
+import { AGENT_ROUTER_MODEL_IDS, type AgentRouterModelId } from './agentRouter';
 
 export const WRITER_MODES = ['idea_to_script', 'content_to_script', 'rewrite'] as const;
-export const WRITER_MODEL_IDS = ['gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'] as const;
+export const GEMINI_WRITER_MODEL_IDS = ['gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'] as const;
+export const WRITER_MODEL_IDS: readonly WriterModelId[] = [
+  ...AGENT_ROUTER_MODEL_IDS,
+  ...GEMINI_WRITER_MODEL_IDS
+];
 export const DEFAULT_WRITER_MODEL_ID: WriterModelId = 'gemini-3.1-pro-preview';
 
 export type WriterMode = (typeof WRITER_MODES)[number];
-export type WriterModelId = (typeof WRITER_MODEL_IDS)[number];
+export type GeminiWriterModelId = (typeof GEMINI_WRITER_MODEL_IDS)[number];
+export type WriterModelId = GeminiWriterModelId | AgentRouterModelId;
 
 export type WriterRequest = {
   readonly mode: WriterMode;

@@ -10,6 +10,7 @@ import type { OpenAiAuthMode } from '../shared/openAiAuth';
 import type { AgentChatModelFactory } from './agentChatGraph';
 import type { CredentialStore } from './credentialStore';
 import { CHATGPT_CODEX_ENDPOINT_METADATA, chatGptCodexClientHeaders } from './chatGptOAuthService';
+import { AGENT_ROUTER_PROVIDER_ID, agentRouterHeaders } from '../shared/agentRouter';
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
 
@@ -163,7 +164,14 @@ async function createCloudChatModel(
     // Only OpenAI-family reasoning models accept an effort setting; other
     // OpenAI-compatible endpoints ignore an unknown field, so gate on provider.
     ...(reasoningEffort !== undefined && spec.providerId === 'openai' ? { reasoningEffort } : {}),
-    ...(spec.baseUrl === undefined ? {} : { configuration: { baseURL: spec.baseUrl } })
+    ...(spec.baseUrl === undefined && spec.providerId !== AGENT_ROUTER_PROVIDER_ID
+      ? {}
+      : {
+          configuration: {
+            ...(spec.baseUrl === undefined ? {} : { baseURL: spec.baseUrl }),
+            ...(spec.providerId === AGENT_ROUTER_PROVIDER_ID ? { defaultHeaders: agentRouterHeaders(apiKey) } : {})
+          }
+        })
   });
 }
 

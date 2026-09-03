@@ -256,6 +256,55 @@ describe('LlmExecutionAdapter (main process)', () => {
     }
   });
 
+  it('uses AgentRouter dual auth headers and joins multipart response text', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cred-test-agentrouter-'));
+    try {
+      const credentialStore = new CredentialStore(tempDir);
+      await credentialStore.setCredential('agentRouterApiKey', 'router-test-key');
+      const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+        expect(url).toBe('https://co.agentrouter.org/v1/chat/completions');
+        const headers = init.headers as Record<string, string>;
+        expect(headers.Authorization).toBe('Bearer router-test-key');
+        expect(headers.apiKey).toBe('router-test-key');
+        expect(headers['User-Agent']).toBe('OpenScene');
+        expect(JSON.parse(init.body as string).model).toBe('claude-opus-4-8');
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: [{ type: 'text', text: 'Agent' }, { type: 'text', text: 'Router online.' }] } }]
+        }), { status: 200 });
+      });
+      const adapter = new LlmExecutionAdapter(credentialStore, { fetchImpl: fetchMock as unknown as typeof fetch });
+
+      const result = await adapter.executeCompletion({ modelId: 'agentrouter/claude-opus-4-8', prompt: 'Hi' });
+
+      expect(result).toEqual({
+        ok: true,
+        modelId: 'agentrouter/claude-opus-4-8',
+        providerId: 'agentrouter',
+        completion: 'AgentRouter online.'
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts an AgentRouter key echoed by a provider error', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cred-test-agentrouter-error-'));
+    try {
+      const credentialStore = new CredentialStore(tempDir);
+      await credentialStore.setCredential('agentRouterApiKey', 'router-never-echo');
+      const adapter = new LlmExecutionAdapter(credentialStore, {
+        fetchImpl: (async () => new Response(JSON.stringify({
+          error: { message: 'Quota error for router-never-echo' }
+        }), { status: 429 })) as typeof fetch
+      });
+      const result = await adapter.executeCompletion({ modelId: 'agentrouter/glm-5.3', prompt: 'Hi' });
+      expect(result.error).toContain('Quota error for [REDACTED]');
+      expect(JSON.stringify(result)).not.toContain('router-never-echo');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('returns an error for unknown model IDs without making a network call', async () => {
     const fetchMock = vi.fn();
     const adapter = new LlmExecutionAdapter(undefined, { fetchImpl: fetchMock as unknown as typeof fetch });
