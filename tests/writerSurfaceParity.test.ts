@@ -16,9 +16,12 @@ describe('Writer surface parity', () => {
     expect(desktop).toContain('applyWriterDraft({');
     expect(mobile).toContain("from '@openvideo/shared/writerWorkflow'");
     expect(mobile).toContain("from '@openvideo/shared/writerGeneration'");
+    expect(mobile).toContain('requestWriter({');
     expect(mobile).toContain('applyWriterDraft({');
     expect(preload).toContain('generateWriterDraft(input: WriterGenerationInput)');
-    expect(main).toContain("getCredentialValue('geminiApiKey')");
+    expect(main).toContain("const credentialKey = agentRouter ? AGENT_ROUTER_CREDENTIAL_KEY : 'geminiApiKey'");
+    expect(main).toContain('getCredentialValue(credentialKey)');
+    expect(main).toContain('requestWriter({');
     expect(editor).toContain('current.id !== response.value.id');
     expect(editor).toContain('ai: response.value.ai');
   });
