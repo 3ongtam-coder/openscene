@@ -130,6 +130,7 @@ export const WRITER_RESPONSE_JSON_SCHEMA = {
                   type: 'integer', minimum: 1, maximum: 120,
                   description: 'Whole seconds for this shot, from 1 through 120 inclusive.'
                 },
+                framing: { type: 'string' }, cameraMotion: { type: 'string' },
                 action: { type: 'string' }, dialogue: { type: 'string' },
                 audioCues: { type: 'array', maxItems: 100, items: { type: 'string' } }, negativePrompt: { type: 'string' }
               }

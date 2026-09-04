@@ -256,7 +256,7 @@ describe('LlmExecutionAdapter (main process)', () => {
     }
   });
 
-  it('blocks AgentRouter before generic fetch because the service requires a supported client', async () => {
+  it('blocks AgentRouter chat until its OpenAI-compatible route preserves Edit Agent approvals', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'cred-test-agentrouter-'));
     try {
       const credentialStore = new CredentialStore(tempDir);
@@ -267,7 +267,7 @@ describe('LlmExecutionAdapter (main process)', () => {
       const result = await adapter.executeCompletion({ modelId: 'agentrouter/claude-opus-4-8', prompt: 'Hi' });
 
       expect(result).toMatchObject({ ok: false, providerId: 'agentrouter' });
-      expect(result.error).toContain('Install Claude Code');
+      expect(result.error).toContain('tool approvals');
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
