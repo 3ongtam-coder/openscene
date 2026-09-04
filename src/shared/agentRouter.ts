@@ -1,6 +1,13 @@
 export const AGENT_ROUTER_PROVIDER_ID = 'agentrouter';
 export const AGENT_ROUTER_CREDENTIAL_KEY = 'agentRouterApiKey';
-export const AGENT_ROUTER_BASE_URL = 'https://co.agentrouter.org/v1';
+/** Base URL from AgentRouter's Claude Code setup guide (there is no /v1 suffix). */
+export const AGENT_ROUTER_BASE_URL = 'https://agentrouter.org';
+
+export const AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON =
+  'AgentRouter requires a supported desktop client. Install Claude Code and use OpenScene on desktop.';
+
+export const AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON =
+  'AgentRouter blocks generic LangChain clients. Its Claude Code bridge is Writer-only until OpenScene can preserve Edit Agent tool approvals through that client.';
 
 /**
  * Account model aliases supplied by the user. AgentRouter pools can expose a
@@ -28,29 +35,4 @@ export function isAgentRouterModelId(modelId: string): modelId is AgentRouterMod
 
 export function agentRouterNativeModelId(modelId: AgentRouterModelId): AgentRouterNativeModelId {
   return modelId.slice(`${AGENT_ROUTER_PROVIDER_ID}/`.length) as AgentRouterNativeModelId;
-}
-
-/** AgentRouter accepts the bearer form and its legacy apiKey compatibility header. */
-export function agentRouterHeaders(apiKey: string): Record<string, string> {
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-    apiKey,
-    'User-Agent': 'OpenScene'
-  };
-}
-
-/** OpenAI-compatible responses may encode text as a string or multipart array. */
-export function agentRouterMessageText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((part) => {
-      if (typeof part === 'string') return part;
-      if (typeof part !== 'object' || part === null) return '';
-      const value = part as { text?: unknown; content?: unknown };
-      if (typeof value.text === 'string') return value.text;
-      return typeof value.content === 'string' ? value.content : '';
-    })
-    .join('');
 }
