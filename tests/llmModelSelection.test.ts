@@ -72,7 +72,7 @@ describe('LLM provider and model catalog configuration', () => {
     expect(getLlmProvider('deepseek')?.credentialKey).toBe('deepseekApiKey');
     expect(getLlmProvider('agentrouter')).toMatchObject({
       credentialKey: 'agentRouterApiKey',
-      baseUrl: 'https://agentrouter.org',
+      baseUrl: 'https://agentrouter.org/v1',
       adapter: 'openai-compatible'
     });
     expect(isProviderConnected('unknown-provider', { anyKey: true })).toBe(false);
