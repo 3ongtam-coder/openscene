@@ -23,7 +23,7 @@ describe('Writer surface parity', () => {
     expect(main).toContain("const credentialKey = agentRouter ? AGENT_ROUTER_CREDENTIAL_KEY : 'geminiApiKey'");
     expect(main).toContain('getCredentialValue(credentialKey)');
     expect(main).toContain('requestWriter({');
-    expect(main).toContain('requestAgentRouterHttpWriter({');
+    expect(main).toContain('requestAgentRouterCodexWriter({');
     expect(editor).toContain('current.id !== response.value.id');
     expect(editor).toContain('ai: response.value.ai');
   });
