@@ -1,8 +1,14 @@
 import { LLM_CATALOG } from './llmCatalog.generated';
 import { getVideoModelCapabilities } from './mediaCapabilityRegistry';
-import { AGENT_ROUTER_MODELS, AGENT_ROUTER_PROVIDER_ID } from './agentRouter';
+import {
+  AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON,
+  AGENT_ROUTER_MODELS,
+  AGENT_ROUTER_PROVIDER_ID,
+  AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON
+} from './agentRouter';
 
 export type AiDomain = 'writer' | 'voice-generation' | 'video-generation' | 'image-generation' | 'edit-agent';
+export type AiRuntime = 'desktop' | 'mobile';
 
 export type AiDomainProvider = {
   readonly id: string;
@@ -36,6 +42,8 @@ export type AiDomainModelConfig = {
   readonly domains: readonly AiDomain[];
   readonly available: boolean;
   readonly unavailableReason?: string;
+  /** Omitted when a runnable model works on both front ends. */
+  readonly availableOn?: readonly AiRuntime[];
   readonly contextWindow?: string;
   readonly availableContexts?: readonly string[];
   readonly precisionBit?: string;
@@ -432,6 +440,8 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     executionPath: 'api',
     domains: ['writer'],
     available: true,
+    availableOn: ['desktop'],
+    unavailableReason: AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON,
     reasoning: model.reasoning
   })),
   {
@@ -454,7 +464,8 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     description: 'AgentRouter account model alias for agentic timeline editing.',
     executionPath: 'api',
     domains: ['edit-agent'],
-    available: true,
+    available: false,
+    unavailableReason: AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON,
     reasoning: model.reasoning
   })),
   // Every tool-calling model from the generated models.dev catalog is
@@ -633,6 +644,10 @@ export function getDomainModels(domain: AiDomain): readonly AiDomainModelConfig[
 
 export function getAvailableDomainModels(domain: AiDomain): readonly AiDomainModelConfig[] {
   return getDomainModels(domain).filter((model) => model.available);
+}
+
+export function isDomainModelAvailableOnRuntime(model: AiDomainModelConfig, runtime: AiRuntime): boolean {
+  return model.available && (model.availableOn === undefined || model.availableOn.includes(runtime));
 }
 
 export function getDomainModel(domain: AiDomain, modelId: string): AiDomainModelConfig | undefined {
