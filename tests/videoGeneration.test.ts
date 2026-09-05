@@ -69,6 +69,87 @@ describe('shared video generation', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('sends Veo Start-End frames with the documented inlineData payload', async () => {
+    let startBody: unknown;
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith(':predictLongRunning')) {
+        startBody = JSON.parse(init.body as string);
+        return new Response(JSON.stringify({ name: 'operations/start-end' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        done: true,
+        response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://files/start-end.mp4' } }] } }
+      }), { status: 200 });
+    });
+
+    await requestVeoVideo({
+      apiKey: 'k', modelId: 'veo-3.1-generate-preview', prompt: 'walk from dawn to dusk',
+      operation: 'start_end', aspectRatio: '16:9', durationSeconds: 6,
+      referenceImage: { mimeType: 'image/png', base64: 'FIRST' },
+      lastFrame: { mimeType: 'image/jpeg', base64: 'LAST' },
+      pollIntervalMs: 0, fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(startBody).toEqual({
+      instances: [{
+        prompt: 'walk from dawn to dusk',
+        image: { inlineData: { mimeType: 'image/png', data: 'FIRST' } },
+        lastFrame: { inlineData: { mimeType: 'image/jpeg', data: 'LAST' } }
+      }],
+      parameters: { aspectRatio: '16:9', durationSeconds: 6 }
+    });
+  });
+
+  it('sends up to three Veo asset references without turning one into a first frame', async () => {
+    let startBody: any;
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith(':predictLongRunning')) {
+        startBody = JSON.parse(init.body as string);
+        return new Response(JSON.stringify({ name: 'operations/references' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        done: true,
+        response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://files/references.mp4' } }] } }
+      }), { status: 200 });
+    });
+    const referenceImages = ['ONE', 'TWO', 'THREE'].map((base64) => ({ mimeType: 'image/png', base64 }));
+
+    await requestVeoVideo({
+      apiKey: 'k', modelId: 'veo-3.1-generate-preview', prompt: 'same explorer across the scene',
+      operation: 'reference_to_video', aspectRatio: '9:16', durationSeconds: 8,
+      referenceImages, pollIntervalMs: 0, fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(startBody.instances[0].image).toBeUndefined();
+    expect(startBody.instances[0].referenceImages).toEqual(referenceImages.map((image) => ({
+      image: { inlineData: { mimeType: image.mimeType, data: image.base64 } }, referenceType: 'asset'
+    })));
+  });
+
+  it('rejects incomplete or mixed advanced inputs before contacting Veo', async () => {
+    const fetchMock = vi.fn();
+    await expect(requestVeoVideo({
+      apiKey: 'k', modelId: 'veo-3.1-generate-preview', prompt: 'p', operation: 'start_end',
+      aspectRatio: '16:9', durationSeconds: 8,
+      lastFrame: { mimeType: 'image/png', base64: 'LAST' },
+      fetchImpl: fetchMock as unknown as typeof fetch
+    })).rejects.toThrow(/both a first frame and a last frame/);
+    await expect(requestVeoVideo({
+      apiKey: 'k', modelId: 'veo-3.1-generate-preview', prompt: 'p', operation: 'reference_to_video',
+      aspectRatio: '16:9', durationSeconds: 8,
+      referenceImage: { mimeType: 'image/png', base64: 'FIRST' },
+      referenceImages: [{ mimeType: 'image/png', base64: 'ASSET' }],
+      fetchImpl: fetchMock as unknown as typeof fetch
+    })).rejects.toThrow(/cannot include first or last frames/);
+    await expect(requestVeoVideo({
+      apiKey: 'k', modelId: 'veo-3.1-generate-preview', prompt: 'p', operation: 'reference_to_video',
+      aspectRatio: '16:9', durationSeconds: 8,
+      referenceImages: ['1', '2', '3', '4'].map((base64) => ({ mimeType: 'image/png', base64 })),
+      fetchImpl: fetchMock as unknown as typeof fetch
+    })).rejects.toThrow(/expects 1-3 reference image/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('sends an accepted Sora length unchanged and points at the content URL', async () => {
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
       if (url === 'https://api.openai.com/v1/videos') {

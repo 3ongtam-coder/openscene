@@ -19,7 +19,7 @@ describe('versioned media capability registry', () => {
     const ids = VIDEO_MODEL_CAPABILITIES.map((model) => model.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     expect(VIDEO_MODEL_CAPABILITIES.every((model) => model.registryVersion === MEDIA_CAPABILITY_REGISTRY_VERSION)).toBe(true);
-    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-02');
+    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-05');
     expect(GENERATION_CAPABILITIES).toEqual(VIDEO_OPERATIONS);
   });
 
@@ -31,8 +31,8 @@ describe('versioned media capability registry', () => {
       start_end: { minReferenceImages: 2, maxReferenceImages: 2 },
       video_extend: { durationSeconds: [7], resolutions: ['720p'] }
     });
-    expect(veo?.implemented).toEqual(['text_to_video', 'image_to_video']);
-    expect(isVideoOperationImplemented(veo!.modelId, 'start_end')).toBe(false);
+    expect(veo?.implemented).toEqual(['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']);
+    expect(isVideoOperationImplemented(veo!.modelId, 'start_end')).toBe(true);
     expect(getVideoProviderBinding(veo!.modelId)).toEqual({
       adapterId: 'google_veo', credentialKey: 'geminiApiKey', seamProviderId: 'gemini_veo'
     });
@@ -60,7 +60,7 @@ describe('versioned media capability registry', () => {
     expect(validateVideoRequest({
       modelId: 'veo-3.1-generate-preview', operation: 'start_end', durationSeconds: 8,
       aspectRatio: '16:9', referenceImageCount: 2
-    })).toMatchObject({ ok: false, code: 'NOT_IMPLEMENTED' });
+    })).toMatchObject({ ok: true });
     expect(validateVideoRequest({
       modelId: 'veo-3.1-generate-preview', operation: 'start_end', durationSeconds: 8,
       aspectRatio: '16:9', referenceImageCount: 1, requireImplemented: false

@@ -38,8 +38,14 @@ export interface ReferenceImageSelection {
 
 export interface VideoGenerationRequest {
   prompt: string;
-  /** Optional image-to-video seed. */
+  /** Explicit operation; omitted requests retain legacy text/first-frame inference. */
+  operation?: import('./mediaCapabilityRegistry').VideoOperation;
+  /** First frame for image-to-video or Start-End generation. */
   referenceImage?: ReferenceImageSelection;
+  /** Required ending frame for Start-End generation. */
+  lastFrame?: ReferenceImageSelection;
+  /** One to three identity/product references for reference-to-video. */
+  referenceImages?: readonly ReferenceImageSelection[];
   aspectRatio: VideoAspectRatio;
   /** Omit to use the selected model's first supported duration. */
   durationSeconds?: number;
@@ -64,6 +70,8 @@ export interface VideoGenerationJob {
   mode: ProviderExecutionMode;
   status: ProviderJobStatus;
   prompt: string;
+  /** Present for new jobs; optional so saved jobs from older builds still load. */
+  operation?: import('./mediaCapabilityRegistry').VideoOperation;
   aspectRatio: VideoAspectRatio;
   durationSeconds: number;
   stylePreset?: string;
