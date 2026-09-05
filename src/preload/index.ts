@@ -25,6 +25,8 @@ import type {
 import type {
   CreateProjectInput,
   CreateProjectResult,
+  DetachVideoAudioInput,
+  DetachVideoAudioResult,
   DeleteProjectInput,
   GetAssetPlaybackUrlInput,
   ImportProjectAssetsInput,
@@ -87,6 +89,7 @@ export interface VideoToolApi {
   importRecordingResultAsset(input: ImportRecordingResultAssetInput): Promise<ApiResponse<ImportProjectAssetsResult>>;
   importAiResultAsset(input: { projectId: string; jobId: string }): Promise<ApiResponse<ImportProjectAssetsResult>>;
   updateAssetMetadata(input: UpdateAssetMetadataInput): Promise<ApiResponse<MediaAsset>>;
+  detachVideoAudio(input: DetachVideoAudioInput): Promise<ApiResponse<DetachVideoAudioResult>>;
   getAssetPlaybackUrl(input: GetAssetPlaybackUrlInput): Promise<ApiResponse<AssetPlaybackUrl>>;
   saveTimeline(input: SaveTimelineInput): Promise<ApiResponse<LocalProjectSnapshot>>;
   saveAiProjectDocument(input: SaveAiProjectDocumentInput): Promise<ApiResponse<LocalProjectSnapshot>>;
@@ -202,6 +205,8 @@ const videoTool: VideoToolApi = {
     ipcRenderer.invoke(IPC_CHANNELS.projectAiResultImport, input) as Promise<ApiResponse<ImportProjectAssetsResult>>,
   updateAssetMetadata: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetMetadataUpdate, input) as Promise<ApiResponse<MediaAsset>>,
+  detachVideoAudio: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.projectAssetDetachAudio, input) as Promise<ApiResponse<DetachVideoAudioResult>>,
   getAssetPlaybackUrl: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.projectAssetPlaybackUrl, input) as Promise<ApiResponse<AssetPlaybackUrl>>,
   saveTimeline: (input) => ipcRenderer.invoke(IPC_CHANNELS.projectTimelineSave, input) as Promise<ApiResponse<LocalProjectSnapshot>>,

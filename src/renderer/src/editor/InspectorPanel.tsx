@@ -420,6 +420,18 @@ function SelectionInspector({ editor }: InspectorContentProps): ReactElement {
               />
               <span className="property-value-chip">{volumeDb} dB</span>
             </PropertyRow>
+            {clip.asset?.kind === 'video' && (
+              <PropertyRow label="Embedded">
+                <Button
+                  className="inspector-action"
+                  disabled={editor.isBusy}
+                  title="Extract the native sound, align it on an audio track, and mute this video clip"
+                  onClick={() => void editor.detachSelectedClipAudio()}
+                >
+                  {editor.isBusy ? 'Extracting…' : 'Detach audio'}
+                </Button>
+              </PropertyRow>
+            )}
           </PropertyGroup>
         </>
       )}
