@@ -4265,6 +4265,9 @@ button {
 .narration-workflow .studio-surface__body { overflow-y: auto; }
 .subtitle-cue-list { display: grid; gap: var(--space-2); }
 .subtitle-cue { display: grid; gap: var(--space-2); min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.speech-result-review { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card); }
+.speech-result-review p { margin: var(--space-1) 0 0; color: var(--text-weak); }
+.speech-result-review__player { width: 100%; min-width: 0; }
 
 .writer-workspace .studio-field textarea {
   width: 100%;

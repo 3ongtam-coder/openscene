@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { AssetLibraryStore } from '../src/main/assetLibraryStore';
+import { ProjectLocationRegistry } from '../src/main/projectLocations';
 import { ProjectStore } from '../src/main/projectStore';
 import { ResultAssetImportService, type CompletedResultAssetSource } from '../src/main/resultAssetImportService';
 
@@ -18,6 +19,33 @@ async function withTempDirectory<T>(run: (directory: string) => Promise<T>): Pro
 }
 
 describe('completed result asset import service', () => {
+  it('imports generated speech into a registered external project folder whose path contains spaces', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectsRoot = join(directory, 'internal projects');
+      const externalFolder = join(directory, 'creator project with spaces');
+      const speechPath = join(directory, 'speech result.wav');
+      await mkdir(externalFolder);
+      await writeFile(speechPath, Buffer.from('RIFF-voice'));
+      const locations = new ProjectLocationRegistry(join(directory, 'project-locations.json'));
+      const projects = new ProjectStore(projectsRoot, locations);
+      const opened = await projects.openOrInitializeFolder(externalFolder);
+      if (opened === null) throw new Error('Expected the external project fixture to open.');
+      const service = new ResultAssetImportService({
+        assets: new AssetLibraryStore(projectsRoot, projects),
+        resolveRecordingSource: () => null,
+        resolveAiSource: () => ({ sourcePath: speechPath, displayName: 'speech result.wav', kind: 'audio', mimeType: 'audio/wav' })
+      });
+
+      const imported = await service.importAiResult({ projectId: opened.project.id, jobId: 'speech-job-1' });
+
+      expect(imported.ok).toBe(true);
+      if (!imported.ok) return;
+      const asset = imported.value.assets[0];
+      expect(asset).toBeDefined();
+      await expect(readFile(join(externalFolder, asset?.projectRelativePath ?? ''))).resolves.toEqual(Buffer.from('RIFF-voice'));
+    });
+  });
+
   it('given completed recording and TTS IDs, when imported, then copied path-free assets are returned', async () => {
     await withTempDirectory(async (directory) => {
       const root = join(directory, 'projects');

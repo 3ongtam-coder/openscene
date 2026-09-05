@@ -3,6 +3,7 @@ import {
   createSpeechGenerationJob,
   createVideoGenerationJob,
   getCompletedAiSource,
+  openCompletedSpeechPreviewSource,
   getSpeechGenerationJob,
   getVideoGenerationJob
 } from '../src/main/aiJobManager';
@@ -98,6 +99,11 @@ describe('AI Job Manager and cloud provider seams', () => {
       await new Promise((resolve) => setTimeout(resolve, 1_500));
 
       expect(getSpeechGenerationJob(job.id)?.status).toBe('completed');
+      expect(getSpeechGenerationJob(job.id)?.previewUrl).toBe(`video-tool-asset://speech-preview/${job.id}`);
+      expect(getSpeechGenerationJob(job.id)?.previewUrl).not.toContain('ai_generations');
+      const previewSource = await openCompletedSpeechPreviewSource(job.id);
+      expect(previewSource).toMatchObject({ byteLength: 46, mimeType: 'audio/wav' });
+      await previewSource?.file.close();
       expect(getCompletedAiSource(job.id)).toMatchObject({ kind: 'audio', mimeType: 'audio/wav' });
       expect(getCompletedAiSource(job.id)?.displayName).toMatch(/\.wav$/);
     } finally {

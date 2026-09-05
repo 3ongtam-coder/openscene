@@ -21,6 +21,9 @@ describe('domain generation studio wiring', () => {
     // The selected cloud or desktop-local model drives the same typed job.
     expect(voice).toContain('modelId: voiceModel.id');
     expect(voice).toContain('aiListSpeechVoices(voiceModel.id)');
+    expect(voice).toContain('poll.value.previewUrl');
+    expect(voice).toContain('<audio className="speech-result-review__player"');
+    expect(voice).toContain('controls preload="metadata"');
     expect(video).toContain('modelId: videoModel.id');
     expect(video).not.toContain('LlmModelSelectorBar');
     expect(voice).not.toContain('LlmModelSelectorBar');
