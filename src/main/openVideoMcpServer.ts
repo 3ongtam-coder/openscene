@@ -409,7 +409,15 @@ export class OpenVideoMcpServer {
       script: z.string().min(1, 'Script is required'),
       voiceId: z.string().default(''),
       modelId: z.string().optional(),
-      apiKey: z.string().optional()
+      apiKey: z.string().optional(),
+      delivery: z.object({
+        performanceScript: z.string().min(1).max(200_000),
+        stability: z.number().min(0).max(1),
+        similarityBoost: z.number().min(0).max(1),
+        style: z.number().min(0).max(1),
+        speed: z.number().min(0.7).max(1.2),
+        speakerBoost: z.boolean()
+      }).optional()
     })
   })
   async createSpeechJob(params: {
@@ -417,11 +425,13 @@ export class OpenVideoMcpServer {
     voiceId?: string;
     modelId?: string;
     apiKey?: string;
+    delivery?: import('../shared/voiceDelivery').VoiceDeliverySettings;
   }) {
     const job = await createSpeechGenerationJob({
       script: params.script,
       voiceId: params.voiceId ?? '',
-      ...(params.modelId === undefined ? {} : { modelId: params.modelId })
+      ...(params.modelId === undefined ? {} : { modelId: params.modelId }),
+      ...(params.delivery === undefined ? {} : { delivery: params.delivery })
     });
 
     return {

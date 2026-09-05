@@ -1,6 +1,7 @@
 import type { AiProjectDocument } from './aiProjectDomain';
 import type { NarrationPlan, SubtitleCue } from './narrationPlan';
 import { parseNarrationPlan } from './narrationPlan';
+import { createVoiceDeliverySettings } from './voiceDelivery';
 import type { TimelineDocument, TimelineTitle } from './timelineTypes';
 import { parseWriterPromptText } from './writerPipeline';
 import { WRITER_STAGES } from './writerStages';
@@ -81,12 +82,12 @@ export function createNarrationPlan(input: { readonly ai: AiProjectDocument; rea
   const script = (input.script ?? writer?.script ?? '').trim();
   if (!script) throw new Error('Add narration text, or approve Writer prompts containing dialogue first.');
   const cues = writer?.script === script ? writer.cues : timedCues(script, 0, Math.max(1_000, Math.round(input.durationMs)), 'subtitle-manual');
-  const plan = { sourceFingerprint: narrationFingerprint(script), ...(writer ? { sourceScriptId: writer.scriptId } : {}), script, voiceModelId: input.voiceModelId, voiceId: input.voiceId, status: 'draft' as const, cues };
+  const plan = { sourceFingerprint: narrationFingerprint(script), ...(writer ? { sourceScriptId: writer.scriptId } : {}), script, voiceModelId: input.voiceModelId, voiceId: input.voiceId, delivery: createVoiceDeliverySettings(script), status: 'draft' as const, cues };
   const parsed = parseNarrationPlan(plan); if (!parsed) throw new Error('Narration could not be split into valid subtitle cues. Shorten the script or increase the duration.');
   return parsed;
 }
 
-export function updateNarrationPlan(plan: NarrationPlan, changes: Partial<Pick<NarrationPlan, 'script' | 'voiceModelId' | 'voiceId' | 'cues'>>, approve = false): NarrationPlan {
+export function updateNarrationPlan(plan: NarrationPlan, changes: Partial<Pick<NarrationPlan, 'script' | 'voiceModelId' | 'voiceId' | 'delivery' | 'cues'>>, approve = false): NarrationPlan {
   const script = (changes.script ?? plan.script).trim();
   const detached = changes.script !== undefined && script !== plan.script;
   const { sourceScriptId: _sourceScriptId, ...withoutSource } = plan;

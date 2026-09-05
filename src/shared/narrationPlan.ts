@@ -1,4 +1,5 @@
 import { hasAllowedKeys, isPlainRecord } from './timelineValidationPrimitives';
+import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from './voiceDelivery';
 
 export const NARRATION_PLAN_STATUSES = ['draft', 'approved'] as const;
 export type NarrationPlanStatus = (typeof NARRATION_PLAN_STATUSES)[number];
@@ -9,6 +10,7 @@ export type NarrationPlan = {
   readonly script: string;
   readonly voiceModelId: string;
   readonly voiceId: string;
+  readonly delivery?: VoiceDeliverySettings;
   readonly status: NarrationPlanStatus;
   readonly cues: readonly SubtitleCue[];
 };
@@ -22,12 +24,13 @@ export function narrationScriptFromCues(cues: readonly SubtitleCue[]): string {
 }
 
 export function parseNarrationPlan(value: unknown): NarrationPlan | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['sourceFingerprint', 'sourceScriptId', 'script', 'voiceModelId', 'voiceId', 'status', 'cues']) ||
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['sourceFingerprint', 'sourceScriptId', 'script', 'voiceModelId', 'voiceId', 'delivery', 'status', 'cues']) ||
     typeof value.sourceFingerprint !== 'string' || !/^[0-9a-f]{8}$/.test(value.sourceFingerprint) ||
     (value.sourceScriptId !== undefined && (typeof value.sourceScriptId !== 'string' || value.sourceScriptId.length > 200)) ||
     typeof value.script !== 'string' || !value.script.trim() || value.script.length > 200_000 ||
     typeof value.voiceModelId !== 'string' || value.voiceModelId.length > 200 ||
     typeof value.voiceId !== 'string' || value.voiceId.length > 500 ||
+    (value.delivery !== undefined && parseVoiceDeliverySettings(value.delivery) === null) ||
     typeof value.status !== 'string' || !(NARRATION_PLAN_STATUSES as readonly string[]).includes(value.status) ||
     !Array.isArray(value.cues) || value.cues.length === 0 || value.cues.length > 5_000) return null;
   const cues: SubtitleCue[] = [];
@@ -47,6 +50,7 @@ export function parseNarrationPlan(value: unknown): NarrationPlan | null {
     sourceFingerprint: value.sourceFingerprint,
     ...(value.sourceScriptId === undefined ? {} : { sourceScriptId: value.sourceScriptId as string }),
     script: value.script.trim(), voiceModelId: value.voiceModelId, voiceId: value.voiceId,
+    ...(value.delivery === undefined ? {} : { delivery: parseVoiceDeliverySettings(value.delivery)! }),
     status: value.status as NarrationPlanStatus, cues: sorted
   };
 }

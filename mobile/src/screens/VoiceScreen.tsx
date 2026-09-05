@@ -5,6 +5,7 @@ import { narrationScriptFromCues, type NarrationPlan, type SubtitleCue } from '@
 import { applySubtitleCues, createNarrationPlan, narrationFromApprovedWriter, narrationPlanMatchesWriter, updateNarrationPlan } from '@openvideo/shared/subtitleWorkflow';
 import { usesRuntimeVoiceCatalog, voiceChoices } from '@openvideo/shared/voiceCatalog';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { createVoiceDeliverySettings, voiceDeliveryCapabilities, type VoiceDeliverySettings } from '@openvideo/shared/voiceDelivery';
 import { ModelSelect } from '../components/ModelSelect';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { FormScreen } from '../components/FormScreen';
@@ -25,6 +26,7 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [voiceId, setVoiceId] = useState(project?.ai.narrationPlan?.voiceId ?? choices[0]?.id ?? '');
   const [script, setScript] = useState(project?.ai.narrationPlan?.script ?? '');
+  const [delivery, setDelivery] = useState<VoiceDeliverySettings>(project?.ai.narrationPlan?.delivery ?? createVoiceDeliverySettings(project?.ai.narrationPlan?.script ?? ''));
   const [cues, setCues] = useState<readonly SubtitleCue[]>(project?.ai.narrationPlan?.cues ?? []);
   const [saved, setSaved] = useState<NarrationPlan | null>(project?.ai.narrationPlan ?? null);
   const [isPersisted, setIsPersisted] = useState(project?.ai.narrationPlan !== undefined);
@@ -39,13 +41,21 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   const writer = project ? narrationFromApprovedWriter(project.ai) : null;
   const effectiveTargetSeconds = Math.max(1, targetSeconds, (writer?.cues.at(-1)?.endMs ?? 0) / 1_000);
   const fit = useMemo(() => script.trim() ? checkNarrationFit({ script, targetSeconds: effectiveTargetSeconds }) : null, [script, effectiveTargetSeconds]);
-  const dirty = !isPersisted || saved === null || saved.script !== script.trim() || saved.voiceModelId !== model?.id || saved.voiceId !== voiceId || JSON.stringify(saved.cues) !== JSON.stringify(cues);
+  const deliveryCapabilities = voiceDeliveryCapabilities(model?.providerId ?? '', model?.id ?? '');
+  const savedDelivery = saved?.delivery ?? createVoiceDeliverySettings(saved?.script ?? script);
+  const dirty = !isPersisted || saved === null || saved.script !== script.trim() || saved.voiceModelId !== model?.id || saved.voiceId !== voiceId || JSON.stringify(savedDelivery) !== JSON.stringify(delivery) || JSON.stringify(saved.cues) !== JSON.stringify(cues);
   const stale = saved !== null && project !== null && !narrationPlanMatchesWriter(project.ai, saved);
+  const updateScript = (next: string): void => {
+    setDelivery((current) => current.performanceScript.trim() === script.trim() ? { ...current, performanceScript: next } : current);
+    setScript(next);
+  };
+  const updateDelivery = (patch: Partial<VoiceDeliverySettings>): void => setDelivery((current) => ({ ...current, ...patch }));
+  const appendDeliveryCue = (token: string): void => updateDelivery({ performanceScript: `${delivery.performanceScript.trimEnd()}${delivery.performanceScript.trim() ? ' ' : ''}${token} ` });
   const create = (fromWriter: boolean): void => {
     if (!project || !model) return;
     try {
       const plan = createNarrationPlan({ ai: project.ai, ...(fromWriter ? {} : { script }), durationMs: Math.round(effectiveTargetSeconds * 1_000), voiceModelId: model.id, voiceId });
-      setScript(plan.script); setCues(plan.cues); setSaved(plan); setIsPersisted(false); setMessage(`${plan.cues.length} subtitle cues ready for review.`);
+      setScript(plan.script); setDelivery(plan.delivery ?? createVoiceDeliverySettings(plan.script)); setCues(plan.cues); setSaved(plan); setIsPersisted(false); setMessage(`${plan.cues.length} subtitle cues and voice delivery are ready for review.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not prepare subtitles.'); }
   };
   const save = (approve: boolean): void => {
@@ -53,9 +63,9 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
     try {
       const latest = readProject(projectId); if (!latest) throw new Error('Open a project first.');
       const base = saved ?? createNarrationPlan({ ai: latest.ai, script, durationMs: Math.round(effectiveTargetSeconds * 1_000), voiceModelId: model.id, voiceId });
-      const plan = updateNarrationPlan(base, { script, cues, voiceModelId: model.id, voiceId }, approve);
+      const plan = updateNarrationPlan(base, { script, delivery, cues, voiceModelId: model.id, voiceId }, approve);
       writeProject({ ...latest, ai: { ...latest.ai, narrationPlan: plan } });
-      setSaved(plan); setIsPersisted(true); setScript(plan.script); setCues(plan.cues); setMessage(approve ? 'Narration and subtitles approved. Applying them remains a separate action.' : 'Draft saved locally.');
+      setSaved(plan); setIsPersisted(true); setScript(plan.script); setDelivery(plan.delivery ?? createVoiceDeliverySettings(plan.script)); setCues(plan.cues); setMessage(approve ? 'Narration, voice delivery and subtitles approved. Applying captions remains a separate action.' : 'Draft saved locally.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not save narration.'); }
   };
   const apply = (): void => {
@@ -70,16 +80,29 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
     <Text style={styles.label}>Voice model</Text><ModelSelect domain="voice-generation" selectedId={modelId} connected={connected} onSelect={(next) => setModelId(next.id)} onConnectionChange={refresh} />
     <Text style={styles.label}>Voice</Text><View style={styles.row}>{choices.length ? choices.map((voice) => <View key={voice.id}>{action(`${voiceId === voice.id ? '✓ ' : ''}${voice.label}`, () => setVoiceId(voice.id))}</View>) : <Text style={styles.note}>{usesRuntimeVoiceCatalog(model?.providerId ?? '') ? `VieNeu preset voices are discovered by the desktop app from its local server${voiceId ? `; saved voice: ${voiceId}` : ''}.` : 'Provider default voice'}</Text>}</View>
     {writer && action(`Load approved Writer dialogue (${writer.cues.length} cues)`, () => create(true))}
-    <Text style={styles.label}>Narration script</Text><TextInput ref={input} onFocus={() => reveal(input.current)} multiline value={script} onChangeText={setScript} style={[styles.input, styles.script]} placeholder="Write or load narration…" placeholderTextColor={theme.textWeaker} />
+    <Text style={styles.label}>Narration script</Text><TextInput ref={input} onFocus={() => reveal(input.current)} multiline value={script} onChangeText={updateScript} style={[styles.input, styles.script]} placeholder="Write or load narration…" placeholderTextColor={theme.textWeaker} />
     {action('Auto-split subtitles from script', () => create(false), !script.trim())}
     {fit && <View style={styles.card}><Text style={fit.verdict === 'fits' ? styles.ok : styles.warn}>{fit.verdict}</Text><Text style={styles.note}>{fit.advice}</Text></View>}
     {stale && <Text style={styles.warn}>Writer dialogue changed. Reload it, or rebuild from your edited script.</Text>}
+    <View style={styles.card}>
+      <Text style={styles.label}>{deliveryCapabilities.title}</Text><Text style={styles.note}>{deliveryCapabilities.guidance}</Text>
+      <Text style={styles.label}>Performance script (voice only)</Text><TextInput multiline value={delivery.performanceScript} onChangeText={(performanceScript) => updateDelivery({ performanceScript })} style={[styles.input, styles.script]} placeholder="Add supported emotion or pause cues here…" placeholderTextColor={theme.textWeaker} />
+      <Text style={styles.note}>Performance cues stay out of captions. Add each cue immediately before the words it should affect.</Text>
+      <View style={styles.row}>{deliveryCapabilities.cues.map((cue) => <View key={cue.token}>{action(cue.label, () => appendDeliveryCue(cue.token))}</View>)}</View>
+      {deliveryCapabilities.supportsStability && <><Text style={styles.label}>Stability: {delivery.stability.toFixed(2)}</Text><View style={styles.row}>{action('Expressive 0.30', () => updateDelivery({ stability: 0.3 }))}{action('Balanced 0.50', () => updateDelivery({ stability: 0.5 }))}{action('Consistent 0.75', () => updateDelivery({ stability: 0.75 }))}</View></>}
+      {deliveryCapabilities.supportsAdvancedVoiceSettings && <>
+        <Text style={styles.label}>Similarity: {delivery.similarityBoost.toFixed(2)}</Text><View style={styles.row}>{action('0.50', () => updateDelivery({ similarityBoost: 0.5 }))}{action('0.75', () => updateDelivery({ similarityBoost: 0.75 }))}{action('1.00', () => updateDelivery({ similarityBoost: 1 }))}</View>
+        <Text style={styles.label}>Style: {delivery.style.toFixed(2)}</Text><View style={styles.row}>{action('Neutral 0', () => updateDelivery({ style: 0 }))}{action('Medium 0.30', () => updateDelivery({ style: 0.3 }))}{action('Strong 0.60', () => updateDelivery({ style: 0.6 }))}</View>
+        <Text style={styles.label}>Speed: {delivery.speed.toFixed(2)}x</Text><View style={styles.row}>{action('0.85x', () => updateDelivery({ speed: 0.85 }))}{action('1.00x', () => updateDelivery({ speed: 1 }))}{action('1.15x', () => updateDelivery({ speed: 1.15 }))}</View>
+        {action(`Speaker boost: ${delivery.speakerBoost ? 'on' : 'off'}`, () => updateDelivery({ speakerBoost: !delivery.speakerBoost }))}
+      </>}
+    </View>
     {cues.map((cue, index) => <View key={cue.id} style={styles.card}><Text style={styles.label}>Cue {index + 1}</Text><View style={styles.row}>
       <TextInput accessibilityLabel={`Cue ${index + 1} start milliseconds`} keyboardType="number-pad" value={String(cue.startMs)} onChangeText={(text) => setCues((all) => all.map((item, at) => at === index ? { ...item, startMs: Number(text) } : item))} style={[styles.input, styles.time]} />
       <TextInput accessibilityLabel={`Cue ${index + 1} end milliseconds`} keyboardType="number-pad" value={String(cue.endMs)} onChangeText={(text) => setCues((all) => all.map((item, at) => at === index ? { ...item, endMs: Number(text) } : item))} style={[styles.input, styles.time]} />
     </View><TextInput multiline value={cue.text} onChangeText={(text) => setCues((all) => {
       const next = all.map((item, at) => at === index ? { ...item, text } : item);
-      setScript(narrationScriptFromCues(next));
+      updateScript(narrationScriptFromCues(next));
       return next;
     })} style={styles.input} /></View>)}
     <Text style={styles.note}>Timing follows Writer shots or is distributed across the script. It is not word-level audio alignment; listen and fine-tune after creating voice on desktop.</Text>

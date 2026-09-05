@@ -77,6 +77,7 @@ export type SpeechSynthesisInput = {
   readonly modelId: string;
   readonly voiceId: string;
   readonly script: string;
+  readonly delivery?: import('../shared/voiceDelivery').VoiceDeliverySettings;
   readonly fetchImpl?: FetchLike;
 };
 
@@ -84,10 +85,22 @@ export type SpeechSynthesisInput = {
 export async function generateElevenLabsSpeech(input: SpeechSynthesisInput): Promise<Buffer> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const voiceId = input.voiceId.trim().length > 0 ? input.voiceId.trim() : DEFAULT_ELEVENLABS_VOICE_ID;
+  const text = input.delivery?.performanceScript ?? input.script;
+  const voiceSettings = input.delivery === undefined
+    ? undefined
+    : input.modelId === 'eleven_v3'
+      ? { stability: input.delivery.stability }
+      : {
+          stability: input.delivery.stability,
+          similarity_boost: input.delivery.similarityBoost,
+          style: input.delivery.style,
+          use_speaker_boost: input.delivery.speakerBoost,
+          speed: input.delivery.speed
+        };
   const response = await fetchWithTimeout(fetchImpl, `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'xi-api-key': input.apiKey },
-    body: JSON.stringify({ text: input.script, model_id: input.modelId })
+    body: JSON.stringify({ text, model_id: input.modelId, ...(voiceSettings === undefined ? {} : { voice_settings: voiceSettings }) })
   });
   await expectOk(response, 'ElevenLabs');
   return Buffer.from(await response.arrayBuffer());
@@ -101,7 +114,7 @@ export async function generateOpenAiSpeech(input: SpeechSynthesisInput): Promise
   const response = await fetchWithTimeout(fetchImpl, 'https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` },
-    body: JSON.stringify({ model: input.modelId, input: input.script, voice, response_format: 'mp3' })
+    body: JSON.stringify({ model: input.modelId, input: input.delivery?.performanceScript ?? input.script, voice, response_format: 'mp3' })
   });
   await expectOk(response, 'OpenAI');
   return Buffer.from(await response.arrayBuffer());
@@ -229,14 +242,16 @@ export function repairStreamingWavHeader(bytes: Buffer): Buffer {
 export async function generateVieNeuSpeech(input: {
   readonly voiceId: string;
   readonly script: string;
+  readonly delivery?: import('../shared/voiceDelivery').VoiceDeliverySettings;
   readonly baseUrl?: string;
   readonly fetchImpl?: FetchLike;
 }): Promise<Buffer> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const baseUrl = resolveVieNeuBaseUrl(input.baseUrl);
+  const text = input.delivery?.performanceScript ?? input.script;
   const body = input.voiceId.trim().length > 0
-    ? { text: input.script, voice_id: input.voiceId.trim() }
-    : { text: input.script };
+    ? { text, voice_id: input.voiceId.trim() }
+    : { text };
   let response: Response;
   try {
     response = await fetchWithTimeout(fetchImpl, `${baseUrl}/stream`, {
