@@ -1,5 +1,5 @@
 export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo';
-export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts';
+export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts' | 'vieneu_local';
 export type ImageGenerationProviderId =
   | 'openai_images'
   | 'google_imagen'
@@ -8,8 +8,8 @@ export type ImageGenerationProviderId =
   | 'flux_image'
   | 'alibaba_wan_image';
 export type ProviderJobStatus = 'queued' | 'running' | 'completed' | 'failed';
-/** Media generation runs against cloud provider APIs; Ollama is the only local engine and serves chat, not media. */
-export type ProviderExecutionMode = 'api';
+/** Media generation can use a cloud API or an explicitly user-managed local runtime. */
+export type ProviderExecutionMode = 'api' | 'local';
 
 export interface ProviderApiConfig {
   geminiApiKey?: string;

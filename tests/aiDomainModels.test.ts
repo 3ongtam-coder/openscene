@@ -10,13 +10,14 @@ import {
 } from '../src/shared/aiDomainModels';
 
 describe('AI domain model catalog', () => {
-  it('exposes an independent available local model for each AI domain', () => {
-    // Media generation is cloud-only; Ollama is the app's only local engine and
-    // serves the Edit Agent.
+  it('exposes available cloud voice models and the desktop-local VieNeu model', () => {
     const voiceModels = getAvailableDomainModels('voice-generation');
-    expect(voiceModels.every((model) => model.executionPath === 'api')).toBe(true);
     expect(voiceModels.map((model) => model.id)).toContain('eleven_multilingual_v2');
     expect(voiceModels.map((model) => model.id)).toContain('gpt-4o-mini-tts');
+    const vieneu = voiceModels.find((model) => model.id === 'vieneu-v3-turbo');
+    expect(vieneu).toMatchObject({ providerId: 'vieneu_local', executionPath: 'local' });
+    expect(isDomainModelAvailableOnRuntime(vieneu!, 'desktop')).toBe(true);
+    expect(isDomainModelAvailableOnRuntime(vieneu!, 'mobile')).toBe(false);
     const videoModels = getAvailableDomainModels('video-generation');
     expect(videoModels.every((model) => model.executionPath === 'api')).toBe(true);
     expect(videoModels.map((model) => model.id)).toContain('veo-3.0-generate-001');

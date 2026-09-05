@@ -18,6 +18,7 @@ export type AiDomainProvider = {
 
 export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
   { id: 'local_ollama', label: 'Ollama', executionPath: 'local' },
+  { id: 'vieneu_local', label: 'VieNeu-TTS', executionPath: 'local' },
   { id: AGENT_ROUTER_PROVIDER_ID, label: 'AgentRouter', executionPath: 'api' },
   { id: 'openai', label: 'OpenAI', executionPath: 'api' },
   { id: 'anthropic', label: 'Anthropic', executionPath: 'api' },
@@ -130,6 +131,18 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     executionPath: 'api',
     domains: ['voice-generation'],
     available: true
+  },
+  {
+    id: 'vieneu-v3-turbo',
+    providerId: 'vieneu_local',
+    label: 'VieNeu-TTS v3 Turbo',
+    providerLabel: 'VieNeu-TTS',
+    description: 'Local Vietnamese speech at 48 kHz with voices discovered from the running VieNeu server.',
+    executionPath: 'local',
+    domains: ['voice-generation'],
+    available: true,
+    availableOn: ['desktop'],
+    unavailableReason: 'VieNeu speech generation requires the desktop app and a local VieNeu-TTS server.'
   },
   {
     id: 'gemini-2.5-flash-preview-tts',

@@ -23,8 +23,11 @@ import {
   generateOpenAiSpeech,
   generateRunwayVideo,
   generateSoraVideo,
-  generateVeoVideo
+  generateVeoVideo,
+  generateVieNeuSpeech,
+  listVieNeuVoices
 } from './mediaGenerationAdapters';
+import { voiceChoices, type VoiceChoice } from '../shared/voiceCatalog';
 import {
   generateBytePlusImage,
   generateImagenImage,
@@ -146,11 +149,12 @@ const IMAGE_MODEL_PROVIDERS: Record<string, { seam: ImageGenerationProviderId; c
   alibaba_dashscope: { seam: 'alibaba_wan_image', credentialKey: 'dashscopeApiKey' }
 };
 
-const SPEECH_MODEL_PROVIDERS: Record<string, { seam: TextToSpeechJob['provider']; credentialKey: string; label: string }> = {
+const SPEECH_MODEL_PROVIDERS: Record<string, { seam: TextToSpeechJob['provider']; credentialKey?: string; label: string }> = {
   elevenlabs: { seam: 'elevenlabs', credentialKey: 'elevenlabsApiKey', label: 'ElevenLabs' },
   openai: { seam: 'openai_tts', credentialKey: 'openaiApiKey', label: 'OpenAI' },
   google_gemini: { seam: 'gemini_tts', credentialKey: 'geminiApiKey', label: 'Google Gemini' },
-  groq: { seam: 'groq_tts', credentialKey: 'groq', label: 'Groq' }
+  groq: { seam: 'groq_tts', credentialKey: 'groq', label: 'Groq' },
+  vieneu_local: { seam: 'vieneu_local', label: 'VieNeu-TTS' }
 };
 
 async function invokeCloudVideoProvider(
@@ -195,19 +199,20 @@ async function invokeCloudVideoProvider(
   }
 }
 
-async function invokeCloudSpeechProvider(
+async function invokeSpeechProvider(
   model: AiDomainModelConfig,
-  apiKey: string,
+  apiKey: string | undefined,
   request: TextToSpeechRequest,
   outputFilePath: string
 ): Promise<CloudProviderResult> {
-  const synthesisInput = { apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script };
   try {
     let bytes: Buffer;
-    if (model.providerId === 'elevenlabs') {
-      bytes = await generateElevenLabsSpeech(synthesisInput);
-    } else if (model.providerId === 'openai') {
-      bytes = await generateOpenAiSpeech(synthesisInput);
+    if (model.providerId === 'vieneu_local') {
+      bytes = await generateVieNeuSpeech({ voiceId: request.voiceId ?? '', script: request.script });
+    } else if (model.providerId === 'elevenlabs' && apiKey !== undefined) {
+      bytes = await generateElevenLabsSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script });
+    } else if (model.providerId === 'openai' && apiKey !== undefined) {
+      bytes = await generateOpenAiSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script });
     } else {
       return {
         ok: false,
@@ -217,7 +222,7 @@ async function invokeCloudSpeechProvider(
     await writeFile(outputFilePath, bytes);
     return { ok: true, outputFilePath };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Cloud speech synthesis failed.' };
+    return { ok: false, error: err instanceof Error ? err.message : 'Speech synthesis failed.' };
   }
 }
 
@@ -258,7 +263,7 @@ async function invokeCloudImageProvider(
   }
 }
 
-/** Media generation is cloud-only: every selectable model runs against a provider API. */
+/** Resolve only catalog entries with a runnable adapter for the requested domain. */
 function resolveGenerationModel(
   domain: 'voice-generation' | 'video-generation' | 'image-generation',
   requestedModelId: string | undefined
@@ -470,10 +475,12 @@ export function getGeneratedImageAsReference(
 export async function createSpeechGenerationJob(request: TextToSpeechRequest): Promise<TextToSpeechJob> {
   const model = resolveGenerationModel('voice-generation', request.modelId);
   const speechMapping = SPEECH_MODEL_PROVIDERS[model.providerId];
-  const provider: TextToSpeechJob['provider'] = speechMapping?.seam ?? 'elevenlabs';
+  if (speechMapping === undefined) throw new Error(`Model ${model.id} has no runnable speech provider binding.`);
+  const provider: TextToSpeechJob['provider'] = speechMapping.seam;
   const modelId = model.id;
-  const estimate = estimateSpeechCost({ modelId });
-  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
+  const reservationId = model.executionPath === 'api'
+    ? await reserveSpend(estimateSpeechCost({ modelId }), request.acceptUnknownCost)
+    : null;
   const { speechDir } = await ensureAiDirectories();
   const id = `speech-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const startedAt = Date.now();
@@ -482,7 +489,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
   const job: TextToSpeechJob = {
     id,
     provider,
-    mode: 'api',
+    mode: model.executionPath,
     status: 'queued',
     script: request.script,
     voiceId: request.voiceId ?? '',
@@ -493,7 +500,8 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
 
   speechJobs.set(id, job);
   logSpeechJob(id, 'request.queued', {
-    provider: speechMapping?.label ?? model.providerLabel,
+    provider: speechMapping.label,
+    executionPath: model.executionPath,
     model: modelId,
     scriptCharacters: request.script.length,
     voiceConfigured: Boolean(request.voiceId?.trim())
@@ -507,24 +515,33 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       logSpeechJob(id, 'process.started');
 
       let apiKey = request.apiKey?.trim();
-      if ((!apiKey || apiKey.length === 0) && activeCredentialStore) {
-        apiKey = await activeCredentialStore.getCredentialValue(speechMapping?.credentialKey ?? 'elevenlabsApiKey');
+      if ((!apiKey || apiKey.length === 0) && activeCredentialStore && speechMapping.credentialKey !== undefined) {
+        apiKey = await activeCredentialStore.getCredentialValue(speechMapping.credentialKey);
       }
 
-      if (!apiKey || apiKey.length === 0) {
-        throw new Error(`API key is required for ${speechMapping?.label ?? 'cloud'} speech synthesis. Connect the provider in Settings first.`);
+      if (model.executionPath === 'api' && (!apiKey || apiKey.length === 0)) {
+        throw new Error(`API key is required for ${speechMapping.label} speech synthesis. Connect the provider in Settings first.`);
       }
 
-      await settleSpend(reservationId, 'charged');
-      logSpeechJob(id, 'provider.request.started');
-      const cloudResult = await invokeCloudSpeechProvider(model, apiKey, request, join(speechDir, `${id}.mp3`));
-      if (!cloudResult.ok) {
-        throw new Error(cloudResult.error);
+      if (model.executionPath === 'api') await settleSpend(reservationId, 'charged');
+      logSpeechJob(id, 'provider.request.started', { executionPath: model.executionPath });
+      const extension = provider === 'vieneu_local' ? 'wav' : 'mp3';
+      const heartbeat = setInterval(() => {
+        logSpeechJob(id, 'process.working', { elapsedSeconds: Math.round((Date.now() - startedAt) / 1_000) });
+      }, 10_000);
+      let result: CloudProviderResult;
+      try {
+        result = await invokeSpeechProvider(model, apiKey, request, join(speechDir, `${id}.${extension}`));
+      } finally {
+        clearInterval(heartbeat);
+      }
+      if (!result.ok) {
+        throw new Error(result.error);
       }
 
       job.status = 'completed';
-      if (cloudResult.outputFilePath !== undefined) {
-        job.outputFilePath = cloudResult.outputFilePath;
+      if (result.outputFilePath !== undefined) {
+        job.outputFilePath = result.outputFilePath;
       }
 
       job.updatedAt = new Date().toISOString();
@@ -550,6 +567,20 @@ export function getSpeechGenerationJob(jobId: string): TextToSpeechJob | null {
   return speechJobs.get(jobId) ?? null;
 }
 
+export async function listSpeechVoices(modelId: string): Promise<readonly VoiceChoice[]> {
+  const model = resolveGenerationModel('voice-generation', modelId);
+  const startedAt = Date.now();
+  console.info(`[OpenScene][Speech Voices] request.started ${JSON.stringify({ provider: model.providerLabel, model: model.id })}`);
+  try {
+    const voices = model.providerId === 'vieneu_local' ? await listVieNeuVoices() : voiceChoices(model.providerId);
+    console.info(`[OpenScene][Speech Voices] request.completed ${JSON.stringify({ model: model.id, voices: voices.length, elapsedMs: Date.now() - startedAt })}`);
+    return voices;
+  } catch (error) {
+    console.error(`[OpenScene][Speech Voices] request.failed ${JSON.stringify({ model: model.id, elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.message : 'Voice discovery failed.' })}`);
+    throw error;
+  }
+}
+
 export function getCompletedAiSource(jobId: string): { sourcePath: string; displayName: string; kind: 'video' | 'audio'; mimeType: string } | null {
   const videoJob = videoJobs.get(jobId);
   if (videoJob && videoJob.status === 'completed' && videoJob.outputFilePath) {
@@ -563,11 +594,12 @@ export function getCompletedAiSource(jobId: string): { sourcePath: string; displ
 
   const speechJob = speechJobs.get(jobId);
   if (speechJob && speechJob.status === 'completed' && speechJob.outputFilePath) {
+    const isWav = speechJob.provider === 'vieneu_local';
     return {
       sourcePath: speechJob.outputFilePath,
-      displayName: `AI_Voice_${speechJob.id.slice(-6)}.mp3`,
+      displayName: `AI_Voice_${speechJob.id.slice(-6)}.${isWav ? 'wav' : 'mp3'}`,
       kind: 'audio',
-      mimeType: 'audio/mpeg'
+      mimeType: isWav ? 'audio/wav' : 'audio/mpeg'
     };
   }
 

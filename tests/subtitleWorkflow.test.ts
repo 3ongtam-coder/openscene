@@ -92,6 +92,7 @@ describe('narration and automatic subtitles', () => {
   it('exposes only voices accepted by existing provider adapters', () => {
     expect(voiceChoices('openai').map((voice) => voice.id)).toEqual(['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer']);
     expect(voiceChoices('elevenlabs')).toHaveLength(5);
+    expect(voiceChoices('vieneu_local')).toEqual([]);
     expect(voiceChoices('google_gemini')).toEqual([]);
   });
 });

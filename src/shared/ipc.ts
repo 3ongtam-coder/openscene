@@ -35,6 +35,7 @@ export const IPC_CHANNELS = {
   aiSelectReferenceImage: 'ai:select-reference-image',
   aiGetVideoJob: 'ai:get-video-job',
   aiGenerateSpeech: 'ai:generate-speech',
+  aiListSpeechVoices: 'ai:list-speech-voices',
   aiGenerateImage: 'ai:generate-image',
   aiGetImageJob: 'ai:get-image-job',
   aiUseImageAsVideoReference: 'ai:use-image-as-video-reference',

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { checkNarrationFit } from '@openvideo/shared/narrationTiming';
 import { narrationScriptFromCues, type NarrationPlan, type SubtitleCue } from '@openvideo/shared/narrationPlan';
 import { applySubtitleCues, createNarrationPlan, narrationFromApprovedWriter, narrationPlanMatchesWriter, updateNarrationPlan } from '@openvideo/shared/subtitleWorkflow';
-import { voiceChoices } from '@openvideo/shared/voiceCatalog';
+import { usesRuntimeVoiceCatalog, voiceChoices } from '@openvideo/shared/voiceCatalog';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { ModelSelect } from '../components/ModelSelect';
 import { readProviderConnections } from '../lib/mediaProviders';
@@ -32,7 +32,10 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   const reveal = useRevealOnFocus(); const input = useRef<TextInput>(null);
   const refresh = useCallback((): void => { void readProviderConnections().then(setConnected); }, []);
   useEffect(refresh, [refresh, connectionsVersion]);
-  useEffect(() => { if (!choices.some((voice) => voice.id === voiceId)) setVoiceId(choices[0]?.id ?? ''); }, [choices, voiceId]);
+  useEffect(() => {
+    if (usesRuntimeVoiceCatalog(model?.providerId ?? '')) return;
+    if (!choices.some((voice) => voice.id === voiceId)) setVoiceId(choices[0]?.id ?? '');
+  }, [choices, model?.providerId, voiceId]);
   const writer = project ? narrationFromApprovedWriter(project.ai) : null;
   const effectiveTargetSeconds = Math.max(1, targetSeconds, (writer?.cues.at(-1)?.endMs ?? 0) / 1_000);
   const fit = useMemo(() => script.trim() ? checkNarrationFit({ script, targetSeconds: effectiveTargetSeconds }) : null, [script, effectiveTargetSeconds]);
@@ -65,7 +68,7 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   return <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
     <Text style={styles.h1}>Narration & Subtitles</Text><Text style={styles.sub}>Prepare voice text and timed captions together. Review and approve before either is used.</Text>
     <Text style={styles.label}>Voice model</Text><ModelSelect domain="voice-generation" selectedId={modelId} connected={connected} onSelect={(next) => setModelId(next.id)} onConnectionChange={refresh} />
-    <Text style={styles.label}>Voice</Text><View style={styles.row}>{choices.length ? choices.map((voice) => <View key={voice.id}>{action(`${voiceId === voice.id ? '✓ ' : ''}${voice.label}`, () => setVoiceId(voice.id))}</View>) : <Text style={styles.note}>Provider default voice</Text>}</View>
+    <Text style={styles.label}>Voice</Text><View style={styles.row}>{choices.length ? choices.map((voice) => <View key={voice.id}>{action(`${voiceId === voice.id ? '✓ ' : ''}${voice.label}`, () => setVoiceId(voice.id))}</View>) : <Text style={styles.note}>{usesRuntimeVoiceCatalog(model?.providerId ?? '') ? `VieNeu preset voices are discovered by the desktop app from its local server${voiceId ? `; saved voice: ${voiceId}` : ''}.` : 'Provider default voice'}</Text>}</View>
     {writer && action(`Load approved Writer dialogue (${writer.cues.length} cues)`, () => create(true))}
     <Text style={styles.label}>Narration script</Text><TextInput ref={input} onFocus={() => reveal(input.current)} multiline value={script} onChangeText={setScript} style={[styles.input, styles.script]} placeholder="Write or load narration…" placeholderTextColor={theme.textWeaker} />
     {action('Auto-split subtitles from script', () => create(false), !script.trim())}
@@ -82,7 +85,7 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
     <Text style={styles.note}>Timing follows Writer shots or is distributed across the script. It is not word-level audio alignment; listen and fine-tune after creating voice on desktop.</Text>
     <View style={styles.row}>{action('Save draft', () => save(false), !cues.length)}{action('Approve', () => save(true), !cues.length)}{action('Apply captions', apply, saved?.status !== 'approved' || dirty || stale)}</View>
     {!!message && <Text style={styles.message}>{message}</Text>}
-    <Text style={styles.note}>Mobile can choose the same model and voice and can apply captions, but speech synthesis stays disabled until its binary result transport is implemented. This screen cannot charge the provider.</Text>
+    <Text style={styles.note}>Mobile can edit, approve, and apply the same narration plan. Speech synthesis stays disabled until its binary result transport is implemented; VieNeu-TTS also requires the desktop-local server. This screen cannot charge any provider.</Text>
   </FormScreen>;
 }
 
