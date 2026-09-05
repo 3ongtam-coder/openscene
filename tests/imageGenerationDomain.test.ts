@@ -79,7 +79,7 @@ describe('still-to-video handoff', () => {
     // the image and pick it again.
     expect(app).toContain('const [videoReferenceImage, setVideoReferenceImage]');
     expect(videoStudio).toContain('readonly referenceImage: ReferenceImageSelection | null;');
-    expect(videoStudio).not.toContain('useState<ReferenceImageSelection | null>(null)');
+    expect(videoStudio).not.toContain('const [referenceImage, setReferenceImage]');
   });
 
   it('switches to the video tab as part of the handoff', () => {

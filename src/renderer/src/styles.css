@@ -832,6 +832,11 @@ button {
   border-color: var(--border-strong);
 }
 
+.studio-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .studio-chip--selected {
   color: var(--foreground);
   border-color: var(--ring);

@@ -4,8 +4,8 @@
  * says what this OpenScene build can actually send without dropping inputs.
  */
 
-export const MEDIA_CAPABILITY_REGISTRY_VERSION = 1 as const;
-export const MEDIA_CAPABILITIES_AS_OF = '2026-09-02' as const;
+export const MEDIA_CAPABILITY_REGISTRY_VERSION = 2 as const;
+export const MEDIA_CAPABILITIES_AS_OF = '2026-09-05' as const;
 
 export const VIDEO_OPERATIONS = [
   'text_to_video',
@@ -57,7 +57,7 @@ export type VideoModelCapabilities = {
 const range = (minimum: number, maximum: number): readonly number[] =>
   Array.from({ length: maximum - minimum + 1 }, (_, index) => minimum + index);
 
-const GOOGLE_VIDEO_SOURCE = 'https://ai.google.dev/gemini-api/docs/video';
+const GOOGLE_VIDEO_SOURCE = 'https://ai.google.dev/gemini-api/docs/veo';
 const GOOGLE_MODELS_SOURCE = 'https://ai.google.dev/gemini-api/docs/models';
 const XAI_VIDEO_SOURCE = 'https://docs.x.ai/developers/model-capabilities/video/generation';
 const XAI_EDIT_SOURCE = 'https://docs.x.ai/developers/model-capabilities/video/editing';
@@ -122,7 +122,7 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
       start_end: veo31StartEnd,
       video_extend: veo31Extend
     },
-    implemented: ['text_to_video', 'image_to_video']
+    implemented: ['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']
   }),
   model({
     modelId: 'veo-3.0-generate-001', providerId: 'google_gemini', providerLabel: 'Google Veo',

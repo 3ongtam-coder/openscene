@@ -259,7 +259,7 @@ The renderer talks to the main process through a narrow typed `window.videoTool`
 | Local H.264/AAC MP4 export | Other export formats; frame-perfect multitrack mastering guarantees |
 | Signed installers and auto-update on all three desktop platforms, and the mobile app on the App Store and Google Play | Cloud sync, hosted rendering, accounts |
 | Agent-driven editing, generation, and export | Unattended operation — changes ask for approval |
-| Veo image-to-video via a reference image | Sora reference images (needs a multipart upload path this build does not send) |
+| Veo image-to-video, Start-End interpolation, and 1-3 character/product references | Sora reference images (needs a multipart upload path this build does not send) |
 
 Program Monitor is a best-effort review surface. FFmpeg export is the authoritative output.
 

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { composeShotPrompt, refineShotPrompt, revisionsOf, takeLabel } from '@openvideo/shared/shotPrompt';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { approvedWriterShots } from '@openvideo/shared/writerPipeline';
-import { getVideoOperationConstraints } from '@openvideo/shared/mediaCapabilityRegistry';
+import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
 import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
 import { isFrameExtractionAvailable } from '../../modules/video-export';
@@ -37,11 +38,21 @@ type ShotTake = {
   readonly prompt: string;
   readonly takeNumber: number;
   readonly clipId?: string;
+  readonly operation?: VideoOperation;
   /** The frame this shot started from, so a redo continues from the same place. */
   readonly startFrame?: { readonly base64: string; readonly mimeType: string };
+  readonly lastFrame?: { readonly base64: string; readonly mimeType: string };
+  readonly referenceImages?: readonly { readonly base64: string; readonly mimeType: string }[];
 };
 
 const LENGTHS = [8, 16, 30, 45, 60] as const;
+const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: string }[] = [
+  { id: 'text_to_video', label: 'Text' },
+  { id: 'image_to_video', label: 'First frame' },
+  { id: 'start_end', label: 'Start-End' },
+  { id: 'reference_to_video', label: 'References' }
+];
+type PickedReference = { readonly displayName: string; readonly base64: string; readonly mimeType: string };
 
 export function PlanScreen({
   topInset,
@@ -74,6 +85,10 @@ export function PlanScreen({
   const [redoing, setRedoing] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [continuity, setContinuity] = useState(true);
+  const [operation, setOperation] = useState<VideoOperation>('text_to_video');
+  const [firstFrame, setFirstFrame] = useState<PickedReference | null>(null);
+  const [lastFrame, setLastFrame] = useState<PickedReference | null>(null);
+  const [assetReferences, setAssetReferences] = useState<readonly PickedReference[]>([]);
   const [asking, setAsking] = useState(false);
   const permissions = useSpendPermissions();
   const reveal = useRevealOnFocus();
@@ -87,7 +102,9 @@ export function PlanScreen({
   useEffect(refreshConnections, [refreshConnections, connectionsVersion]);
 
   const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
-  const aspectRatioOptions = getVideoOperationConstraints(model.id, 'text_to_video')?.aspectRatios ?? ['16:9'];
+  const operationConstraints = getVideoOperationConstraints(model.id, operation)
+    ?? getVideoOperationConstraints(model.id, 'text_to_video');
+  const aspectRatioOptions = operationConstraints?.aspectRatios ?? ['16:9'];
   const effectiveAspectRatio: VideoAspectRatio = aspectRatioOptions.includes(aspectRatio)
     ? aspectRatio
     : aspectRatioOptions[0] ?? '16:9';
@@ -95,6 +112,10 @@ export function PlanScreen({
     () => planVideoStoryboard({ totalSeconds, providerId: model.providerId, modelId: model.id }),
     [totalSeconds, model.id, model.providerId]
   );
+
+  useEffect(() => {
+    if (!isVideoOperationImplemented(model.id, operation)) setOperation('text_to_video');
+  }, [model.id, operation]);
 
   // Changing anything about the plan clears the last run's results. Leaving them
   // on screen next to a different plan and a different price would misreport
@@ -106,6 +127,27 @@ export function PlanScreen({
     setTakes({});
     setNoteFor(null);
     next();
+  };
+
+  const pickReference = async (target: 'first' | 'last' | 'asset'): Promise<void> => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setWriterMessage('Photo-library permission is required to choose a video reference.');
+      return;
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsMultipleSelection: false, quality: 1, base64: true
+    });
+    const file = picked.assets?.[0];
+    if (picked.canceled || file === undefined || !file.base64) return;
+    const image: PickedReference = {
+      displayName: file.fileName ?? `reference-${Date.now()}.jpg`,
+      base64: file.base64,
+      mimeType: file.mimeType ?? 'image/jpeg'
+    };
+    if (target === 'first') setFirstFrame(image);
+    else if (target === 'last') setLastFrame(image);
+    else setAssetReferences((current) => current.length >= 3 ? current : [...current, image]);
   };
 
   /**
@@ -138,7 +180,13 @@ export function PlanScreen({
         ...(descriptions[shot.index]?.trim() ? { description: descriptions[shot.index]!.trim() } : {}),
         continuity: plan.shots.length === 1 ? 'none' : carriedFrame === undefined ? 'restate' : 'from-frame'
       });
-      const startFrame = carriedFrame;
+      const firstShotFrame = index === 0 && (operation === 'image_to_video' || operation === 'start_end')
+        ? firstFrame ?? undefined
+        : carriedFrame;
+      const startFrame = firstShotFrame;
+      const shotOperation: VideoOperation = carriedFrame !== undefined
+        ? 'image_to_video'
+        : index === 0 ? operation : 'text_to_video';
 
       const result = await generateShot({
         projectId,
@@ -146,7 +194,10 @@ export function PlanScreen({
         prompt: shotPrompt,
         aspectRatio: effectiveAspectRatio,
         durationSeconds: shot.durationSeconds,
-        ...(carriedFrame === undefined ? {} : { referenceImage: carriedFrame }),
+        operation: shotOperation,
+        ...(firstShotFrame === undefined ? {} : { referenceImage: firstShotFrame }),
+        ...(operation === 'start_end' && lastFrame !== null ? { lastFrame } : {}),
+        ...(operation === 'reference_to_video' ? { referenceImages: assetReferences } : {}),
         onProgress: (stage) => mark({ kind: 'running', stage })
       });
 
@@ -177,10 +228,13 @@ export function PlanScreen({
         [shot.index]: {
           prompt: shotPrompt,
           takeNumber: 1,
+          operation: shotOperation,
           ...(clipIdForAsset(placed, result.asset.id) === null
             ? {}
             : { clipId: clipIdForAsset(placed, result.asset.id) as string }),
-          ...(startFrame === undefined ? {} : { startFrame })
+          ...(startFrame === undefined ? {} : { startFrame }),
+          ...(shotOperation === 'start_end' && lastFrame !== null ? { lastFrame } : {}),
+          ...(shotOperation === 'reference_to_video' ? { referenceImages: assetReferences } : {})
         }
       }));
       mark({ kind: 'done' });
@@ -220,9 +274,12 @@ export function PlanScreen({
       prompt: refined.prompt,
       aspectRatio: effectiveAspectRatio,
       durationSeconds: shot.durationSeconds,
+      operation: take.operation ?? (take.startFrame === undefined ? 'text_to_video' : 'image_to_video'),
       // The same frame this shot started from, so a redo continues from where
       // the one before it left off rather than from nothing.
       ...(take.startFrame === undefined ? {} : { referenceImage: take.startFrame }),
+      ...(take.lastFrame === undefined ? {} : { lastFrame: take.lastFrame }),
+      ...(take.referenceImages === undefined ? {} : { referenceImages: take.referenceImages }),
       onProgress: (stage) => mark({ kind: 'running', stage })
     });
     setRedoing(null);
@@ -296,11 +353,16 @@ export function PlanScreen({
    * user already made when they chose the model and the length.
    */
   /** Chaining needs both a provider that accepts a frame and a build that can read one. */
-  const continuityPossible = isFrameExtractionAvailable && supportsReferenceImage(model?.id ?? '');
+  const continuityPossible = operation !== 'reference_to_video' && operation !== 'start_end'
+    && isFrameExtractionAvailable && supportsReferenceImage(model?.id ?? '');
 
   const runLine = `${plan.shots.length} shot${plan.shots.length === 1 ? '' : 's'} · ${plan.totalSeconds}s`;
   const canGenerate =
-    projectId !== null && !running && prompt.trim().length > 0 && connected[model?.providerId ?? ''] === true;
+    projectId !== null && !running && prompt.trim().length > 0 && connected[model?.providerId ?? ''] === true
+    && isVideoOperationImplemented(model.id, operation)
+    && (operation !== 'image_to_video' || firstFrame !== null)
+    && (operation !== 'start_end' || (plan.shots.length === 1 && firstFrame !== null && lastFrame !== null))
+    && (operation !== 'reference_to_video' || (plan.shots.length === 1 && assetReferences.length > 0));
 
   return (
     <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
@@ -328,6 +390,38 @@ export function PlanScreen({
         onSelect={(next) => setPlan(() => setModelId(next.id))}
         onConnectionChange={refreshConnections}
       />
+
+      <Text style={styles.label}>Input mode</Text>
+      <View style={styles.row}>
+        {INPUT_MODES.map((mode) => (
+          <Chip key={mode.id} label={mode.label} selected={operation === mode.id}
+            disabled={!isVideoOperationImplemented(model.id, mode.id)}
+            onPress={() => setPlan(() => {
+              setOperation(mode.id);
+              if (mode.id === 'reference_to_video' || mode.id === 'start_end') setContinuity(false);
+            })} />
+        ))}
+      </View>
+      {(operation === 'start_end' || operation === 'reference_to_video') && totalSeconds !== 8 && (
+        <Text style={styles.warn}>Choose 8s for this manual advanced-input render. It runs as one reviewed shot.</Text>
+      )}
+
+      {(operation === 'image_to_video' || operation === 'start_end') && <View>
+        <Text style={styles.label}>First frame</Text>
+        <ReferenceRow value={firstFrame} empty="Required before generation." onPick={() => void pickReference('first')} onRemove={() => setFirstFrame(null)} />
+      </View>}
+      {operation === 'start_end' && <View>
+        <Text style={styles.label}>Last frame</Text>
+        <ReferenceRow value={lastFrame} empty="Required. Veo creates the movement between both frames." onPick={() => void pickReference('last')} onRemove={() => setLastFrame(null)} />
+      </View>}
+      {operation === 'reference_to_video' && <View>
+        <Text style={styles.label}>Character / product references ({assetReferences.length}/3)</Text>
+        {assetReferences.map((image, index) => <ReferenceRow key={`${image.displayName}-${index}`} value={image}
+          empty="" onPick={() => undefined}
+          onRemove={() => setAssetReferences((current) => current.filter((_, position) => position !== index))} />)}
+        {assetReferences.length < 3 && <ReferenceRow value={null} empty="Add 1-3 reviewed images. Nothing is attached automatically."
+          onPick={() => void pickReference('asset')} onRemove={() => undefined} />}
+      </View>}
 
       <Text style={styles.label}>Length</Text>
       <View style={styles.row}>
@@ -368,7 +462,9 @@ export function PlanScreen({
           </Pressable>
           {!continuityPossible && (
             <Text style={styles.body}>
-              {supportsReferenceImage(model?.id ?? '')
+              {operation === 'start_end' || operation === 'reference_to_video'
+                ? 'This advanced mode is one reviewed shot. Choose 8s; use First frame for a longer chained storyboard.'
+                : supportsReferenceImage(model?.id ?? '')
                 ? 'This build cannot read a frame out of a clip — rebuild the development client to chain shots.'
                 : `${model?.providerLabel} cannot start from a supplied frame, so shots are generated independently.`}
             </Text>
@@ -538,13 +634,31 @@ function ShotStatus({ state }: { readonly state: ShotState }) {
   );
 }
 
-function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
+function ReferenceRow({ value, empty, onPick, onRemove }: {
+  readonly value: PickedReference | null;
+  readonly empty: string;
+  readonly onPick: () => void;
+  readonly onRemove: () => void;
+}) {
+  return <View style={styles.referenceRow}>
+    {value !== null && <Image style={styles.referencePreview}
+      source={{ uri: `data:${value.mimeType};base64,${value.base64}` }}
+      accessibilityLabel={`Reference image ${value.displayName}`} />}
+    <Text style={styles.referenceName}>{value?.displayName ?? empty}</Text>
+    <Pressable accessibilityRole="button" onPress={value === null ? onPick : onRemove} style={press(styles.referenceButton)}>
+      <Text style={styles.redoText}>{value === null ? 'Choose image' : 'Remove'}</Text>
+    </Pressable>
+  </View>;
+}
+
+function Chip({ label, selected, disabled = false, onPress }: { label: string; selected: boolean; disabled?: boolean; onPress: () => void }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected }}
+      disabled={disabled}
       onPress={onPress}
-      style={press([styles.chip, selected && styles.chipOn])}
+      style={press([styles.chip, selected && styles.chipOn, disabled && styles.toggleOff])}
     >
       <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
     </Pressable>
@@ -606,5 +720,9 @@ const styles = StyleSheet.create({
   },
   redoText: { color: theme.textWeak, fontSize: 13, fontWeight: '600' },
   approve: { marginTop: 14, minHeight: 52, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.accent },
-  approveText: { color: theme.bg, fontSize: 15, fontWeight: '700' }
+  approveText: { color: theme.bg, fontSize: 15, fontWeight: '700' },
+  referenceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: MIN_TAP, borderBottomWidth: 1, borderBottomColor: theme.line },
+  referenceName: { flex: 1, color: theme.textWeak, fontSize: 13 },
+  referencePreview: { width: 56, height: 56, borderRadius: 8, resizeMode: 'cover' },
+  referenceButton: { minHeight: MIN_TAP, justifyContent: 'center', paddingHorizontal: 12 }
 });

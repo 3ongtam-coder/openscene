@@ -125,6 +125,11 @@ describe('AI Job Manager and cloud provider seams', () => {
       prompt: 'Invalid Sora duration', aspectRatio: '16:9', durationSeconds: 5,
       modelId: 'sora-2'
     })).rejects.toThrow(/accepts 4, 8, 12 second/);
+    await expect(createVideoGenerationJob({
+      prompt: 'Missing Start-End first frame', aspectRatio: '16:9', durationSeconds: 8,
+      modelId: 'veo-3.1-generate-preview', operation: 'start_end',
+      lastFrame: { displayName: 'last.png', mimeType: 'image/png', base64: 'LAST' }
+    })).rejects.toThrow(/both a first frame and a last frame/);
   });
 
   it('rejects invalid expressive delivery before queuing speech', async () => {

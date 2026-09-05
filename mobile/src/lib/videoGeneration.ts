@@ -1,13 +1,14 @@
 import { File } from 'expo-file-system';
 
 import {
-  supportsReferenceImage,
+  resolveVideoOperation,
+  validateVideoInputSet,
   videoAdapterFor,
   type VideoAspectRatio,
   type VideoProgressStage
 } from '@openvideo/shared/videoGeneration';
 import { getDomainModel } from '@openvideo/shared/aiDomainModels';
-import { getVideoProviderBinding, validateVideoRequest } from '@openvideo/shared/mediaCapabilityRegistry';
+import { getVideoProviderBinding, validateVideoRequest, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 
 import { estimateVideoCost } from '@openvideo/shared/mediaGenerationPricing';
 
@@ -31,8 +32,11 @@ export type GenerateShotInput = {
   readonly prompt: string;
   readonly aspectRatio: VideoAspectRatio;
   readonly durationSeconds: number;
+  readonly operation?: VideoOperation;
   /** First frame to continue from, usually the tail of the previous shot. */
   readonly referenceImage?: { readonly base64: string; readonly mimeType: string };
+  readonly lastFrame?: { readonly base64: string; readonly mimeType: string };
+  readonly referenceImages?: readonly { readonly base64: string; readonly mimeType: string }[];
   readonly onProgress?: (stage: VideoProgressStage, elapsedMs: number) => void;
 };
 
@@ -55,13 +59,19 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
     return { ok: false, message: `${model.providerLabel} has no adapter on this device yet.` };
   }
 
-  const operation = input.referenceImage === undefined ? 'text_to_video' : 'image_to_video';
+  let resolvedInputs: ReturnType<typeof validateVideoInputSet>;
+  try {
+    resolvedInputs = validateVideoInputSet(input);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Invalid video references.' };
+  }
+  const operation = resolveVideoOperation(input);
   const validation = validateVideoRequest({
     modelId: model.id,
     operation,
     durationSeconds: input.durationSeconds,
     aspectRatio: input.aspectRatio,
-    referenceImageCount: input.referenceImage === undefined ? 0 : 1
+    referenceImageCount: resolvedInputs.referenceImageCount
   });
   if (!validation.ok) return { ok: false, message: validation.message };
 
@@ -84,14 +94,6 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
   }
 
   try {
-    // A reference frame is dropped rather than sent to a provider that cannot
-    // use it: the alternative is an error mid-sequence, after the earlier shots
-    // have already been paid for.
-    const seed =
-      input.referenceImage !== undefined && supportsReferenceImage(model.id)
-        ? input.referenceImage
-        : undefined;
-
     // Kept as the request goes out: that is where the money is committed, and
     // a shot refused for a missing key cost nothing.
     chargeReservation(reservation.id);
@@ -101,7 +103,10 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
       durationSeconds: input.durationSeconds,
-      ...(seed === undefined ? {} : { referenceImage: seed }),
+      operation,
+      ...(input.referenceImage === undefined ? {} : { referenceImage: input.referenceImage }),
+      ...(input.lastFrame === undefined ? {} : { lastFrame: input.lastFrame }),
+      ...(input.referenceImages === undefined ? {} : { referenceImages: input.referenceImages }),
       ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress })
     });
 
