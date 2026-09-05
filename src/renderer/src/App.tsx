@@ -377,7 +377,15 @@ export function App(): ReactElement {
                 style={APP_WORKSPACE_PANEL_STYLE}
                 tabIndex={-1}
               >
-                <NarrationPanel key={editor.project!.id} document={editor.project!.ai} targetSeconds={timelineDurationMs(editor.project!.timeline) / 1_000} onSaveAi={editor.saveAiProjectDocument} onApplyCaptions={editor.applyNarrationSubtitles} />
+                {editor.project !== null && (
+                  <NarrationPanel
+                    key={editor.project.id}
+                    document={editor.project.ai}
+                    targetSeconds={timelineDurationMs(editor.project.timeline) / 1_000}
+                    onSaveAi={editor.saveAiProjectDocument}
+                    onApplyCaptions={editor.applyNarrationSubtitles}
+                  />
+                )}
               </section>
               <section
                 aria-label={WORKSPACE_TAB_LABELS.video}
