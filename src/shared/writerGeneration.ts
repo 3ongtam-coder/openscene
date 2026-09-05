@@ -1,10 +1,10 @@
 import {
   GEMINI_WRITER_MODEL_IDS,
-  WRITER_RESPONSE_JSON_SCHEMA,
-  WRITER_SYSTEM_PROMPT,
+  writerResponseSchema,
+  writerSystemPrompt,
   compileWriterPrompt,
   parseWriterRequest,
-  validateWriterDraft,
+  validateWriterResponse,
   type WriterDraft,
   type WriterModelId,
   type WriterRequest
@@ -54,11 +54,11 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': input.apiKey.trim() },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: WRITER_SYSTEM_PROMPT }] },
+        systemInstruction: { parts: [{ text: writerSystemPrompt(request) }] },
         contents: [{ role: 'user', parts: [{ text: compileWriterPrompt(request) }] }],
         generationConfig: {
           responseMimeType: 'application/json',
-          responseJsonSchema: WRITER_RESPONSE_JSON_SCHEMA
+          responseJsonSchema: writerResponseSchema(request)
         }
       })
     }
@@ -78,7 +78,7 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
   } catch {
     throw new Error('Gemini Writer returned invalid JSON.');
   }
-  const validation = validateWriterDraft(decoded);
+  const validation = validateWriterResponse(decoded, request);
   if (!validation.ok) {
     throw new Error(`Gemini Writer returned an invalid project draft at ${validation.issue.path}: ${validation.issue.message}`);
   }

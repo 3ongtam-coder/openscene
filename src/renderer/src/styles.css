@@ -4242,6 +4242,27 @@ button {
   gap: var(--space-2);
 }
 
+.writer-stage-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.writer-brief-fields {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.writer-stage-editor > * { flex-shrink: 0; }
+.writer-stage-editor details { color: var(--text-weak); line-height: 1.5; }
+.writer-stage-editor .writer-stage-content { min-height: 420px; }
+.writer-stage-editor .writer-preview__actions { flex-wrap: wrap; margin-top: 0; }
+.writer-shot-fields { display: grid; gap: var(--space-2); min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+
 .writer-workspace .studio-field textarea {
   width: 100%;
   resize: vertical;

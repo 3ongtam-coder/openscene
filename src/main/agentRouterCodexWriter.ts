@@ -10,11 +10,11 @@ import {
   isAgentRouterModelId
 } from '../shared/agentRouter';
 import {
-  WRITER_RESPONSE_JSON_SCHEMA,
-  WRITER_SYSTEM_PROMPT,
+  writerResponseSchema,
+  writerSystemPrompt,
   compileWriterPrompt,
   parseWriterRequest,
-  validateWriterDraft,
+  validateWriterResponse,
   type WriterDraft,
   type WriterGenerationInput,
   type WriterRequest
@@ -267,23 +267,43 @@ function codexArguments(modelId: string, resultPath: string): readonly string[] 
 
 function compileAgentRouterWriterInput(request: WriterRequest): string {
   return [
-    WRITER_SYSTEM_PROMPT,
+    writerSystemPrompt(request),
     'Do not inspect files, run commands, browse, or call tools. Complete this writing task directly.',
     compileWriterPrompt(request),
     'Return exactly one JSON object and no prose. The object must satisfy this JSON Schema:',
-    JSON.stringify(WRITER_RESPONSE_JSON_SCHEMA)
+    JSON.stringify(writerResponseSchema(request))
   ].join('\n\n');
 }
 
 function decodeWriterJson(raw: string): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
-  let candidate = raw.trim();
-  const fenced = candidate.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
-  if (fenced?.[1] !== undefined) candidate = fenced[1].trim();
+  const candidate = raw.trim();
+
+  // Strategy 1: direct parse (model returned bare JSON as instructed).
   try {
     return { ok: true, value: JSON.parse(candidate) as unknown };
-  } catch {
-    return { ok: false };
+  } catch { /* fall through */ }
+
+  // Strategy 2: extract content from a markdown code fence anywhere in the output.
+  // The fence does not have to start at the very beginning of the string — some
+  // models prepend a short acknowledgement line before the fence.
+  const fenced = candidate.match(/```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```/i);
+  if (fenced?.[1] !== undefined) {
+    try {
+      return { ok: true, value: JSON.parse(fenced[1].trim()) as unknown };
+    } catch { /* fall through */ }
   }
+
+  // Strategy 3: find the first '{' and the last '}' and try to parse that
+  // substring.  This recovers from models that wrap JSON in prose sentences.
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      return { ok: true, value: JSON.parse(candidate.slice(start, end + 1)) as unknown };
+    } catch { /* fall through */ }
+  }
+
+  return { ok: false };
 }
 
 function extractCodexError(stdout: string): string {
@@ -377,11 +397,13 @@ export async function requestAgentRouterCodexWriter(input: AgentRouterCodexWrite
 
   const runId = randomUUID().slice(0, 8);
   const startedAt = Date.now();
-  const privateText = [request.sourceText, request.currentScreenplay ?? ''];
+  const privateText = [request.sourceText, request.currentScreenplay ?? '', request.currentStageText ?? '', request.revisionInstructions ?? '', ...(request.approvedContext ?? []).map((entry) => entry.content)];
   let workspace: string | undefined;
   terminalLog(runId, 'info', 'request.start', {
     model: agentRouterNativeModelId(input.modelId),
     mode: request.mode,
+    stage: request.stage,
+    approvedStages: request.approvedContext?.length,
     targetSeconds: request.targetDurationSeconds,
     sourceCharacters: request.sourceText.length,
     screenplayCharacters: request.currentScreenplay?.length ?? 0,
@@ -419,7 +441,7 @@ export async function requestAgentRouterCodexWriter(input: AgentRouterCodexWrite
     terminalLog(runId, 'info', 'response.complete', { resultCharacters: rawResult.length });
     const decoded = decodeWriterJson(rawResult);
     if (!decoded.ok) throw new Error('AgentRouter Writer returned invalid JSON.');
-    const validation = validateWriterDraft(decoded.value);
+    const validation = validateWriterResponse(decoded.value, request);
     if (!validation.ok) {
       throw new Error(`AgentRouter Writer returned an invalid project draft at ${validation.issue.path}: ${validation.issue.message}`);
     }

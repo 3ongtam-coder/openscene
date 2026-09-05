@@ -1,238 +1,151 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-
 import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
+import { createEmptyAiProjectDocument, type AiProjectDocument } from '@openvideo/shared/aiProjectDomain';
 import { requestWriter } from '@openvideo/shared/writerGeneration';
 import { getLlmProvider } from '@openvideo/shared/llmProviders';
-import {
-  WRITER_MODEL_IDS,
-  applyWriterDraft,
-  writerDraftDurationSeconds,
-  type WriterDraft,
-  type WriterMode,
-  type WriterRequest
-} from '@openvideo/shared/writerWorkflow';
+import { WRITER_MODEL_IDS, WRITER_VIDEO_STYLES, WRITER_EMOTIONAL_GOALS, type WriterMode, type WriterRequest, type WriterVideoStyle, type WriterEmotionalGoal } from '@openvideo/shared/writerWorkflow';
+import { pipelineBaseRequest, pipelineMatchesBrief } from '@openvideo/shared/writerPipeline';
+import { WRITER_STAGES, WRITER_STAGE_LABELS, WRITER_STAGE_CHECKLISTS, canOpenWriterStage } from '@openvideo/shared/writerStages';
+import { createUseWriterPipeline } from '@openvideo/shared/useWriterPipeline';
 import { FormScreen } from '../components/FormScreen';
 import { ModelSelect } from '../components/ModelSelect';
+import { WriterPromptEditor } from '../components/WriterPromptEditor';
 import { useRevealOnFocus } from '../components/KeyboardAwareScroll';
 import { readSlot } from '../lib/credentials';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { readProject, writeProject } from '../lib/projectStore';
 import { MIN_TAP, press } from '../lib/touch';
 import { theme } from '../lib/theme';
+const useWriterPipeline = createUseWriterPipeline({ useEffect, useRef, useState });
 
-const MODES: readonly { id: WriterMode; label: string }[] = [
-  { id: 'idea_to_script', label: 'Idea' },
-  { id: 'content_to_script', label: 'Content' },
-  { id: 'rewrite', label: 'Rewrite' }
-];
-
-export function WriterScreen({
-  topInset,
-  keyboardOffset,
-  projectId,
-  connectionsVersion
-}: {
-  readonly topInset: number;
-  readonly keyboardOffset: number;
-  readonly projectId: string | null;
-  readonly connectionsVersion: number;
-}) {
+type WriterScreenProps = {
+  readonly topInset: number; readonly keyboardOffset: number;
+  readonly projectId: string | null; readonly connectionsVersion: number;
+};
+export function WriterScreen(props: WriterScreenProps) {
+  return <ProjectWriterScreen key={props.projectId ?? 'no-project'} {...props} />;
+}
+function ProjectWriterScreen({ topInset, keyboardOffset, projectId, connectionsVersion }: WriterScreenProps) {
   const catalog = getDomainModels('writer');
   const [modelId, setModelId] = useState(() => catalog[0]?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
-  const [mode, setMode] = useState<WriterMode>('idea_to_script');
-  const [sourceText, setSourceText] = useState('');
-  const [language, setLanguage] = useState('Vietnamese');
-  const [audience, setAudience] = useState('General audience');
-  const [tone, setTone] = useState('Cinematic and engaging');
-  const [durationText, setDurationText] = useState('60');
-  const [parentScriptId, setParentScriptId] = useState('');
-  const [preview, setPreview] = useState<{ draft: WriterDraft; request: WriterRequest } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const sourceInput = useRef<TextInput>(null);
-  const reveal = useRevealOnFocus();
-
-  const refreshConnections = useCallback((): void => {
-    void readProviderConnections().then(setConnected);
-  }, []);
-  useEffect(refreshConnections, [connectionsVersion, refreshConnections]);
-
-  const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
   const project = projectId === null ? null : readProject(projectId);
-  const scripts = useMemo(
-    () => (project?.ai.scripts ?? []).filter((script) => script.status !== 'superseded').slice().reverse(),
-    [project?.ai.scripts]
-  );
+  const initial = pipelineBaseRequest(project?.ai.writerPipeline);
+  const [mode, setMode] = useState<WriterMode>(initial?.mode ?? 'idea_to_script');
+  const [sourceText, setSourceText] = useState(initial?.sourceText ?? '');
+  const [language, setLanguage] = useState(initial?.language ?? 'Vietnamese');
+  const [audience, setAudience] = useState(initial?.audience ?? 'General audience');
+  const [tone, setTone] = useState(initial?.tone ?? 'Cinematic and engaging');
+  const [durationText, setDurationText] = useState(String(initial?.targetDurationSeconds ?? 60));
+  const [parentScriptId, setParentScriptId] = useState(initial?.parentScriptId ?? '');
+  const [videoStyle, setVideoStyle] = useState<WriterVideoStyle | ''>(initial?.videoStyle ?? '');
+  const [emotionalGoal, setEmotionalGoal] = useState<WriterEmotionalGoal | ''>(initial?.emotionalGoal ?? '');
+  const [notes, setNotes] = useState('');
+  const contentInput = useRef<TextInput>(null);
+  const reveal = useRevealOnFocus();
+  const persist = async (ai: AiProjectDocument): Promise<boolean> => {
+    const latest = projectId === null ? null : readProject(projectId);
+    if (!latest) return false;
+    writeProject({ ...latest, ai });
+    return true;
+  };
+  const flow = useWriterPipeline(project?.ai ?? createEmptyAiProjectDocument(), persist);
+  const refresh = useCallback((): void => { void readProviderConnections().then(setConnected); }, []);
+  useEffect(refresh, [connectionsVersion, refresh]);
+  const model = catalog.find((entry) => entry.id === modelId) ?? catalog[0];
   const parent = project?.ai.scripts.find((script) => script.id === parentScriptId);
   const targetDurationSeconds = Number(durationText);
-  const modelAvailable = model !== undefined && isDomainModelAvailableOnRuntime(model, 'mobile');
-
-  const generate = async (): Promise<void> => {
-    if (model === undefined || !(WRITER_MODEL_IDS as readonly string[]).includes(model.id)) return;
-    if (!modelAvailable) {
-      setMessage(model.unavailableReason ?? 'This Writer model is not available on mobile.');
-      return;
-    }
-    if (mode === 'rewrite' && parent === undefined) {
-      setMessage('Choose a script version to rewrite.');
-      return;
-    }
-    const request: WriterRequest = {
-      mode,
-      sourceText: sourceText.trim(),
-      language: language.trim(),
-      audience: audience.trim(),
-      tone: tone.trim(),
-      targetDurationSeconds,
-      ...(mode === 'rewrite' && parent !== undefined
-        ? { parentScriptId: parent.id, currentScreenplay: parent.screenplay }
-        : {})
-    };
-    const provider = getLlmProvider(model.providerId);
-    const apiKey = provider?.credentialKey === undefined ? null : await readSlot(provider.credentialKey);
-    if (apiKey === null) {
-      setMessage(`${model.providerLabel} is not connected. Add its API key in Settings.`);
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const draft = await requestWriter({
-        apiKey,
-        modelId: model.id as (typeof WRITER_MODEL_IDS)[number],
-        request
-      });
-      setPreview({ draft, request });
-      setMessage('Draft ready. Review it before saving.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : `${model.providerLabel} Writer failed.`);
-    } finally {
-      setBusy(false);
-    }
+  const available = model !== undefined && isDomainModelAvailableOnRuntime(model, 'mobile');
+  const base: WriterRequest = {
+    mode, sourceText: sourceText.trim(), language: language.trim(), audience: audience.trim(), tone: tone.trim(), targetDurationSeconds,
+    ...(videoStyle ? { videoStyle } : {}), ...(emotionalGoal ? { emotionalGoal } : {}),
+    ...(mode === 'rewrite' && parent ? { parentScriptId: parent.id, currentScreenplay: parent.screenplay } : {})
   };
-
-  const save = (): void => {
-    if (preview === null || project === null) return;
-    const applied = applyWriterDraft({
-      document: project.ai,
-      request: preview.request,
-      draft: preview.draft,
-      createdAt: new Date().toISOString(),
-      idPrefix: `writer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+  const briefChanged = flow.state !== undefined && !pipelineMatchesBrief(flow.state, base);
+  const canGenerate = !flow.busy && !flow.dirty && project !== null && model !== undefined && available && connected[model.providerId] === true &&
+    sourceText.trim().length > 0 && language.trim().length > 0 && audience.trim().length > 0 && tone.trim().length > 0 &&
+    Number.isSafeInteger(targetDurationSeconds) && targetDurationSeconds >= 4 && targetDurationSeconds <= 7200 &&
+    (mode !== 'rewrite' || parent !== undefined) && (!briefChanged || flow.stage === 'concept');
+  const generate = (): void => {
+    if (!model || !canGenerate) return;
+    void flow.generate(base, model.id, notes, async (request) => {
+      const provider = getLlmProvider(model.providerId);
+      const apiKey = provider?.credentialKey === undefined ? null : await readSlot(provider.credentialKey);
+      if (!apiKey) throw new Error('Connect the selected provider in Settings.');
+      return requestWriter({ apiKey, modelId: model.id as (typeof WRITER_MODEL_IDS)[number], request });
     });
-    if (!applied.ok) {
-      setMessage(applied.message);
-      return;
-    }
-    try {
-      writeProject({ ...project, ai: applied.document });
-      setPreview(null);
-      setMessage(`Saved “${preview.draft.title}” to this project.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The Writer draft could not be saved.');
-    }
   };
-
-  const canGenerate = !busy && project !== null && model !== undefined && modelAvailable && connected[model.providerId] === true && sourceText.trim().length > 0 &&
-    language.trim().length > 0 && audience.trim().length > 0 && tone.trim().length > 0 &&
-    Number.isSafeInteger(targetDurationSeconds) && targetDurationSeconds >= 4 && targetDurationSeconds <= 7_200 &&
-    (mode !== 'rewrite' || parent !== undefined);
-
+  const nextStage = WRITER_STAGES[WRITER_STAGES.indexOf(flow.stage) + 1];
+  const approved = flow.artifact?.approved === true && !flow.dirty && !briefChanged;
+  const editable = !flow.busy && !flow.dirty;
+  const action = (label: string, run: () => void, disabled = false) => (
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={run} style={press([styles.secondary, disabled && styles.off])}>
+      <Text style={styles.secondaryText}>{label}</Text>
+    </Pressable>
+  );
+  const field = (label: string, value: string, set: (value: string) => void, multiline = false) => <View>
+    <Text style={styles.label}>{label}</Text>
+    <TextInput editable={editable} value={value} onChangeText={set} multiline={multiline} style={[styles.input, multiline && styles.source]} />
+  </View>;
   return (
     <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
-      <Text style={styles.h1}>Writer & Storyboard</Text>
-      <Text style={styles.sub}>The selected Writer model creates a structured draft. Nothing changes until you review and save it.</Text>
-
-      <Text style={styles.label}>Model</Text>
-      <ModelSelect
-        domain="writer"
-        selectedId={modelId}
-        connected={connected}
-        onSelect={(next) => { setModelId(next.id); setPreview(null); }}
-        onConnectionChange={refreshConnections}
-      />
-
-      <Text style={styles.label}>Task</Text>
-      <View style={styles.row}>
-        {MODES.map((entry) => (
-          <Pressable
-            key={entry.id}
-            accessibilityRole="button"
-            accessibilityState={{ selected: mode === entry.id }}
-            onPress={() => { setMode(entry.id); setPreview(null); }}
-            style={press([styles.chip, mode === entry.id && styles.chipOn])}
-          >
-            <Text style={[styles.chipText, mode === entry.id && styles.chipTextOn]}>{entry.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {mode === 'rewrite' && (
-        <>
-          <Text style={styles.label}>Script version</Text>
-          {scripts.length === 0 ? <Text style={styles.note}>Save a first script before using Rewrite.</Text> : scripts.map((script) => (
-            <Pressable
-              key={script.id}
-              accessibilityRole="button"
-              accessibilityState={{ selected: parentScriptId === script.id }}
-              onPress={() => { setParentScriptId(script.id); setPreview(null); }}
-              style={press([styles.script, parentScriptId === script.id && styles.scriptOn])}
-            >
-              <Text style={styles.scriptTitle}>{script.title}</Text>
-              <Text style={styles.note}>{script.sourceKind} · {script.status}</Text>
-            </Pressable>
-          ))}
-        </>
-      )}
-
-      <Text style={styles.label}>{mode === 'rewrite' ? 'Rewrite instructions' : mode === 'content_to_script' ? 'Source content' : 'Idea'}</Text>
-      <TextInput
-        ref={sourceInput}
-        onFocus={() => reveal(sourceInput.current)}
-        multiline
-        textAlignVertical="top"
-        value={sourceText}
-        onChangeText={(value) => { setSourceText(value); setPreview(null); }}
-        placeholder="Describe the video, paste content, or explain the changes…"
-        placeholderTextColor={theme.textWeaker}
-        style={[styles.input, styles.source]}
-      />
-      <View style={styles.two}>
-        <View style={styles.flex}><Text style={styles.label}>Language</Text><TextInput value={language} onChangeText={setLanguage} style={styles.input} /></View>
-        <View style={styles.flex}><Text style={styles.label}>Seconds</Text><TextInput value={durationText} onChangeText={setDurationText} keyboardType="number-pad" style={styles.input} /></View>
-      </View>
-      <Text style={styles.label}>Audience</Text>
-      <TextInput value={audience} onChangeText={setAudience} style={styles.input} />
-      <Text style={styles.label}>Tone</Text>
-      <TextInput value={tone} onChangeText={setTone} style={styles.input} />
-      <Text style={styles.note}>Generate is an explicit request to the selected provider and may incur text-generation charges.</Text>
-      {!modelAvailable && model?.unavailableReason !== undefined && <Text style={styles.message}>{model.unavailableReason}</Text>}
-
-      <Pressable accessibilityRole="button" disabled={!canGenerate} onPress={() => void generate()} style={press([styles.primary, !canGenerate && styles.off])}>
-        {busy ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.primaryText}>Generate draft</Text>}
+      <Text style={styles.h1}>Writer Studio</Text>
+      <Text style={styles.sub}>Idea → screenplay → segments/scenes → video prompts. Edit and approve each step; nothing advances automatically.</Text>
+      <ModelSelect domain="writer" selectedId={modelId} connected={connected} onSelect={(next) => setModelId(next.id)} onConnectionChange={refresh} />
+      <View style={styles.row}>{WRITER_STAGES.map((stage) => <View key={stage}>{action(
+        WRITER_STAGE_LABELS[stage] + (flow.state?.artifacts.some((a) => a.stage === stage && a.approved) && !briefChanged ? ' ✓' : ''),
+        () => { flow.chooseStage(stage); setNotes(''); },
+        flow.busy || flow.dirty || !canOpenWriterStage(flow.state ?? { artifacts: [] }, stage) || (briefChanged && stage !== 'concept')
+      )}</View>)}</View>
+      <Text style={styles.label}>Creative brief source</Text>
+      <View style={styles.row}>{(['idea_to_script', 'content_to_script', 'rewrite'] as const).map((entry) => <View key={entry}>
+        {action((mode === entry ? '✓ ' : '') + entry.replaceAll('_', ' '), () => setMode(entry), !editable)}
+      </View>)}</View>
+      {mode === 'rewrite' && <View><Text style={styles.label}>Script version</Text>
+        {(project?.ai.scripts ?? []).slice().reverse().map((script) => <View key={script.id}>
+          {action((script.id === parentScriptId ? '✓ ' : '') + script.title, () => setParentScriptId(script.id), !editable)}
+        </View>)}
+      </View>}
+      {field('Idea / source / rewrite instructions', sourceText, setSourceText, true)}
+      {field('Language', language, setLanguage)}{field('Seconds', durationText, setDurationText)}
+      {field('Audience', audience, setAudience)}{field('Tone', tone, setTone)}
+      <Text style={styles.label}>Video style</Text>
+      <View style={styles.row}>{(['', ...WRITER_VIDEO_STYLES] as const).map((value) => <View key={value}>
+        {action((videoStyle === value ? '✓ ' : '') + (value || 'Auto'), () => setVideoStyle(value), !editable)}
+      </View>)}</View>
+      <Text style={styles.label}>Emotional goal</Text>
+      <View style={styles.row}>{(['', ...WRITER_EMOTIONAL_GOALS] as const).map((value) => <View key={value}>
+        {action((emotionalGoal === value ? '✓ ' : '') + (value || 'Auto'), () => setEmotionalGoal(value), !editable)}
+      </View>)}</View>
+      {briefChanged && <Text style={styles.message}>Brief changed. Return to step 1 and generate a revised concept; dependent approvals will reset, with text retained.</Text>}
+      <Text style={styles.label}>Revision notes for this stage</Text>
+      <TextInput editable={!flow.busy} multiline value={notes} onChangeText={setNotes} style={[styles.input, styles.source]} />
+      <Text style={styles.note}>Generate sends the brief, existing rewrite script, approved preceding documents and revision notes to the selected provider. Text-generation charges may apply. No video is generated.</Text>
+      {!available && <Text style={styles.message}>{model?.unavailableReason ?? 'This model is unavailable on mobile.'}</Text>}
+      <Pressable accessibilityRole="button" disabled={!canGenerate} onPress={generate} style={press([styles.primary, !canGenerate && styles.off])}>
+        {flow.busy ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.primaryText}>{flow.artifact ? 'Regenerate this stage' : 'Generate this stage'}</Text>}
       </Pressable>
-      {message.length > 0 && <Text style={styles.message}>{message}</Text>}
-
-      {preview !== null && (
-        <View style={styles.preview}>
-          <Text style={styles.previewTitle}>{preview.draft.title}</Text>
-          <Text style={styles.note}>{preview.draft.scenes.length} scenes · {preview.draft.scenes.reduce((n, scene) => n + scene.shots.length, 0)} shots · {writerDraftDurationSeconds(preview.draft)}s</Text>
-          <Text style={styles.screenplay}>{preview.draft.screenplay}</Text>
-          {preview.draft.scenes.map((scene, index) => (
-            <View key={`${index}-${scene.title}`} style={styles.scene}>
-              <Text style={styles.scriptTitle}>{index + 1}. {scene.title}</Text>
-              <Text style={styles.note}>{scene.setting}{scene.timeOfDay ? ` · ${scene.timeOfDay}` : ''} · {scene.shots.length} shots</Text>
-              <Text style={styles.sceneText}>{scene.objective}</Text>
-            </View>
-          ))}
-          <View style={styles.actions}>
-            <Pressable accessibilityRole="button" onPress={() => setPreview(null)} style={press(styles.secondary)}><Text style={styles.secondaryText}>Discard</Text></Pressable>
-            <Pressable accessibilityRole="button" onPress={save} style={press(styles.primary)}><Text style={styles.primaryText}>Save to project</Text></Pressable>
+      {!!flow.message && <Text style={styles.message}>{flow.message}</Text>}
+      <View style={styles.preview}>
+        <Text style={styles.previewTitle}>{WRITER_STAGE_LABELS[flow.stage]} — {approved ? 'Approved' : flow.dirty ? 'Unsaved draft' : 'Review'}</Text>
+        {WRITER_STAGE_CHECKLISTS[flow.stage].map((item) => <Text key={item} style={styles.note}>• {item}</Text>)}
+        {flow.artifact && <>
+          <Text style={styles.label}>Title</Text><TextInput editable={!flow.busy} value={flow.artifact.title} onChangeText={(title) => flow.edit({ title })} style={styles.input} />
+          {flow.stage === 'prompts' && <WriterPromptEditor content={flow.artifact.content} targetSeconds={targetDurationSeconds} disabled={flow.busy} onChange={(content) => flow.edit({ content })} />}
+          <Text style={styles.label}>{flow.stage === 'prompts' ? 'Advanced scene / shot JSON (editable)' : 'Full document (editable)'}</Text>
+          <TextInput ref={contentInput} onFocus={() => reveal(contentInput.current)} editable={!flow.busy} multiline textAlignVertical="top"
+            value={flow.artifact.content} onChangeText={(content) => flow.edit({ content })} style={[styles.input, { minHeight: 360 }]} />
+          {flow.stage === 'prompts' && <Text style={styles.note}>The approved screenplay is preserved on save. Change story text in step 2.</Text>}
+          <View style={styles.row}>
+            {flow.dirty && action('Discard edits', flow.discard, flow.busy)}
+            {action('Save draft', () => void flow.save(false), flow.busy || briefChanged)}
+            {action('Approve & save this stage', () => void flow.save(true), flow.busy || briefChanged || approved)}
           </View>
-        </View>
-      )}
+          {approved && nextStage && action('Continue to ' + WRITER_STAGE_LABELS[nextStage], () => { flow.chooseStage(nextStage); setNotes(''); }, flow.busy)}
+          {approved && flow.stage === 'prompts' && action(flow.applied ? 'Production scenes saved' : 'Create production scenes (no video generation)', () => void flow.apply(), flow.busy || flow.applied)}
+        </>}
+      </View>
     </FormScreen>
   );
 }

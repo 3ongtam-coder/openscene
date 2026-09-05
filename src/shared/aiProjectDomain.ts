@@ -8,6 +8,7 @@ import {
   isUnknownArray
 } from './timelineValidationPrimitives';
 import { VIDEO_OPERATIONS } from './mediaCapabilityRegistry';
+import { parseWriterPipelineState, type WriterPipelineState } from './writerStages';
 
 export const AI_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -124,6 +125,7 @@ export type ProvenanceRecord = {
 };
 
 export type AiProjectDocument = {
+  readonly writerPipeline?: WriterPipelineState;
   readonly schemaVersion: typeof AI_PROJECT_SCHEMA_VERSION;
   readonly scripts: readonly ScriptVersion[];
   readonly scenes: readonly AiScene[];
@@ -459,7 +461,9 @@ function relationsAreValid(document: AiProjectDocument, availableAssetIds?: Read
 }
 
 export function parseAiProjectDocument(value: unknown, availableAssetIds?: ReadonlySet<string>): AiProjectDocument | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['schemaVersion', 'scripts', 'scenes', 'shots', 'characters', 'styleBible', 'referenceAssets', 'generations', 'provenance']) || value.schemaVersion !== AI_PROJECT_SCHEMA_VERSION) return null;
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['schemaVersion', 'scripts', 'scenes', 'shots', 'characters', 'styleBible', 'referenceAssets', 'generations', 'provenance', 'writerPipeline']) || value.schemaVersion !== AI_PROJECT_SCHEMA_VERSION) return null;
+  const writerPipeline = value.writerPipeline === undefined ? undefined : parseWriterPipelineState(value.writerPipeline);
+  if (writerPipeline === null) return null;
   const scripts = parseCollection(value.scripts, LIMITS.scripts, parseScript);
   const scenes = parseCollection(value.scenes, LIMITS.scenes, parseScene);
   const shots = parseCollection(value.shots, LIMITS.shots, parseShot);
@@ -470,6 +474,7 @@ export function parseAiProjectDocument(value: unknown, availableAssetIds?: Reado
   const provenance = parseCollection(value.provenance, LIMITS.provenance, parseProvenance);
   if (scripts === null || scenes === null || shots === null || characters === null || styleBible === null || referenceAssets === null || generations === null || provenance === null) return null;
   const document: AiProjectDocument = {
+    ...(writerPipeline === undefined ? {} : { writerPipeline }),
     schemaVersion: AI_PROJECT_SCHEMA_VERSION,
     scripts: scripts.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)),
     scenes: scenes.sort((left, right) => left.scriptVersionId.localeCompare(right.scriptVersionId) || left.order - right.order || left.id.localeCompare(right.id)),

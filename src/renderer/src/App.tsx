@@ -365,7 +365,7 @@ export function App(): ReactElement {
                 tabIndex={-1}
               >
                 {editor.project !== null && (
-                  <WriterWorkspace document={editor.project.ai} onSave={editor.saveAiProjectDocument} />
+                  <WriterWorkspace key={editor.project.id} document={editor.project.ai} onSave={editor.saveAiProjectDocument} />
                 )}
               </section>
               <section
@@ -387,6 +387,7 @@ export function App(): ReactElement {
                 tabIndex={-1}
               >
                 <VideoGenerationWorkspace
+                  writerDocument={editor.project?.ai ?? null}
                   referenceImage={videoReferenceImage}
                   onReferenceImageChange={setVideoReferenceImage}
                 />
