@@ -351,6 +351,15 @@ export type GetAssetPlaybackUrlInput = ProjectRequestInput & {
   readonly assetId: string;
 };
 
+/** Extracts the first native audio stream from a project video asset. */
+export type DetachVideoAudioInput = ProjectRequestInput & {
+  readonly assetId: string;
+};
+
+export type DetachVideoAudioResult = {
+  readonly asset: MediaAsset;
+};
+
 export type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
 };

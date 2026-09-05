@@ -20,6 +20,7 @@ export const IPC_CHANNELS = {
   projectRecordingResultImport: 'project-assets:import-recording-result',
   projectAssetMetadataUpdate: 'project-assets:update-metadata',
   projectAssetPlaybackUrl: 'project-assets:playback-url',
+  projectAssetDetachAudio: 'project-assets:detach-audio',
   projectTimelineSave: 'project-timeline:save',
   projectAiDocumentSave: 'project-ai-document:save',
   projectTimelineChanged: 'project-timeline:changed',
