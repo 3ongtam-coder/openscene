@@ -72,6 +72,8 @@ export function VideoGenerationWorkspace({
   const [jobs, setJobs] = useState<readonly VideoGenerationJob[]>([]);
   const [jobInputs, setJobInputs] = useState<Readonly<Record<string, VideoInputSnapshot>>>({});
   const pollTimers = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
+  const activePollJobs = useRef<Set<string>>(new Set());
+  const inFlightPollJobs = useRef<Set<string>>(new Set());
 
   const [isGenerating, setIsGenerating] = useState(false);
   // Which take is being refined, and what to change about it. A note belongs to
@@ -99,6 +101,8 @@ export function VideoGenerationWorkspace({
   useEffect(() => () => {
     for (const timer of pollTimers.current) clearInterval(timer);
     pollTimers.current.clear();
+    activePollJobs.current.clear();
+    inFlightPollJobs.current.clear();
   }, []);
 
   /**
@@ -170,16 +174,24 @@ export function VideoGenerationWorkspace({
         const stopPolling = (intervalId: ReturnType<typeof setInterval>): void => {
           clearInterval(intervalId);
           pollTimers.current.delete(intervalId);
+          activePollJobs.current.delete(job.id);
+          inFlightPollJobs.current.delete(job.id);
         };
         const intervalId = setInterval(async () => {
+          if (!activePollJobs.current.has(job.id)) return;
+          // Keep checking the deadline even while an earlier IPC request is
+          // unresolved, then ignore that request if it eventually comes back.
+          if (Date.now() > pollingDeadline) {
+            stopPolling(intervalId);
+            setIsGenerating(false);
+            setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this job before retrying.', tone: 'warning' });
+            return;
+          }
+          if (inFlightPollJobs.current.has(job.id)) return;
+          inFlightPollJobs.current.add(job.id);
           try {
-            if (Date.now() > pollingDeadline) {
-              stopPolling(intervalId);
-              setIsGenerating(false);
-              setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this job before retrying.', tone: 'warning' });
-              return;
-            }
             const pollRes = await window.videoTool.aiGetVideoJob(job.id);
+            if (!activePollJobs.current.has(job.id)) return;
             if (!pollRes.ok || !pollRes.value) {
               stopPolling(intervalId);
               setIsGenerating(false);
@@ -202,9 +214,12 @@ export function VideoGenerationWorkspace({
             stopPolling(intervalId);
             setIsGenerating(false);
             setStatusMsg({ text: error instanceof Error ? error.message : 'Video job polling failed.', tone: 'danger' });
+          } finally {
+            inFlightPollJobs.current.delete(job.id);
           }
         }, 1000);
         pollTimers.current.add(intervalId);
+        activePollJobs.current.add(job.id);
       } else {
         setIsGenerating(false);
         setStatusMsg({ text: !response.ok ? response.error.message : 'Failed to start generation job.', tone: 'danger' });

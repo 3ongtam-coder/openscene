@@ -90,12 +90,16 @@ export function useTimelineEditor() {
   }, [playback]);
 
   const refreshProjects = useCallback(async () => {
-    const response = await window.videoTool.listProjects();
-    if (response.ok) {
-      setProjects(response.value);
-      return;
+    try {
+      const response = await window.videoTool.listProjects();
+      if (response.ok) {
+        setProjects(response.value);
+        return;
+      }
+      setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+    } catch (error: unknown) {
+      setStatusMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Projects could not be listed.' });
     }
-    setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
   }, []);
 
   useEffect(() => {
@@ -125,10 +129,21 @@ export function useTimelineEditor() {
     setMetadataProbeRetryRevisionsByAssetId((current) => ({ ...current, [assetId]: (current[assetId] ?? 0) + 1 }));
   }, [clearMetadataProbeFailure]);
 
-  const openProject = useCallback(async (projectId: string): Promise<boolean> => {
+  const invokeWhileBusy = useCallback(async <T,>(invoke: () => Promise<T>, failureMessage: string): Promise<T | null> => {
     setIsBusy(true);
-    const response = await window.videoTool.openProject({ projectId });
-    setIsBusy(false);
+    try {
+      return await invoke();
+    } catch (error: unknown) {
+      setStatusMessage({ tone: 'danger', text: error instanceof Error ? error.message : failureMessage });
+      return null;
+    } finally {
+      setIsBusy(false);
+    }
+  }, []);
+
+  const openProject = useCallback(async (projectId: string): Promise<boolean> => {
+    const response = await invokeWhileBusy(() => window.videoTool.openProject({ projectId }), 'The project could not be opened.');
+    if (response === null) return false;
     if (response.ok) {
       setLoadedProject(response.value);
       setSelectedAssetId(response.value.assets[0]?.id ?? '');
@@ -139,12 +154,11 @@ export function useTimelineEditor() {
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
     return false;
-  }, []);
+  }, [invokeWhileBusy, setLoadedProject]);
 
   const createProject = useCallback(async (): Promise<boolean> => {
-    setIsBusy(true);
-    const response = await window.videoTool.createProject({ name: newProjectName });
-    setIsBusy(false);
+    const response = await invokeWhileBusy(() => window.videoTool.createProject({ name: newProjectName }), 'The project could not be created.');
+    if (response === null) return false;
     if (response.ok) {
       if (response.value.cancelled) {
         return false;
@@ -160,12 +174,11 @@ export function useTimelineEditor() {
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
     return false;
-  }, [newProjectName, refreshProjects]);
+  }, [invokeWhileBusy, newProjectName, refreshProjects, setLoadedProject]);
 
   const openProjectFolder = useCallback(async (): Promise<boolean> => {
-    setIsBusy(true);
-    const response = await window.videoTool.openProjectFolder();
-    setIsBusy(false);
+    const response = await invokeWhileBusy(() => window.videoTool.openProjectFolder(), 'The project folder could not be opened.');
+    if (response === null) return false;
     if (response.ok) {
       if (response.value.cancelled) {
         return false;
@@ -183,13 +196,12 @@ export function useTimelineEditor() {
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
     return false;
-  }, [refreshProjects]);
+  }, [invokeWhileBusy, refreshProjects, setLoadedProject]);
 
   const deleteCurrentProject = useCallback(async () => {
     if (project === null) return;
-    setIsBusy(true);
-    const response = await window.videoTool.deleteProject({ projectId: project.id });
-    setIsBusy(false);
+    const response = await invokeWhileBusy(() => window.videoTool.deleteProject({ projectId: project.id }), 'The project could not be deleted.');
+    if (response === null) return;
     if (response.ok) {
       setLoadedProject(null);
       setSelectedAssetId('');
@@ -200,7 +212,7 @@ export function useTimelineEditor() {
       return;
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
-  }, [project, refreshProjects, setLoadedProject]);
+  }, [invokeWhileBusy, project, refreshProjects, setLoadedProject]);
 
   const { importAssets, importRecordingResult, importAiResult } = useProjectAssetImports({ project, setIsBusy, setProject, setSelectedAssetId, setStatusMessage });
 
@@ -487,13 +499,12 @@ export function useTimelineEditor() {
     const sourceSelection = selectedClip;
     if (sourceProject === null || sourceSelection?.asset?.kind !== 'video') return;
 
-    setIsBusy(true);
     setStatusMessage({ tone: 'neutral', text: 'Extracting the selected video audio with FFmpeg…' });
-    const response = await window.videoTool.detachVideoAudio({
+    const response = await invokeWhileBusy(() => window.videoTool.detachVideoAudio({
       projectId: sourceProject.id,
-      assetId: sourceSelection.asset.id
-    });
-    setIsBusy(false);
+      assetId: sourceSelection.asset!.id
+    }), 'The video audio extraction request failed.');
+    if (response === null) return;
     if (!response.ok) {
       setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
       return;
@@ -542,7 +553,7 @@ export function useTimelineEditor() {
       tone: 'success',
       text: `Detached audio to ${transaction.audioTrackId}. The source video clip is muted to prevent duplicate sound.`
     });
-  }, [playback, selectedClip]);
+  }, [invokeWhileBusy, playback, selectedClip]);
 
   const undoTimeline = useCallback(() => {
     if (timelineHistory === null) return;
@@ -626,19 +637,22 @@ export function useTimelineEditor() {
     return true;
   }, [project, refreshProjects]);
 
-  const saveTimeline = useCallback(async () => {
-    if (project === null) return;
-    setIsBusy(true);
-    const response = await window.videoTool.saveTimeline({ projectId: project.id, timeline: project.timeline });
-    setIsBusy(false);
+  const saveTimeline = useCallback(async (): Promise<boolean> => {
+    if (project === null) return false;
+    const response = await invokeWhileBusy(
+      () => window.videoTool.saveTimeline({ projectId: project.id, timeline: project.timeline }),
+      'The timeline could not be saved.'
+    );
+    if (response === null) return false;
     if (response.ok) {
       setLoadedProject(response.value);
       setHasUnsavedTimeline(false);
       setStatusMessage({ tone: 'success', text: 'Timeline saved locally.' });
-      return;
+      return true;
     }
     setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
-  }, [project, setLoadedProject]);
+    return false;
+  }, [invokeWhileBusy, project, setLoadedProject]);
 
   const saveAiProjectDocument = useCallback(async (ai: AiProjectDocument): Promise<boolean> => {
     if (project === null) return false;

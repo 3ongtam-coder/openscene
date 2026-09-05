@@ -15,12 +15,14 @@ import {
 } from './agentRouter';
 
 type FetchLike = typeof fetch;
+const GEMINI_WRITER_TIMEOUT_MS = 3 * 60 * 1_000;
 
 export type GeminiWriterInput = {
   readonly apiKey: string;
   readonly modelId: Extract<WriterModelId, `gemini-${string}`>;
   readonly request: WriterRequest;
   readonly fetchImpl?: FetchLike;
+  readonly timeoutMs?: number;
 };
 
 export type WriterProviderInput = {
@@ -48,41 +50,54 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
   if (!(GEMINI_WRITER_MODEL_IDS as readonly string[]).includes(input.modelId)) throw new Error('Gemini Writer model is not allowed.');
   if (input.apiKey.trim().length === 0) throw new Error('Gemini API key is required.');
   const fetchImpl = input.fetchImpl ?? fetch;
-  const response = await fetchImpl(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.modelId)}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': input.apiKey.trim() },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: writerSystemPrompt(request) }] },
-        contents: [{ role: 'user', parts: [{ text: compileWriterPrompt(request) }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: writerResponseSchema(request)
-        }
-      })
-    }
-  );
-  if (!response.ok) {
-    const detail = await providerError(response, input.apiKey.trim());
-    throw new Error(`Gemini Writer failed with status ${response.status}${detail.length > 0 ? `: ${detail}` : ''}.`);
-  }
-  const payload = await response.json() as {
-    candidates?: readonly { content?: { parts?: readonly { text?: string }[] } }[];
-  };
-  const json = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim();
-  if (!json) throw new Error('Gemini Writer returned an empty response.');
-  let decoded: unknown;
+  const timeoutMs = input.timeoutMs ?? GEMINI_WRITER_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    decoded = JSON.parse(json);
-  } catch {
-    throw new Error('Gemini Writer returned invalid JSON.');
+    const response = await fetchImpl(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.modelId)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': input.apiKey.trim() },
+        signal: controller.signal,
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: writerSystemPrompt(request) }] },
+          contents: [{ role: 'user', parts: [{ text: compileWriterPrompt(request) }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseJsonSchema: writerResponseSchema(request)
+          }
+        })
+      }
+    );
+    if (!response.ok) {
+      const detail = await providerError(response, input.apiKey.trim());
+      throw new Error(`Gemini Writer failed with status ${response.status}${detail.length > 0 ? `: ${detail}` : ''}.`);
+    }
+    const payload = await response.json() as {
+      candidates?: readonly { content?: { parts?: readonly { text?: string }[] } }[];
+    };
+    const json = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim();
+    if (!json) throw new Error('Gemini Writer returned an empty response.');
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(json);
+    } catch {
+      throw new Error('Gemini Writer returned invalid JSON.');
+    }
+    const validation = validateWriterResponse(decoded, request);
+    if (!validation.ok) {
+      throw new Error(`Gemini Writer returned an invalid project draft at ${validation.issue.path}: ${validation.issue.message}`);
+    }
+    return validation.value;
+  } catch (error: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`Gemini Writer did not finish within ${Math.max(1, Math.ceil(timeoutMs / 1_000))} seconds.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  const validation = validateWriterResponse(decoded, request);
-  if (!validation.ok) {
-    throw new Error(`Gemini Writer returned an invalid project draft at ${validation.issue.path}: ${validation.issue.message}`);
-  }
-  return validation.value;
 }
 
 /**
