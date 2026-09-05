@@ -11,6 +11,7 @@ import { closeProjectTab, openProjectTab, pruneProjectTabs, type ProjectTab } fr
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
 import { NarrationPanel } from './NarrationPanel';
 import type { ReferenceImageSelection } from '../../shared/providerSeams';
+import { timelineDurationMs } from '../../shared/timelineLogic';
 import { ImageGenerationWorkspace } from './ImageGenerationWorkspace';
 import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
 import { WriterWorkspace } from './WriterWorkspace';
@@ -376,7 +377,7 @@ export function App(): ReactElement {
                 style={APP_WORKSPACE_PANEL_STYLE}
                 tabIndex={-1}
               >
-                <NarrationPanel />
+                <NarrationPanel key={editor.project!.id} document={editor.project!.ai} targetSeconds={timelineDurationMs(editor.project!.timeline) / 1_000} onSaveAi={editor.saveAiProjectDocument} onApplyCaptions={editor.applyNarrationSubtitles} />
               </section>
               <section
                 aria-label={WORKSPACE_TAB_LABELS.video}
