@@ -36,6 +36,8 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   const [speechPreviewUrl, setSpeechPreviewUrl] = useState<string | null>(null);
   const [importedJobId, setImportedJobId] = useState<string | null>(null);
   const pollIntervalRef = useRef<number | null>(null);
+  const speechPollInFlightRef = useRef(false);
+  const speechPollGenerationRef = useRef(0);
   const performanceScriptRef = useRef<HTMLTextAreaElement>(null);
   const writerSource = narrationFromApprovedWriter(document);
   const effectiveTargetSeconds = Math.max(1, targetSeconds, (writerSource?.cues.at(-1)?.endMs ?? 0) / 1_000);
@@ -75,13 +77,17 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
     return () => { active = false; };
   }, [voiceModel.id, voiceModel.providerId, voiceCatalogRefresh]);
   useEffect(() => () => {
+    speechPollGenerationRef.current += 1;
     if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current);
+    speechPollInFlightRef.current = false;
   }, []);
   useEffect(() => {
+    speechPollGenerationRef.current += 1;
     if (pollIntervalRef.current !== null) {
       window.clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    speechPollInFlightRef.current = false;
     setIsGenerating(false);
     setCompletedJobId(null);
     setSpeechPreviewUrl(null);
@@ -142,13 +148,35 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
       const response = await window.videoTool.aiGenerateSpeech({ script: savedPlan.script, delivery: savedPlan.delivery ?? createVoiceDeliverySettings(savedPlan.script), voiceId: savedPlan.voiceId, modelId: voiceModel.id });
       if (!response.ok) throw new Error(response.error.message);
       const deadline = Date.now() + 10 * 60 * 1_000;
+      const pollGeneration = ++speechPollGenerationRef.current;
       const intervalId = window.setInterval(async () => {
-        const stop = (): void => { window.clearInterval(intervalId); pollIntervalRef.current = null; setIsGenerating(false); };
+        const stop = (): void => {
+          window.clearInterval(intervalId);
+          if (pollIntervalRef.current === intervalId) pollIntervalRef.current = null;
+          speechPollInFlightRef.current = false;
+          if (speechPollGenerationRef.current === pollGeneration) {
+            speechPollGenerationRef.current += 1;
+            setIsGenerating(false);
+          }
+        };
+        if (speechPollGenerationRef.current !== pollGeneration) return;
+        // Deadline first: a never-settling IPC poll must not keep the button
+        // disabled forever merely because another poll is marked in flight.
         if (Date.now() >= deadline) { stop(); setStatus({ tone: 'danger', text: 'Speech synthesis did not finish within 10 minutes. Check the terminal log and provider status before retrying.' }); return; }
-        const poll = await window.videoTool.aiGetSpeechJob(response.value.id);
-        if (!poll.ok) { stop(); setStatus({ tone: 'danger', text: poll.error.message }); return; }
-        if (poll.value.status === 'completed') { stop(); setCompletedJobId(poll.value.id); setSpeechPreviewUrl(poll.value.previewUrl ?? null); setStatus({ tone: 'success', text: 'Speech ready. Listen here before importing, then fine-tune subtitle timing against the actual voice.' }); }
-        else if (poll.value.status === 'failed') { stop(); setStatus({ tone: 'danger', text: poll.value.error ?? 'Speech synthesis failed.' }); }
+        if (speechPollInFlightRef.current) return;
+        speechPollInFlightRef.current = true;
+        try {
+          const poll = await window.videoTool.aiGetSpeechJob(response.value.id);
+          if (speechPollGenerationRef.current !== pollGeneration) return;
+          if (!poll.ok) { stop(); setStatus({ tone: 'danger', text: poll.error.message }); return; }
+          if (poll.value.status === 'completed') { stop(); setCompletedJobId(poll.value.id); setSpeechPreviewUrl(poll.value.previewUrl ?? null); setStatus({ tone: 'success', text: 'Speech ready. Listen here before importing, then fine-tune subtitle timing against the actual voice.' }); }
+          else if (poll.value.status === 'failed') { stop(); setStatus({ tone: 'danger', text: poll.value.error ?? 'Speech synthesis failed.' }); }
+        } catch (error: unknown) {
+          stop();
+          setStatus({ tone: 'danger', text: error instanceof Error ? error.message : 'Speech job polling failed.' });
+        } finally {
+          speechPollInFlightRef.current = false;
+        }
       }, 1_000);
       pollIntervalRef.current = intervalId;
     } catch (error) { if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; setIsGenerating(false); setStatus({ tone: 'danger', text: error instanceof Error ? error.message : 'Speech synthesis failed.' }); }

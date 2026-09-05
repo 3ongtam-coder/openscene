@@ -67,6 +67,21 @@ describe('Gemini Writer generation', () => {
       expect(String(error)).not.toContain('never-log-me');
     }
   });
+
+  it('aborts a stalled provider request instead of leaving Writer busy forever', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+
+    await expect(requestGeminiWriter({
+      apiKey: 'key',
+      modelId: 'gemini-3.1-flash-lite',
+      request,
+      fetchImpl,
+      timeoutMs: 10
+    })).rejects.toThrow('did not finish within 1 seconds');
+    expect((fetchImpl.mock.calls[0]?.[1]?.signal as AbortSignal | undefined)?.aborted).toBe(true);
+  });
 });
 
 describe('AgentRouter Writer generation', () => {

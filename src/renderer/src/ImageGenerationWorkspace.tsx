@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 import type { ImageAspectRatio, ImageGenerationJob, ReferenceImageSelection } from '../../shared/providerSeams';
 import { useAiDomainModel } from './AiDomainModelContext';
@@ -7,6 +7,7 @@ import { Button, StatusCard } from './ui';
 
 const STYLE_PRESETS = ['Photographic', 'Illustration', 'Anime', '3D Render', 'Cinematic', 'Flat Vector'] as const;
 const ASPECT_RATIOS: readonly ImageAspectRatio[] = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+const IMAGE_JOB_UI_TIMEOUT_MS = 12 * 60_000;
 
 type StatusMessage = { readonly text: string; readonly tone: 'neutral' | 'success' | 'warning' | 'danger' };
 
@@ -25,6 +26,15 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StatusMessage | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollInFlightRef = useRef(false);
+  const pollGenerationRef = useRef(0);
+
+  useEffect(() => () => {
+    pollGenerationRef.current += 1;
+    if (pollTimerRef.current !== null) clearInterval(pollTimerRef.current);
+    pollInFlightRef.current = false;
+  }, []);
 
   const handleGenerate = async (): Promise<void> => {
     if (prompt.trim().length === 0) {
@@ -55,22 +65,54 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       const job = response.value;
       setJobs((prev) => [job, ...prev]);
 
+      const pollingDeadline = Date.now() + IMAGE_JOB_UI_TIMEOUT_MS;
+      const pollGeneration = ++pollGenerationRef.current;
+      const stopPolling = (): void => {
+        clearInterval(intervalId);
+        if (pollTimerRef.current === intervalId) pollTimerRef.current = null;
+        pollInFlightRef.current = false;
+        if (pollGenerationRef.current === pollGeneration) {
+          pollGenerationRef.current += 1;
+          setIsGenerating(false);
+        }
+      };
       const intervalId = setInterval(async () => {
-        const pollRes = await window.videoTool.aiGetImageJob(job.id);
-        if (!pollRes.ok) return;
-        const updated = pollRes.value;
-        setJobs((prev) => prev.map((existing) => (existing.id === updated.id ? updated : existing)));
+        if (pollGenerationRef.current !== pollGeneration) return;
+        // Check the wall-clock deadline before the in-flight guard. If an IPC
+        // promise itself never settles, later ticks must still release the UI.
+        if (Date.now() >= pollingDeadline) {
+          stopPolling();
+          setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this image job before retrying.', tone: 'warning' });
+          return;
+        }
+        if (pollInFlightRef.current) return;
+        try {
+          pollInFlightRef.current = true;
+          const pollRes = await window.videoTool.aiGetImageJob(job.id);
+          if (pollGenerationRef.current !== pollGeneration) return;
+          if (!pollRes.ok) {
+            stopPolling();
+            setStatusMsg({ text: pollRes.error.message, tone: 'danger' });
+            return;
+          }
+          const updated = pollRes.value;
+          setJobs((prev) => prev.map((existing) => (existing.id === updated.id ? updated : existing)));
 
-        if (updated.status === 'completed') {
-          clearInterval(intervalId);
-          setIsGenerating(false);
-          setStatusMsg({ text: 'Image ready.', tone: 'success' });
-        } else if (updated.status === 'failed') {
-          clearInterval(intervalId);
-          setIsGenerating(false);
-          setStatusMsg({ text: updated.error ?? 'Image generation failed.', tone: 'danger' });
+          if (updated.status === 'completed') {
+            stopPolling();
+            setStatusMsg({ text: 'Image ready.', tone: 'success' });
+          } else if (updated.status === 'failed') {
+            stopPolling();
+            setStatusMsg({ text: updated.error ?? 'Image generation failed.', tone: 'danger' });
+          }
+        } catch (error: unknown) {
+          stopPolling();
+          setStatusMsg({ text: error instanceof Error ? error.message : 'Image job polling failed.', tone: 'danger' });
+        } finally {
+          pollInFlightRef.current = false;
         }
       }, 800);
+      pollTimerRef.current = intervalId;
     } catch (err) {
       setIsGenerating(false);
       setStatusMsg({ text: err instanceof Error ? err.message : 'Unexpected error during generation.', tone: 'danger' });
