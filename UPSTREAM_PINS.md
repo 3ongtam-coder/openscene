@@ -29,7 +29,7 @@ OpenScene now contains a generic ComfyUI API-workflow adapter, but does not vend
 | ComfyUI | Remote/local workflow worker | API adapter implemented; deployment remains a separate process/service and must pin a stable release, not `master` |
 | ComfyUI-WanVideoWrapper | Wan workflow nodes | Supported through user-supplied API workflow; pin with every workflow bundle and run golden tests |
 | Wan 2.2 | Motion control and character retarget | Move/Mix seam implemented; use a remote GPU on the current machine, and record code/weight licenses separately |
-| OpenAI Whisper | Local subtitle transcription | Add only with a reproducible runtime and model checksum |
+| whisper.cpp | Local subtitle transcription | Adapter implemented against commit `52a939a2a762224e255d366c1182b2af4dd1a032` (2026-09-04, MIT); executable and model remain user-managed, with `OPENSCENE_WHISPER_MODEL_SHA256` available for deployment verification |
 
 ## Update procedure
 

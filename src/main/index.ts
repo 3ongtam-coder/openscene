@@ -51,6 +51,8 @@ import { registerWriterIpcHandler } from './registerWriterIpcHandler';
 import { BrowserSessionVault } from './browserSessionVault';
 import { BrowserSessionService } from './browserSessionService';
 import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHandlers';
+import { TranscriptionService } from './transcriptionService';
+import { registerTranscriptionIpcHandlers } from './transcriptionIpcHandlers';
 
 try {
   // Node loads the developer's local .env without bundling its secrets into
@@ -108,6 +110,10 @@ const timelineIpcService = new TimelineIpcService({
     title: 'Choose a project folder',
     properties: ['openDirectory', 'createDirectory']
   })
+});
+const transcriptionService = new TranscriptionService({
+  getAsset: (projectId, assetId) => projectStore.getAsset(projectId, assetId),
+  openAsset: (projectId, assetId) => timelineIpcService.openAssetPlaybackSource(projectId, assetId)
 });
 setAiJobManagerAssetSourceResolver(async (projectId, assetId) => {
   const [source, asset] = await Promise.all([
@@ -318,6 +324,7 @@ async function installIpcHandlers(): Promise<void> {
   });
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
   registerAudioDetachIpcHandler(ipcMain, audioDetachService);
+  registerTranscriptionIpcHandlers(ipcMain, transcriptionService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
   registerUpdaterIpcHandlers(ipcMain, {
     controller: updaterController,

@@ -5,6 +5,7 @@ import { createVoiceDeliverySettings } from './voiceDelivery';
 import type { TimelineDocument, TimelineTitle } from './timelineTypes';
 import { parseWriterPromptText } from './writerPipeline';
 import { WRITER_STAGES } from './writerStages';
+import { isAutomaticCaptionId } from './transcription';
 
 export const SUBTITLE_LIMITS = { maxCharsPerLine: 42, maxLines: 2, minCueMs: 650, maxCueMs: 6_000 } as const;
 
@@ -105,7 +106,7 @@ export function narrationPlanMatchesWriter(ai: AiProjectDocument, plan: Narratio
 export function applySubtitleCues(timeline: TimelineDocument, plan: NarrationPlan): TimelineDocument {
   if (plan.status !== 'approved') throw new Error('Approve the narration and subtitles before applying them.');
   const prefix = `auto-caption-${plan.sourceFingerprint}-`;
-  const retained = (timeline.titles ?? []).filter((title) => !title.id.startsWith('auto-caption-'));
+  const retained = (timeline.titles ?? []).filter((title) => !isAutomaticCaptionId(title.id));
   const captions: TimelineTitle[] = plan.cues.map((cue, index) => ({ id: `${prefix}${index + 1}`, text: cue.text, timelineStartMs: cue.startMs, timelineEndMs: cue.endMs, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 360 }));
   return { ...timeline, titles: [...retained, ...captions] };
 }
