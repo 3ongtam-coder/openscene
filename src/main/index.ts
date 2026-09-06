@@ -31,7 +31,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
 import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
@@ -53,6 +53,7 @@ import { BrowserSessionService } from './browserSessionService';
 import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHandlers';
 import { TranscriptionService } from './transcriptionService';
 import { registerTranscriptionIpcHandlers } from './transcriptionIpcHandlers';
+import { ManagedVieNeuRuntime } from './managedVieNeuRuntime';
 
 try {
   // Node loads the developer's local .env without bundling its secrets into
@@ -90,6 +91,8 @@ const llmPromptRouter = new LlmPromptRouter({
   chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
 });
 setAiJobManagerCredentialStore(credentialStore);
+const managedVieNeuRuntime = new ManagedVieNeuRuntime({ workingDirectory: process.cwd() });
+setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 /*
   The ceiling on what generation may cost, and the record of what it did.
 
@@ -586,6 +589,7 @@ app.whenReady().then(async () => {
   });
   await installIpcHandlers();
   createWindow();
+  managedVieNeuRuntime.warmUp();
 
   // Checked after the window exists so the first result has somewhere to land,
   // and left unawaited so a slow or unreachable GitHub never delays startup.
@@ -617,4 +621,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   exportIpcService.cancelAll();
+  managedVieNeuRuntime.stop();
 });

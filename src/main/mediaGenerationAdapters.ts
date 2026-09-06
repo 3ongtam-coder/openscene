@@ -146,7 +146,7 @@ function vieNeuConnectionError(error: unknown, timeoutDescription = '10 minutes'
   }
   const detail = error instanceof Error ? error.message : 'Connection failed.';
   return new Error(
-    `Could not reach the local VieNeu-TTS server. Start it with "uv run python -m apps.web_stream" and retry. ${detail}`
+    `Could not reach the local VieNeu-TTS server. Check [OpenScene][VieNeu Runtime] terminal logs or run "npm run setup:local-ai", then retry. ${detail}`
   );
 }
 

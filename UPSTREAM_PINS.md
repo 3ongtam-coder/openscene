@@ -29,7 +29,9 @@ OpenScene now contains a generic ComfyUI API-workflow adapter, but does not vend
 | ComfyUI | Remote/local workflow worker | API adapter implemented; deployment remains a separate process/service and must pin a stable release, not `master` |
 | ComfyUI-WanVideoWrapper | Wan workflow nodes | Supported through user-supplied API workflow; pin with every workflow bundle and run golden tests |
 | Wan 2.2 | Motion control and character retarget | Move/Mix seam implemented; use a remote GPU on the current machine, and record code/weight licenses separately |
-| whisper.cpp | Local subtitle transcription | Adapter implemented against commit `52a939a2a762224e255d366c1182b2af4dd1a032` (2026-09-04, MIT); executable and model remain user-managed, with `OPENSCENE_WHISPER_MODEL_SHA256` available for deployment verification |
+| whisper.cpp | Local subtitle transcription | Managed Windows x64 release `b4938` / version `1.9.3` (MIT), release archive SHA-256 `c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d`; the adapter still follows reviewed commit `52a939a2a762224e255d366c1182b2af4dd1a032` |
+| ggml-small.bin | Multilingual local subtitle model | `ggerganov/whisper.cpp` commit `5359861c739e955e79d9a303bcbc70fb988958b1` (MIT metadata), SHA-256 `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`; installed only under ignored `.local-runtimes/` |
+| VieNeu-TTS v3 Turbo | Local Vietnamese narration | Separate checkout `pnnbao97/VieNeu-TTS` commit `6c12b81a369ac61ef906f1c936b5c983f2603660` (Apache-2.0 code); OpenScene synchronizes its `.venv` and launches its loopback demo, while model/voice terms remain non-commercial and separately governed |
 
 ## Update procedure
 

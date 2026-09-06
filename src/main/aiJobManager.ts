@@ -43,12 +43,14 @@ import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
 import { isInsideDirectory } from './projectStoreSupport';
 import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from '../shared/voiceDelivery';
 import { generateComfyUiMotionVideo } from './comfyUiMotionAdapter';
+import type { VieNeuRuntimeController } from './managedVieNeuRuntime';
 
 const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
 const imageJobs = new Map<string, ImageGenerationJob>();
 let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
+let activeVieNeuRuntime: VieNeuRuntimeController | undefined;
 type MotionAssetSource = OpenedAssetPlaybackSource & { readonly durationMs?: number };
 let activeAssetSourceResolver: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined;
 
@@ -114,6 +116,10 @@ async function settleSpend(reservationId: string | null, outcome: 'charged' | 'r
 
 export function setAiJobManagerCredentialStore(store?: CredentialStore | undefined): void {
   activeCredentialStore = store;
+}
+
+export function setAiJobManagerVieNeuRuntime(runtime?: VieNeuRuntimeController | undefined): void {
+  activeVieNeuRuntime = runtime;
 }
 
 export function setAiJobManagerAssetSourceResolver(
@@ -242,6 +248,7 @@ async function invokeSpeechProvider(
   try {
     let bytes: Buffer;
     if (model.providerId === 'vieneu_local') {
+      await activeVieNeuRuntime?.ensureReady();
       bytes = await generateVieNeuSpeech({ voiceId: request.voiceId ?? '', script: request.script, ...(request.delivery === undefined ? {} : { delivery: request.delivery }) });
     } else if (model.providerId === 'elevenlabs' && apiKey !== undefined) {
       bytes = await generateElevenLabsSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script, ...(request.delivery === undefined ? {} : { delivery: request.delivery }) });
@@ -722,6 +729,7 @@ export async function listSpeechVoices(modelId: string): Promise<readonly VoiceC
   const startedAt = Date.now();
   console.info(`[OpenScene][Speech Voices] request.started ${JSON.stringify({ provider: model.providerLabel, model: model.id })}`);
   try {
+    if (model.providerId === 'vieneu_local') await activeVieNeuRuntime?.ensureReady();
     const voices = model.providerId === 'vieneu_local' ? await listVieNeuVoices() : voiceChoices(model.providerId);
     console.info(`[OpenScene][Speech Voices] request.completed ${JSON.stringify({ model: model.id, voices: voices.length, elapsedMs: Date.now() - startedAt })}`);
     return voices;

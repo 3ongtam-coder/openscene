@@ -68,10 +68,10 @@ const IMAGE_RATES: Readonly<Record<string, GenerationRate>> = {
  * Cloud speech pricing is deliberately unknown rather than approximated.
  * ElevenLabs bills against a monthly credit allowance, not per character, so
  * a dollars-per-word figure would be fiction dressed as arithmetic. A
- * user-managed local runtime is explicitly zero provider cost.
+ * local runtime is explicitly zero provider cost.
  */
 const SPEECH_RATES: Readonly<Record<string, GenerationRate>> = {
-  'vieneu-v3-turbo': { kind: 'free', reason: 'Runs on the user-managed local VieNeu-TTS runtime.' }
+  'vieneu-v3-turbo': { kind: 'free', reason: 'Runs on the OpenScene-managed local VieNeu-TTS runtime.' }
 };
 
 export type GenerationKind = 'video' | 'image' | 'speech';
