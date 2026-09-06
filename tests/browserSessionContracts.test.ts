@@ -21,6 +21,7 @@ describe('browser session shared boundary', () => {
     expect(isBrowserSessionNavigationAllowed('gemini', 'http://gemini.google.com/app')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://evil.google.com')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.x.ai/oauth/authorize')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com.evil.example')).toBe(false);
   });
 
@@ -35,5 +36,6 @@ describe('browser session shared boundary', () => {
   it('keeps the official application origin separate from login redirect origins', () => {
     expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://gemini.google.com');
     expect(getBrowserSessionProviderPolicy('grok').applicationOrigin).toBe('https://grok.com');
+    expect(getBrowserSessionProviderPolicy('grok').loginUrl).toBe('https://accounts.x.ai/sign-in?redirect=grok-com');
   });
 });

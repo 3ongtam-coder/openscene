@@ -34,8 +34,8 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
     id: 'grok',
     label: 'Grok / xAI',
     applicationOrigin: 'https://grok.com',
-    loginUrl: 'https://grok.com',
-    allowedNavigationOrigins: ['https://grok.com', 'https://x.com', 'https://x.ai', 'https://accounts.x.ai']
+    loginUrl: 'https://accounts.x.ai/sign-in?redirect=grok-com',
+    allowedNavigationOrigins: ['https://grok.com', 'https://x.com', 'https://x.ai', 'https://accounts.x.ai', 'https://auth.x.ai']
   }
 };
 
@@ -47,6 +47,15 @@ export function parseBrowserSessionProviderId(value: unknown): BrowserSessionPro
 
 export function getBrowserSessionProviderPolicy(providerId: BrowserSessionProviderId): BrowserSessionProviderPolicy {
   return POLICIES[providerId];
+}
+
+export function browserSessionDiagnosticTarget(candidateUrl: string): string {
+  try {
+    const parsed = new URL(candidateUrl);
+    return parsed.origin === 'null' ? `${parsed.protocol}//opaque` : parsed.origin;
+  } catch {
+    return 'invalid-url';
+  }
 }
 
 export function isBrowserSessionNavigationAllowed(providerId: BrowserSessionProviderId, candidateUrl: string): boolean {
