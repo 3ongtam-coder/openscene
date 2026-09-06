@@ -55,7 +55,7 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
 
   const adapter = videoAdapterFor(model.providerId);
   const binding = getVideoProviderBinding(model.id);
-  if (adapter === undefined || binding === undefined) {
+  if (adapter === undefined || binding === undefined || binding.credentialKey === undefined) {
     return { ok: false, message: `${model.providerLabel} has no adapter on this device yet.` };
   }
 

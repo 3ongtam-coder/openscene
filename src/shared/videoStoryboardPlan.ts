@@ -23,8 +23,7 @@ export function supportedShotSeconds(modelOrProviderId: string): readonly number
  */
 export const MAX_SUPPORTED_SHOT_SECONDS: number = Math.max(
   ...VIDEO_MODEL_CAPABILITIES
-    .filter((model) => model.implemented.includes('text_to_video'))
-    .flatMap((model) => [...(model.operations.text_to_video?.durationSeconds ?? [])])
+    .flatMap((model) => model.implemented.flatMap((operation) => [...(model.operations[operation]?.durationSeconds ?? [])]))
 );
 
 /**

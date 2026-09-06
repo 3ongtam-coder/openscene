@@ -42,12 +42,15 @@ import { speechPreviewUrl } from '../shared/mediaPlaybackUrls';
 import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
 import { isInsideDirectory } from './projectStoreSupport';
 import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from '../shared/voiceDelivery';
+import { generateComfyUiMotionVideo } from './comfyUiMotionAdapter';
 
 const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
 const imageJobs = new Map<string, ImageGenerationJob>();
 let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
+type MotionAssetSource = OpenedAssetPlaybackSource & { readonly durationMs?: number };
+let activeAssetSourceResolver: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined;
 
 function logSpeechJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
   const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
@@ -113,6 +116,12 @@ export function setAiJobManagerCredentialStore(store?: CredentialStore | undefin
   activeCredentialStore = store;
 }
 
+export function setAiJobManagerAssetSourceResolver(
+  resolver?: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined
+): void {
+  activeAssetSourceResolver = resolver;
+}
+
 function getAiStorageDir(): string {
   const userDataDir = app?.getPath !== undefined ? app.getPath('userData') : join(tmpdir(), 'openvideo-ai-storage');
   return join(userDataDir, 'ai_generations');
@@ -139,7 +148,8 @@ const VIDEO_PROVIDER_LABELS: Record<VideoGenerationProviderId, string> = {
   runway_gen4: 'Runway',
   kling_v3: 'Kling',
   luma_dream: 'Luma',
-  minimax_hailuo: 'MiniMax Hailuo'
+  minimax_hailuo: 'MiniMax Hailuo',
+  comfyui_wan: 'ComfyUI Wan'
 };
 
 const IMAGE_PROVIDER_LABELS: Record<ImageGenerationProviderId, string> = {
@@ -199,7 +209,10 @@ async function invokeCloudVideoProvider(
     }
     // One entry per ported provider, so adding an adapter is one line rather
     // than another branch in a chain that is easy to leave a provider out of.
-    const adapters: Readonly<Record<string, (input: typeof synthesisInput) => Promise<{ bytes: Buffer; providerJobId: string }>>> = {
+    if (binding.adapterId === 'comfyui_wan') {
+      return { ok: false, error: 'The local ComfyUI adapter must be invoked through the project-scoped motion path.' };
+    }
+    const adapters: Readonly<Partial<Record<typeof binding.adapterId, (input: typeof synthesisInput) => Promise<{ bytes: Buffer; providerJobId: string }>>>> = {
       google_veo: generateVeoVideo,
       openai_sora: generateSoraVideo,
       runway: generateRunwayVideo,
@@ -317,7 +330,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   });
   if (!validation.ok) throw new Error(validation.message);
   const estimate = estimateVideoCost({ modelId, durationSeconds });
-  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
+  const reservationId = model.executionPath === 'api' ? await reserveSpend(estimate, request.acceptUnknownCost) : null;
   const { videoDir } = await ensureAiDirectories();
   const id = `video-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -326,7 +339,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   const job: VideoGenerationJob = {
     id,
     provider,
-    mode: 'api',
+    mode: model.executionPath,
     status: 'queued',
     prompt: request.prompt,
     operation,
@@ -349,7 +362,8 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
     operation,
     durationSeconds,
     aspectRatio,
-    referenceImageCount: resolvedInputs.referenceImageCount
+    referenceImageCount: resolvedInputs.referenceImageCount,
+    executionPath: model.executionPath
   });
 
   setTimeout(async () => {
@@ -361,17 +375,45 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       logVideoJob(id, 'process.started');
 
       let apiKey = request.apiKey?.trim();
-      if ((!apiKey || apiKey.length === 0) && activeCredentialStore) {
+      if ((!apiKey || apiKey.length === 0) && activeCredentialStore && providerMapping.credentialKey !== undefined) {
         apiKey = await activeCredentialStore.getCredentialValue(providerMapping.credentialKey);
       }
 
-      if (!apiKey || apiKey.length === 0) {
+      if (model.executionPath === 'api' && (!apiKey || apiKey.length === 0)) {
         throw new Error(`API key is required for ${VIDEO_PROVIDER_LABELS[provider]} cloud generation. Connect the provider in Settings first.`);
       }
 
-      await settleSpend(reservationId, 'charged');
+      if (model.executionPath === 'api') await settleSpend(reservationId, 'charged');
       logVideoJob(id, 'provider.request.started', { provider: VIDEO_PROVIDER_LABELS[provider] });
-      const cloudResult = await invokeCloudVideoProvider(id, model, apiKey, normalizedRequest, join(videoDir, `${id}.mp4`));
+      let cloudResult: CloudProviderResult;
+      if (providerMapping.adapterId === 'comfyui_wan') {
+        if (!activeAssetSourceResolver || !request.projectId || !request.drivingVideoAssetId || !request.referenceImage || !request.motionMode) {
+          throw new Error('Motion Control requires a project, character image, driving video, and Move/Mix mode.');
+        }
+        const source = await activeAssetSourceResolver(request.projectId, request.drivingVideoAssetId);
+        if (source === null) throw new Error('The selected driving video is no longer available in this project.');
+        let lastProgressLogMs = -10_000;
+        try {
+          const generated = await generateComfyUiMotionVideo({
+            mode: request.motionMode,
+            prompt: request.prompt,
+            characterImage: request.referenceImage,
+            drivingVideo: source,
+            outputFilePath: join(videoDir, `${id}.mp4`),
+            onProgress: (stage, elapsedMs) => {
+              if (stage === 'generating' && elapsedMs - lastProgressLogMs < 10_000) return;
+              lastProgressLogMs = elapsedMs;
+              logVideoJob(id, `comfyui.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) });
+            }
+          });
+          cloudResult = { ok: true, ...generated };
+        } catch (error) {
+          await source.file.close().catch(() => undefined);
+          throw error;
+        }
+      } else {
+        cloudResult = await invokeCloudVideoProvider(id, model, apiKey!, normalizedRequest, join(videoDir, `${id}.mp4`));
+      }
       if (!cloudResult.ok) {
         throw new Error(cloudResult.error);
       }

@@ -31,7 +31,8 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
+import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
 import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from './openVideoMcpServer';
@@ -50,6 +51,17 @@ import { registerWriterIpcHandler } from './registerWriterIpcHandler';
 import { BrowserSessionVault } from './browserSessionVault';
 import { BrowserSessionService } from './browserSessionService';
 import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHandlers';
+
+try {
+  // Node loads the developer's local .env without bundling its secrets into
+  // renderer code. Packaged installs normally have no such file and simply use
+  // environment variables supplied by their launcher.
+  if (!app.isPackaged) process.loadEnvFile(join(process.cwd(), '.env'));
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+    console.warn('[OpenScene] Local .env could not be loaded:', error instanceof Error ? error.message : 'unknown error');
+  }
+}
 
 registerTimelineAssetScheme();
 
@@ -96,6 +108,17 @@ const timelineIpcService = new TimelineIpcService({
     title: 'Choose a project folder',
     properties: ['openDirectory', 'createDirectory']
   })
+});
+setAiJobManagerAssetSourceResolver(async (projectId, assetId) => {
+  const [source, asset] = await Promise.all([
+    timelineIpcService.openAssetPlaybackSource(projectId, assetId),
+    projectStore.getAsset(projectId, assetId)
+  ]);
+  if (source === null || asset === null) {
+    await source?.file.close().catch(() => undefined);
+    return null;
+  }
+  return { ...source, ...(asset.metadata === null ? {} : { durationMs: asset.metadata.durationMs }) };
 });
 const resultAssetImportService = new ResultAssetImportService({
   assets: assetLibraryStore,
@@ -424,6 +447,14 @@ async function installIpcHandlers(): Promise<void> {
       return ok(job);
     } catch (err) {
       return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create speech job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiGetComfyUiMotionStatus, async () => {
+    try {
+      return ok(await getComfyUiMotionWorkerStatus());
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to inspect the ComfyUI worker.');
     }
   });
 
