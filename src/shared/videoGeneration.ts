@@ -6,6 +6,7 @@ import {
   type VideoAspectRatio,
   type VideoOperation
 } from './mediaCapabilityRegistry';
+import { isMotionControlMode, type MotionControlMode } from './comfyUiMotion';
 
 /**
  * Video generation over each provider's HTTP surface.
@@ -60,13 +61,18 @@ export type VideoRequestInput = {
   readonly lastFrame?: { readonly mimeType: string; readonly base64: string };
   /** Character/product references for reference-to-video. */
   readonly referenceImages?: readonly { readonly mimeType: string; readonly base64: string }[];
+  readonly projectId?: string;
+  readonly drivingVideoAssetId?: string;
+  readonly motionMode?: MotionControlMode;
   readonly fetchImpl?: typeof fetch;
   readonly pollIntervalMs?: number;
   readonly pollTimeoutMs?: number;
   readonly onProgress?: (stage: VideoProgressStage, elapsedMs: number) => void;
 };
 
-type VideoInputSet = Pick<VideoRequestInput, 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages'>;
+type VideoInputSet = Pick<VideoRequestInput, 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages' | 'projectId' | 'drivingVideoAssetId' | 'motionMode'>;
+
+const SAFE_LOCAL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /** Resolve old callers safely while allowing advanced inputs to be explicit. */
 export function resolveVideoOperation(input: VideoInputSet): VideoOperation {
@@ -108,16 +114,29 @@ export function validateVideoInputSet(input: VideoInputSet): { readonly operatio
   if (operation === 'reference_to_video' && (input.referenceImage !== undefined || input.lastFrame !== undefined || assets.length === 0)) {
     throw new Error('Reference-to-video requires asset references and cannot include first or last frames.');
   }
-  if (!['text_to_video', 'image_to_video', 'start_end', 'reference_to_video'].includes(operation)) {
+  if (operation === 'motion_control') {
+    if (input.referenceImage === undefined || input.lastFrame !== undefined || assets.length > 0) {
+      throw new Error('Motion Control requires exactly one character image and no other image references.');
+    }
+    if (!SAFE_LOCAL_ID.test(input.projectId ?? '') || !SAFE_LOCAL_ID.test(input.drivingVideoAssetId ?? '')) {
+      throw new Error('Motion Control requires a valid project and an imported driving-video asset.');
+    }
+    if (!isMotionControlMode(input.motionMode)) {
+      throw new Error('Motion Control mode must be Move or Mix.');
+    }
+  } else if (input.projectId !== undefined || input.drivingVideoAssetId !== undefined || input.motionMode !== undefined) {
+    throw new Error('Driving-video inputs are only valid for Motion Control.');
+  }
+  if (!['text_to_video', 'image_to_video', 'start_end', 'reference_to_video', 'motion_control'].includes(operation)) {
     throw new Error(`${operation} is not implemented by the generation request contract yet.`);
   }
   return {
     operation,
-    referenceImageCount: operation === 'start_end' ? 2 : operation === 'reference_to_video' ? assets.length : operation === 'image_to_video' ? 1 : 0
+    referenceImageCount: operation === 'start_end' ? 2 : operation === 'reference_to_video' ? assets.length : ['image_to_video', 'motion_control'].includes(operation) ? 1 : 0
   };
 }
 
-export function assertImplementedVideoRequest(input: Pick<VideoRequestInput, 'modelId' | 'durationSeconds' | 'aspectRatio' | 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages'>): void {
+export function assertImplementedVideoRequest(input: Pick<VideoRequestInput, 'modelId' | 'durationSeconds' | 'aspectRatio' | 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages' | 'projectId' | 'drivingVideoAssetId' | 'motionMode'>): void {
   const resolved = validateVideoInputSet(input);
   const validation = validateVideoRequest({
     modelId: input.modelId,

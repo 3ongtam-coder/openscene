@@ -19,6 +19,7 @@ describe('preload AI generation IPC contracts', () => {
     expect(source).toContain('aiSelectReferenceImage(): Promise<ApiResponse<ReferenceImageSelection | null>>;');
     expect(source).toContain('aiGenerateVideo(request: VideoGenerationRequest): Promise<ApiResponse<VideoGenerationJob>>;');
     expect(source).toContain('aiGetVideoJob(jobId: string): Promise<ApiResponse<VideoGenerationJob>>;');
+    expect(source).toContain('aiGetComfyUiMotionStatus(): Promise<ApiResponse<ComfyUiMotionWorkerStatus>>;');
     expect(source).toContain('aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;');
     expect(source).toContain('aiListSpeechVoices(modelId: string): Promise<ApiResponse<readonly VoiceChoice[]>>;');
     expect(source).toContain('aiGetSpeechJob(jobId: string): Promise<ApiResponse<TextToSpeechJob>>;');

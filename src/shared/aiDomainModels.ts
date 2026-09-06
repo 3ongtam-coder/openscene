@@ -19,6 +19,7 @@ export type AiDomainProvider = {
 export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
   { id: 'local_ollama', label: 'Ollama', executionPath: 'local' },
   { id: 'vieneu_local', label: 'VieNeu-TTS', executionPath: 'local' },
+  { id: 'comfyui_local', label: 'ComfyUI', executionPath: 'local' },
   { id: AGENT_ROUTER_PROVIDER_ID, label: 'AgentRouter', executionPath: 'api' },
   { id: 'openai', label: 'OpenAI', executionPath: 'api' },
   { id: 'anthropic', label: 'Anthropic', executionPath: 'api' },
@@ -415,6 +416,18 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: false,
     unavailableReason: 'The xAI edit/extend adapter is not implemented in this build.'
   },
+  {
+    id: 'wan2.2-animate-14b-comfyui',
+    providerId: 'comfyui_local',
+    label: 'Wan 2.2 Animate 14B',
+    providerLabel: 'ComfyUI',
+    description: 'Motion transfer through a user-managed local or remote ComfyUI worker.',
+    executionPath: 'local',
+    domains: ['video-generation'],
+    available: true,
+    availableOn: ['desktop'],
+    unavailableReason: 'Motion Control requires the desktop app and a user-managed ComfyUI worker.'
+  },
   // ── Writer: Gemini structured output plus the user's AgentRouter aliases.
   // AgentRouter IDs are canonical provider/model keys so the same selection
   // also resolves through Settings and Edit Agent.
@@ -643,7 +656,7 @@ export function getDomainModels(domain: AiDomain): readonly AiDomainModelConfig[
   if (domain !== 'video-generation') return models;
   return models.map((model) => {
     const capabilities = getVideoModelCapabilities(model.id);
-    const available = model.available && capabilities?.implemented.includes('text_to_video') === true;
+    const available = model.available && (capabilities?.implemented.length ?? 0) > 0;
     return {
       ...model,
       ...(capabilities === undefined ? {} : { description: capabilities.description }),

@@ -10,7 +10,7 @@ import {
 } from '@openvideo/shared/imageGeneration';
 import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 
-import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
 import type { VideoAspectRatio } from '@openvideo/shared/videoGeneration';
 import { readKey, type ProviderSlot } from './credentials';
 import { appendAssetToTimeline, readProject, saveGeneratedImage } from './projectStore';
@@ -63,7 +63,7 @@ const number = (args: Record<string, unknown>, key: string, fallback: number): n
   typeof args[key] === 'number' && Number.isFinite(args[key]) ? (args[key] as number) : fallback;
 
 const VIDEO_MODEL_IDS = getDomainModels('video-generation')
-  .filter((model) => model.available)
+  .filter((model) => isDomainModelAvailableOnRuntime(model, 'mobile'))
   .map((model) => model.id);
 
 export const GENERATE_VIDEO_TOOL: AgentTool = {

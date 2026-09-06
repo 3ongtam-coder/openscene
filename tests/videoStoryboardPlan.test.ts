@@ -123,7 +123,7 @@ describe('one shot-length table', () => {
     // The schema used to carry .max(10) while the planner emitted 12s shots for
     // Sora, so a priced and approved shot was rejected at the tool boundary —
     // the exact failure the planner exists to prevent.
-    expect(MAX_SUPPORTED_SHOT_SECONDS).toBe(15);
+    expect(MAX_SUPPORTED_SHOT_SECONDS).toBe(30);
     expect(mcp).toContain('.max(MAX_SUPPORTED_SHOT_SECONDS)');
     expect(mcp).not.toMatch(/durationSeconds: z\.number\(\)\.min\(1\)\.max\(\d/);
 

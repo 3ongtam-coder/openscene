@@ -20,15 +20,15 @@ The local clone keeps OpenScene as `upstream`; the writable `origin` is the pers
 | FFmpeg/FFprobe | `9.0.1-full_build-www.gyan.dev` | Installed system-wide with winget; GPL/version 3 enabled; do not bundle into a closed distribution without a separate license decision |
 | GPU | NVIDIA GeForce GTX 1650, 4 GB VRAM, compute capability 7.5 | Insufficient for the planned Wan 2.2 14B local workflow; use a remote worker or cloud lane |
 
-## Planned model and workflow pins
+## Model and workflow pins
 
-These integrations are not yet vendored or installed. Add an exact commit/tag, model-weight checksum and weight license before enabling one in a release.
+OpenScene now contains a generic ComfyUI API-workflow adapter, but does not vendor or install the worker, nodes, workflows, or weights. Add an exact commit/tag, model-weight checksum and weight license to a deployment record before enabling a workflow in a release.
 
 | Project | Planned role | Current decision |
 |---|---|---|
-| ComfyUI | Remote/local workflow worker | Separate process/service; pin a stable release, not `master` |
-| ComfyUI-WanVideoWrapper | Wan workflow nodes | Pin with every workflow bundle and run golden tests |
-| Wan 2.2 | Motion control and character retarget | Remote GPU on the current machine; code and weights require separate license records |
+| ComfyUI | Remote/local workflow worker | API adapter implemented; deployment remains a separate process/service and must pin a stable release, not `master` |
+| ComfyUI-WanVideoWrapper | Wan workflow nodes | Supported through user-supplied API workflow; pin with every workflow bundle and run golden tests |
+| Wan 2.2 | Motion control and character retarget | Move/Mix seam implemented; use a remote GPU on the current machine, and record code/weight licenses separately |
 | OpenAI Whisper | Local subtitle transcription | Add only with a reproducible runtime and model checksum |
 
 ## Update procedure

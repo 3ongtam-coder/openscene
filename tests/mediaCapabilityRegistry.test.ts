@@ -19,7 +19,7 @@ describe('versioned media capability registry', () => {
     const ids = VIDEO_MODEL_CAPABILITIES.map((model) => model.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     expect(VIDEO_MODEL_CAPABILITIES.every((model) => model.registryVersion === MEDIA_CAPABILITY_REGISTRY_VERSION)).toBe(true);
-    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-05');
+    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-06');
     expect(GENERATION_CAPABILITIES).toEqual(VIDEO_OPERATIONS);
   });
 
@@ -75,7 +75,16 @@ describe('versioned media capability registry', () => {
     for (const catalogModel of getDomainModels('video-generation')) {
       const capabilityModel = getVideoModelCapabilities(catalogModel.id);
       expect(capabilityModel, catalogModel.id).toBeDefined();
-      expect(catalogModel.available, catalogModel.id).toBe(capabilityModel?.implemented.includes('text_to_video') === true);
+      expect(catalogModel.available, catalogModel.id).toBe((capabilityModel?.implemented.length ?? 0) > 0);
     }
+  });
+
+  it('registers Wan Animate as a desktop-local motion-only workflow', () => {
+    const wan = getVideoModelCapabilities('wan2.2-animate-14b-comfyui');
+    expect(wan?.implemented).toEqual(['motion_control']);
+    expect(wan?.operations.motion_control).toMatchObject({ minReferenceImages: 1, maxReferenceImages: 1, nativeAudio: false });
+    expect(getVideoProviderBinding(wan!.modelId)).toEqual({ adapterId: 'comfyui_wan', seamProviderId: 'comfyui_wan' });
+    const catalog = getDomainModels('video-generation').find((model) => model.id === wan?.modelId);
+    expect(catalog).toMatchObject({ available: true, executionPath: 'local', availableOn: ['desktop'] });
   });
 });

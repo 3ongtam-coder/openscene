@@ -27,7 +27,7 @@ VideoModelCapabilities v2
 
 ## Provider support versus implementation
 
-An operation can be documented but disabled. Veo 3.1 text-to-video, first-frame image-to-video, 1-3 asset references, and first/last-frame interpolation are implemented. Veo extension remains documented but disabled. Grok Imagine is recorded so later adapters use the same contract, but every xAI operation remains unavailable until a separately reviewed adapter exists.
+An operation can be documented but disabled. Veo 3.1 text-to-video, first-frame image-to-video, 1-3 asset references, and first/last-frame interpolation are implemented. Wan 2.2 Animate exposes only `motion_control` through a user-managed desktop ComfyUI workflow; it does not masquerade as text-to-video. Veo extension remains documented but disabled. Grok Imagine is recorded so later adapters use the same contract, but every xAI operation remains unavailable until a separately reviewed adapter exists.
 
 This distinction prevents the UI from offering a control that the adapter silently drops. Unsupported duration, aspect ratio, reference count, or request path fails before credential lookup, spending reservation, and provider execution.
 
@@ -48,6 +48,6 @@ Capability records carry a date and source URLs because preview models and const
 
 - xAI API and Grok browser adapters;
 - Veo/Grok edit and extend execution, and every Grok generation path;
-- ComfyUI motion control;
+- bundled ComfyUI, custom nodes, model weights, or automatic workflow migration;
 - provider discovery over live APIs;
 - Writer/content model registry and structured-output prompts.

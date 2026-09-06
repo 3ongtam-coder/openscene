@@ -397,6 +397,8 @@ export function App(): ReactElement {
               >
                 <VideoGenerationWorkspace
                   writerDocument={editor.project?.ai ?? null}
+                  projectId={editor.project?.id ?? null}
+                  projectAssets={editor.project?.assets ?? []}
                   referenceImage={videoReferenceImage}
                   onReferenceImageChange={setVideoReferenceImage}
                 />

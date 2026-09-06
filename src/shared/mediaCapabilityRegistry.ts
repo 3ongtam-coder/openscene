@@ -5,7 +5,7 @@
  */
 
 export const MEDIA_CAPABILITY_REGISTRY_VERSION = 2 as const;
-export const MEDIA_CAPABILITIES_AS_OF = '2026-09-05' as const;
+export const MEDIA_CAPABILITIES_AS_OF = '2026-09-06' as const;
 
 export const VIDEO_OPERATIONS = [
   'text_to_video',
@@ -32,9 +32,9 @@ export type VideoOperationConstraints = {
 };
 
 export type VideoProviderBinding = {
-  readonly adapterId: 'google_veo' | 'openai_sora' | 'runway' | 'luma';
-  readonly credentialKey: 'geminiApiKey' | 'openaiApiKey' | 'runwayApiKey' | 'lumaApiKey';
-  readonly seamProviderId: 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'luma_dream';
+  readonly adapterId: 'google_veo' | 'openai_sora' | 'runway' | 'luma' | 'comfyui_wan';
+  readonly credentialKey?: 'geminiApiKey' | 'openaiApiKey' | 'runwayApiKey' | 'lumaApiKey';
+  readonly seamProviderId: 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'luma_dream' | 'comfyui_wan';
 };
 
 export type VideoModelCapabilities = {
@@ -77,6 +77,9 @@ const RUNWAY_BINDING: VideoProviderBinding = {
 const LUMA_BINDING: VideoProviderBinding = {
   adapterId: 'luma', credentialKey: 'lumaApiKey', seamProviderId: 'luma_dream'
 };
+const COMFYUI_WAN_BINDING: VideoProviderBinding = {
+  adapterId: 'comfyui_wan', seamProviderId: 'comfyui_wan'
+};
 
 const operation = (
   durationSeconds: readonly number[],
@@ -111,6 +114,21 @@ const model = (
 });
 
 export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
+  model({
+    modelId: 'wan2.2-animate-14b-comfyui', providerId: 'comfyui_local', providerLabel: 'ComfyUI',
+    label: 'Wan 2.2 Animate 14B',
+    description: 'Local or self-hosted Wan Animate motion transfer through a user-managed ComfyUI workflow.',
+    sourceUrls: ['https://github.com/Wan-Video/Wan2.2', 'https://github.com/kijai/ComfyUI-WanVideoWrapper'],
+    binding: COMFYUI_WAN_BINDING,
+    operations: {
+      motion_control: operation(range(1, 30), ALL_APP_RATIOS, ['480p', '720p'], false, {
+        minReferenceImages: 1,
+        maxReferenceImages: 1,
+        notes: ['The selected workflow and driving clip determine the exact output duration and resolution.']
+      })
+    },
+    implemented: ['motion_control']
+  }),
   model({
     modelId: 'veo-3.1-generate-preview', providerId: 'google_gemini', providerLabel: 'Google Veo',
     label: 'Veo 3.1 (Preview)', description: 'Veo video generation with native audio and advanced frame controls.',
