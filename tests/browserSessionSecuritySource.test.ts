@@ -22,6 +22,9 @@ describe('browser session security wiring', () => {
     expect(service).toContain('sandbox: true');
     expect(service).toContain('nodeIntegration: false');
     expect(service).toContain('devTools: false');
+    expect(service).toContain("'request.failed'");
+    expect(service).toContain('browserSessionDiagnosticTarget(details.url)');
+    expect(service).not.toContain('searchParams.toString');
   });
 
   it('shows desktop controls while mobile clearly disables the unsupported lane', async () => {

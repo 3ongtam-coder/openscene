@@ -65,6 +65,8 @@ export function BrowserSessionSettings(): ReactElement {
       <StatusCard tone="warning">
         Personal desktop use only. Sign in yourself in an isolated window. OpenScene does not read another browser's profile,
         bypass CAPTCHA or expose cookies to this screen. Provider UI changes can break this lane; API keys remain the stable option.
+        If a provider button keeps spinning, close the sign-in window and inspect the sanitized [OpenScene][Browser Session]
+        messages in the terminal.
       </StatusCard>
       {state.kind === 'loading' && <StatusCard tone="neutral">Reading encrypted session status.</StatusCard>}
       {state.kind === 'error' && <StatusCard tone="danger">{state.message}</StatusCard>}

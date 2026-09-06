@@ -1,7 +1,8 @@
-import { BrowserWindow, session, type Cookie, type CookiesSetDetails } from 'electron';
+import { BrowserWindow, session, type Cookie, type CookiesSetDetails, type Session, type WebRequestFilter } from 'electron';
 
 import {
   BROWSER_SESSION_PROVIDERS,
+  browserSessionDiagnosticTarget,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -11,6 +12,17 @@ import {
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
+const SIGN_IN_PROGRESS_LOG_MS = 45_000;
+
+function logBrowserSession(
+  providerId: BrowserSessionProviderId,
+  event: string,
+  details: Readonly<Record<string, unknown>> = {},
+  level: 'info' | 'error' = 'info'
+): void {
+  const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console[level](`[OpenScene][Browser Session][${providerId}] ${event}${suffix}`);
+}
 
 function partitionFor(providerId: BrowserSessionProviderId): string {
   // No `persist:` prefix: Chromium never writes this isolated profile as
@@ -56,6 +68,7 @@ function toElectronCookie(cookie: BrowserSessionStoredCookie): CookiesSetDetails
 
 export class BrowserSessionService {
   private readonly activeProviders = new Set<BrowserSessionProviderId>();
+  private readonly instrumentedSessions = new WeakSet<Session>();
 
   constructor(private readonly vault: BrowserSessionVault) {}
 
@@ -89,6 +102,7 @@ export class BrowserSessionService {
     try {
       const isolatedSession = session.fromPartition(partitionFor(providerId), { cache: false });
       await isolatedSession.clearStorageData();
+      this.instrumentSession(providerId, isolatedSession);
       const existing = await this.vault.loadSecret(providerId);
       if (existing !== null) {
         for (const cookie of existing.cookies) {
@@ -114,19 +128,52 @@ export class BrowserSessionService {
       });
 
       const guardNavigation = (event: Electron.Event, url: string): void => {
-        if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault();
+        const target = browserSessionDiagnosticTarget(url);
+        if (!isBrowserSessionNavigationAllowed(providerId, url)) {
+          logBrowserSession(providerId, 'navigation.blocked', { target }, 'error');
+          event.preventDefault();
+          return;
+        }
+        logBrowserSession(providerId, 'navigation.allowed', { target });
       };
       loginWindow.webContents.on('will-navigate', guardNavigation);
       loginWindow.webContents.on('will-redirect', guardNavigation);
       loginWindow.webContents.setWindowOpenHandler(({ url }) => {
         if (isBrowserSessionNavigationAllowed(providerId, url)) {
+          logBrowserSession(providerId, 'popup.redirected', { target: browserSessionDiagnosticTarget(url) });
           void loginWindow.loadURL(url);
+        } else {
+          logBrowserSession(providerId, 'popup.blocked', { target: browserSessionDiagnosticTarget(url) }, 'error');
         }
         return { action: 'deny' };
       });
+      loginWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+        if (!isMainFrame || errorCode === -3) return;
+        logBrowserSession(providerId, 'page.failed', {
+          errorCode,
+          error: errorDescription.slice(0, 300),
+          target: browserSessionDiagnosticTarget(validatedUrl)
+        }, 'error');
+      });
+      loginWindow.webContents.on('render-process-gone', (_event, details) => {
+        logBrowserSession(providerId, 'renderer.gone', { reason: details.reason, exitCode: details.exitCode }, 'error');
+      });
+      loginWindow.on('unresponsive', () => logBrowserSession(providerId, 'window.unresponsive', {}, 'error'));
 
+      logBrowserSession(providerId, 'window.opening', { target: browserSessionDiagnosticTarget(policy.loginUrl) });
       await loginWindow.loadURL(policy.loginUrl);
+      logBrowserSession(providerId, 'page.loaded', { target: browserSessionDiagnosticTarget(loginWindow.webContents.getURL()) });
+      const progressTimer = setTimeout(() => {
+        if (!loginWindow.isDestroyed()) {
+          logBrowserSession(providerId, 'signin.still-open', {
+            target: browserSessionDiagnosticTarget(loginWindow.webContents.getURL()),
+            guidance: 'If the provider button is still spinning, close this window and inspect request.failed or navigation.blocked logs.'
+          }, 'error');
+        }
+      }, SIGN_IN_PROGRESS_LOG_MS);
       await new Promise<void>((resolve) => loginWindow.once('closed', resolve));
+      clearTimeout(progressTimer);
+      logBrowserSession(providerId, 'window.closed');
 
       const collected = new Map<string, BrowserSessionStoredCookie>();
       for (const sourceUrl of policy.allowedNavigationOrigins) {
@@ -156,6 +203,34 @@ export class BrowserSessionService {
     } finally {
       this.activeProviders.delete(providerId);
     }
+  }
+
+  private instrumentSession(providerId: BrowserSessionProviderId, isolatedSession: Session): void {
+    if (this.instrumentedSessions.has(isolatedSession)) return;
+    this.instrumentedSessions.add(isolatedSession);
+    const policy = getBrowserSessionProviderPolicy(providerId);
+    const urls = [
+      ...policy.allowedNavigationOrigins.map((origin) => `${origin}/*`),
+      ...(providerId === 'grok' ? ['https://api.x.ai/*', 'https://challenges.cloudflare.com/*'] : [])
+    ];
+    const filter: WebRequestFilter = { urls, types: ['mainFrame', 'subFrame', 'xhr'] };
+    isolatedSession.webRequest.onCompleted(filter, (details) => {
+      if (details.statusCode < 400) return;
+      logBrowserSession(providerId, 'request.failed', {
+        method: details.method,
+        status: details.statusCode,
+        resourceType: details.resourceType,
+        target: browserSessionDiagnosticTarget(details.url)
+      }, 'error');
+    });
+    isolatedSession.webRequest.onErrorOccurred(filter, (details) => {
+      logBrowserSession(providerId, 'request.error', {
+        method: details.method,
+        error: details.error.slice(0, 300),
+        resourceType: details.resourceType,
+        target: browserSessionDiagnosticTarget(details.url)
+      }, 'error');
+    });
   }
 
   async clear(providerId: BrowserSessionProviderId): Promise<BrowserSessionStatus> {
