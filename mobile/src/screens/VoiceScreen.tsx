@@ -108,7 +108,7 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
     <Text style={styles.h1}>Narration & Subtitles</Text><Text style={styles.sub}>Prepare voice text and timed captions together. Review and approve before either is used.</Text>
     <View style={styles.card}>
       <Text style={styles.label}>Automatic subtitles from audio or video</Text>
-      <Text style={styles.note}>Local whisper.cpp transcription runs on desktop because mobile cannot access the user-managed executable or FFmpeg worker. Generate there; this screen can review, approve, and apply the same saved transcript.</Text>
+      <Text style={styles.note}>Local whisper.cpp transcription runs on desktop because mobile cannot launch OpenScene's managed executable or FFmpeg worker. Generate there; this screen can review, approve, and apply the same saved transcript.</Text>
       {action('Transcribe on desktop', () => undefined, true)}
       {transcriptSourceMissing && <Text style={styles.warn}>The transcript source asset is no longer in this project.</Text>}
       {!transcriptSourceMissing && transcriptSourceNotPlaced && <Text style={styles.warn}>Place the transcript source asset on the timeline first. Trim, offset and speed will be mapped automatically.</Text>}

@@ -6,7 +6,7 @@
 
 ## Outcome
 
-OpenScene can transcribe an imported project audio or video asset with a user-managed `whisper.cpp` CLI, keep the result as a reviewable project draft, and apply only an explicitly approved transcript to the timeline. This complements the existing deterministic Writer/narration captions with timing measured from real audio.
+OpenScene can transcribe an imported project audio or video asset with a local `whisper.cpp` CLI, keep the result as a reviewable project draft, and apply only an explicitly approved transcript to the timeline. This complements the existing deterministic Writer/narration captions with timing measured from real audio.
 
 ## Workflow
 
@@ -19,7 +19,13 @@ OpenScene can transcribe an imported project audio or video asset with a user-ma
 
 ## Runtime boundary
 
-OpenScene does not download, bundle or update `whisper.cpp` or model weights. Configure absolute paths in the local `.env` and restart the app:
+Phase 6B adds a one-time, checksum-verified managed runtime installer. Run this from the OpenScene checkout:
+
+```powershell
+npm run setup:local-ai
+```
+
+OpenScene then discovers `.local-runtimes/whisper.cpp/b4938` automatically. Binaries and weights are ignored by Git and are not bundled in commits. Advanced users may still override both absolute paths in the local `.env`:
 
 ```dotenv
 OPENSCENE_WHISPER_CPP_PATH=D:\whisper.cpp\build\bin\Release\whisper-cli.exe
@@ -27,7 +33,7 @@ OPENSCENE_WHISPER_MODEL_PATH=D:\whisper.cpp\models\ggml-small.bin
 OPENSCENE_WHISPER_MODEL_SHA256=<64-character sha256>
 ```
 
-The adapter is pinned for review to `ggml-org/whisper.cpp` commit `52a939a2a762224e255d366c1182b2af4dd1a032`. The configured CLI must support `--version`, `-m`, `-f`, `-l`, `-osrt`, `-of`, and `-pp` as that revision does.
+The managed installer pins the official Windows x64 release `b4938` (`whisper.cpp 1.9.3`) and the official multilingual `ggml-small.bin` object at model-repository commit `5359861c739e955e79d9a303bcbc70fb988958b1`. It verifies the GitHub release archive and model SHA-256 before installation. The configured CLI must support `--version`, `-m`, `-f`, `-l`, `-osrt`, `-of`, and `-pp`.
 
 For the current GTX 1650 4 GB machine, start with a multilingual `base` or `small` model. The upstream memory table estimates roughly 388 MB for base and 852 MB for small; actual runtime, GPU offload and transcription speed still depend on the build and media length. The app never claims a model is accurate without listening and correcting the result.
 
@@ -47,7 +53,7 @@ To calculate the optional deployment checksum in PowerShell:
 
 ## Surface parity
 
-Desktop owns local execution because Electron main can open the validated asset and launch user-managed executables. Mobile visibly states that generation is desktop-only, but uses the same shared transcript contract to edit, approve and apply a transcript already saved in the project.
+Desktop owns local execution because Electron main can open the validated asset and launch managed local executables. Mobile visibly states that generation is desktop-only, but uses the same shared transcript contract to edit, approve and apply a transcript already saved in the project.
 
 ## Deferred scope
 

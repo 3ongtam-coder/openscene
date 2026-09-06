@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -81,5 +81,24 @@ describe('local transcription contract', () => {
     } });
     expect(result.status).toMatchObject({ ready: true, executableName: expect.any(String), modelName: 'ggml-test.bin', checksumVerified: true });
     expect(JSON.stringify(result.status)).not.toContain(directory);
+  });
+
+  it('auto-discovers the verified managed runtime when explicit paths are absent', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'openscene-managed-whisper-test-'));
+    temporaryDirectories.push(directory);
+    const runtimeRoot = join(directory, '.local-runtimes', 'whisper.cpp', 'b4938');
+    const executablePath = join(runtimeRoot, 'bin', 'Release', process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli');
+    const modelPath = join(runtimeRoot, 'models', 'ggml-small.bin');
+    await mkdir(join(executablePath, '..'), { recursive: true });
+    await mkdir(join(modelPath, '..'), { recursive: true });
+    await copyFile(process.execPath, executablePath);
+    const bytes = Buffer.from('managed-test-model');
+    await writeFile(modelPath, bytes);
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    const result = await resolveWhisperCppRuntime({
+      workingDirectory: directory,
+      environment: { OPENSCENE_WHISPER_MODEL_SHA256: checksum }
+    });
+    expect(result.status).toMatchObject({ ready: true, modelName: 'ggml-small.bin', checksumVerified: true });
   });
 });

@@ -15,6 +15,8 @@ const HEALTH_TIMEOUT_MS = 8_000;
 const NORMALIZE_TIMEOUT_MS = 10 * 60 * 1_000;
 const TRANSCRIBE_TIMEOUT_MS = 60 * 60 * 1_000;
 const KILL_DELAY_MS = 1_000;
+export const MANAGED_WHISPER_RELEASE = 'b4938';
+export const MANAGED_WHISPER_MODEL_SHA256 = '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b';
 
 export type WhisperCppRuntime = {
   readonly executablePath: string;
@@ -121,20 +123,33 @@ async function sha256(path: string): Promise<string> {
 export async function resolveWhisperCppRuntime(options: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly spawnProcess?: SpawnWhisperProcess;
+  readonly workingDirectory?: string;
 } = {}): Promise<{ readonly status: WhisperCppRuntimeStatus; readonly runtime?: WhisperCppRuntime }> {
   const environment = options.environment ?? process.env;
-  const executableConfig = environment.OPENSCENE_WHISPER_CPP_PATH?.trim() ?? '';
-  const modelConfig = environment.OPENSCENE_WHISPER_MODEL_PATH?.trim() ?? '';
-  if (!executableConfig || !modelConfig) {
-    return { status: { ready: false, checksumVerified: false, reason: 'Configure OPENSCENE_WHISPER_CPP_PATH and OPENSCENE_WHISPER_MODEL_PATH, then restart OpenScene.' } };
+  const explicitExecutable = environment.OPENSCENE_WHISPER_CPP_PATH?.trim() ?? '';
+  const explicitModel = environment.OPENSCENE_WHISPER_MODEL_PATH?.trim() ?? '';
+  if (Boolean(explicitExecutable) !== Boolean(explicitModel)) {
+    return { status: { ready: false, checksumVerified: false, reason: 'Configure both OPENSCENE_WHISPER_CPP_PATH and OPENSCENE_WHISPER_MODEL_PATH, or remove both to use the managed runtime.' } };
   }
-  const executablePath = await configuredRegularFile(executableConfig, true);
-  if (executablePath === null) return { status: { ready: false, checksumVerified: false, reason: 'The configured whisper.cpp executable is not a regular accessible file.' } };
+  const managedRoot = join(options.workingDirectory ?? process.cwd(), '.local-runtimes', 'whisper.cpp', MANAGED_WHISPER_RELEASE);
+  const managed = !explicitExecutable && !explicitModel;
+  const executableName = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+  const preferCuda = /^(1|true|yes|on)$/iu.test(environment.OPENSCENE_WHISPER_CUDA?.trim() ?? '');
+  const managedExecutableConfigs = preferCuda
+    ? [join(managedRoot, 'bin-cuda', 'Release', executableName), join(managedRoot, 'bin', 'Release', executableName)]
+    : [join(managedRoot, 'bin', 'Release', executableName), join(managedRoot, 'bin-cuda', 'Release', executableName)];
+  const executableConfigs = explicitExecutable
+    ? [explicitExecutable]
+    : managedExecutableConfigs;
+  const modelConfig = explicitModel || join(managedRoot, 'models', 'ggml-small.bin');
+  const executablePaths = (await Promise.all(executableConfigs.map((path) => configuredRegularFile(path, true)))).filter((path): path is string => path !== null);
+  const executablePath = executablePaths[0];
+  if (executablePath === undefined) return { status: { ready: false, checksumVerified: false, reason: managed ? 'The managed whisper.cpp runtime is not installed. Run "npm run setup:local-ai", then restart OpenScene.' : 'The configured whisper.cpp executable is not a regular accessible file.' } };
   const modelPath = await configuredRegularFile(modelConfig, false);
-  if (modelPath === null) return { status: { ready: false, checksumVerified: false, executableName: basename(executablePath), reason: 'The configured whisper.cpp model is not a regular readable file.' } };
+  if (modelPath === null) return { status: { ready: false, checksumVerified: false, executableName: basename(executablePath), reason: managed ? 'The managed Whisper model is not installed. Run "npm run setup:local-ai", then restart OpenScene.' : 'The configured whisper.cpp model is not a regular readable file.' } };
 
   const checksumConfig = environment.OPENSCENE_WHISPER_MODEL_SHA256?.trim().toLowerCase() ?? '';
-  const expectedChecksum = checksumConfig || undefined;
+  const expectedChecksum = checksumConfig || (managed ? MANAGED_WHISPER_MODEL_SHA256 : undefined);
   if (expectedChecksum !== undefined && !/^[0-9a-f]{64}$/.test(expectedChecksum)) {
     return { status: { ready: false, checksumVerified: false, executableName: basename(executablePath), modelName: basename(modelPath), reason: 'OPENSCENE_WHISPER_MODEL_SHA256 must contain exactly 64 hexadecimal characters.' } };
   }
@@ -145,14 +160,18 @@ export async function resolveWhisperCppRuntime(options: {
     }
     checksumVerified = true;
   }
-  try {
-    const result = await runProcess({ executablePath, args: ['--version'], timeoutMs: HEALTH_TIMEOUT_MS, ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }) });
-    const version = (result.stdout || result.stderr).trim().slice(0, 200) || 'version unavailable';
-    const runtime = { executablePath, modelPath, executableName: basename(executablePath), modelName: basename(modelPath), version, checksumVerified };
-    return { status: { ready: true, executableName: runtime.executableName, modelName: runtime.modelName, version, checksumVerified }, runtime };
-  } catch (error) {
-    return { status: { ready: false, checksumVerified, executableName: basename(executablePath), modelName: basename(modelPath), reason: error instanceof Error ? error.message : 'whisper.cpp health check failed.' } };
+  let lastError: unknown;
+  for (const candidate of executablePaths) {
+    try {
+      const result = await runProcess({ executablePath: candidate, args: ['--version'], timeoutMs: HEALTH_TIMEOUT_MS, ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }) });
+      const version = (result.stdout || result.stderr).trim().slice(0, 200) || 'version unavailable';
+      const runtime = { executablePath: candidate, modelPath, executableName: basename(candidate), modelName: basename(modelPath), version, checksumVerified };
+      return { status: { ready: true, executableName: runtime.executableName, modelName: runtime.modelName, version, checksumVerified }, runtime };
+    } catch (error) {
+      lastError = error;
+    }
   }
+  return { status: { ready: false, checksumVerified, executableName: basename(executablePath), modelName: basename(modelPath), reason: lastError instanceof Error ? lastError.message : 'whisper.cpp health check failed.' } };
 }
 
 function parseClock(value: string): number | null {

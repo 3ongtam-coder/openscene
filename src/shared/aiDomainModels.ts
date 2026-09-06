@@ -138,12 +138,12 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'vieneu_local',
     label: 'VieNeu-TTS v3 Turbo',
     providerLabel: 'VieNeu-TTS',
-    description: 'Local Vietnamese speech at 48 kHz with voices discovered from the running VieNeu server.',
+    description: 'Local Vietnamese speech at 48 kHz; OpenScene starts VieNeu and discovers its voices automatically.',
     executionPath: 'local',
     domains: ['voice-generation'],
     available: true,
     availableOn: ['desktop'],
-    unavailableReason: 'VieNeu speech generation requires the desktop app and a local VieNeu-TTS server.'
+    unavailableReason: 'VieNeu speech generation requires the desktop app and its managed local runtime.'
   },
   {
     id: 'gemini-2.5-flash-preview-tts',

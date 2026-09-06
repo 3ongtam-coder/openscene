@@ -217,7 +217,7 @@ export function SettingsWorkspace({ onReplayFirstRunOnboarding }: SettingsWorksp
       case 'voice':
         return (
           <>
-            <StatusCard tone="neutral">Voice generation models are managed inside the Voice Generation workspace. Connect a cloud provider there, or run VieNeu-TTS v3 Turbo locally with <code>uv run python -m apps.web_stream</code>.</StatusCard>
+            <StatusCard tone="neutral">Voice generation models are managed inside the Voice Generation workspace. Connect a cloud provider there, or run <code>npm run setup:local-ai</code> once; OpenScene then starts VieNeu-TTS v3 Turbo automatically.</StatusCard>
             <StatusCard tone="neutral">Scripts leave the app only when you generate with a cloud model. VieNeu requests stay on loopback; all generated audio is written to local app storage.</StatusCard>
           </>
         );
