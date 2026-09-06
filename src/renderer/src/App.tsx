@@ -380,10 +380,14 @@ export function App(): ReactElement {
                 {editor.project !== null && (
                   <NarrationPanel
                     key={editor.project.id}
+                    projectId={editor.project.id}
+                    assets={editor.project.assets}
+                    timeline={editor.project.timeline}
                     document={editor.project.ai}
                     targetSeconds={timelineDurationMs(editor.project.timeline) / 1_000}
                     onSaveAi={editor.saveAiProjectDocument}
                     onApplyCaptions={editor.applyNarrationSubtitles}
+                    onApplyTranscription={editor.applyTranscriptionSubtitles}
                   />
                 )}
               </section>

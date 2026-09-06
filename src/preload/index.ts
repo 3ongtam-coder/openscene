@@ -56,6 +56,7 @@ import type { BrowserSessionProviderId, BrowserSessionStatus } from '../shared/b
 import type { SaveAiProjectDocumentInput } from '../shared/aiProjectDomain';
 import type { WriterDraft, WriterGenerationInput } from '../shared/writerWorkflow';
 import type { ComfyUiMotionWorkerStatus } from '../shared/comfyUiMotion';
+import type { StartTranscriptionInput, TranscriptionJob, WhisperCppRuntimeStatus } from '../shared/transcription';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -107,6 +108,10 @@ export interface VideoToolApi {
   aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;
   aiListSpeechVoices(modelId: string): Promise<ApiResponse<readonly VoiceChoice[]>>;
   aiGetSpeechJob(jobId: string): Promise<ApiResponse<TextToSpeechJob>>;
+  getTranscriptionRuntimeStatus(): Promise<ApiResponse<WhisperCppRuntimeStatus>>;
+  startTranscription(input: StartTranscriptionInput): Promise<ApiResponse<TranscriptionJob>>;
+  getTranscriptionJob(jobId: string): Promise<ApiResponse<TranscriptionJob>>;
+  cancelTranscriptionJob(jobId: string): Promise<ApiResponse<{ readonly cancelled: boolean }>>;
   getProviderCredentialStatus(): Promise<ApiResponse<Record<string, boolean>>>;
   setProviderCredential(provider: string, apiKey: string): Promise<ApiResponse<{ readonly updated: boolean }>>;
   getChatGptOAuthStatus(): Promise<ApiResponse<ChatGptOAuthStatus>>;
@@ -231,6 +236,10 @@ const videoTool: VideoToolApi = {
   aiListSpeechVoices: (modelId) =>
     ipcRenderer.invoke(IPC_CHANNELS.aiListSpeechVoices, modelId) as Promise<ApiResponse<readonly VoiceChoice[]>>,
   aiGetSpeechJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetSpeechJob, jobId) as Promise<ApiResponse<TextToSpeechJob>>,
+  getTranscriptionRuntimeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.transcriptionRuntimeStatus) as Promise<ApiResponse<WhisperCppRuntimeStatus>>,
+  startTranscription: (input) => ipcRenderer.invoke(IPC_CHANNELS.transcriptionStart, input) as Promise<ApiResponse<TranscriptionJob>>,
+  getTranscriptionJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.transcriptionGetJob, jobId) as Promise<ApiResponse<TranscriptionJob>>,
+  cancelTranscriptionJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.transcriptionCancelJob, jobId) as Promise<ApiResponse<{ readonly cancelled: boolean }>>,
   getProviderCredentialStatus: () =>
     ipcRenderer.invoke(IPC_CHANNELS.getProviderCredentials) as Promise<ApiResponse<Record<string, boolean>>>,
   setProviderCredential: (provider, apiKey) =>

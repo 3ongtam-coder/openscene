@@ -23,19 +23,11 @@ export function narrationScriptFromCues(cues: readonly SubtitleCue[]): string {
   return cues.map((cue) => normalizeNarrationText(cue.text)).filter(Boolean).join(' ');
 }
 
-export function parseNarrationPlan(value: unknown): NarrationPlan | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['sourceFingerprint', 'sourceScriptId', 'script', 'voiceModelId', 'voiceId', 'delivery', 'status', 'cues']) ||
-    typeof value.sourceFingerprint !== 'string' || !/^[0-9a-f]{8}$/.test(value.sourceFingerprint) ||
-    (value.sourceScriptId !== undefined && (typeof value.sourceScriptId !== 'string' || value.sourceScriptId.length > 200)) ||
-    typeof value.script !== 'string' || !value.script.trim() || value.script.length > 200_000 ||
-    typeof value.voiceModelId !== 'string' || value.voiceModelId.length > 200 ||
-    typeof value.voiceId !== 'string' || value.voiceId.length > 500 ||
-    (value.delivery !== undefined && parseVoiceDeliverySettings(value.delivery) === null) ||
-    typeof value.status !== 'string' || !(NARRATION_PLAN_STATUSES as readonly string[]).includes(value.status) ||
-    !Array.isArray(value.cues) || value.cues.length === 0 || value.cues.length > 5_000) return null;
+export function parseSubtitleCues(value: unknown): readonly SubtitleCue[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 5_000) return null;
   const cues: SubtitleCue[] = [];
   const ids = new Set<string>();
-  for (const cue of value.cues) {
+  for (const cue of value) {
     if (!isPlainRecord(cue) || !hasAllowedKeys(cue, ['id', 'text', 'startMs', 'endMs']) ||
       typeof cue.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(cue.id) || ids.has(cue.id) ||
       typeof cue.text !== 'string' || !cue.text.trim() || cue.text.length > 500 ||
@@ -44,7 +36,20 @@ export function parseNarrationPlan(value: unknown): NarrationPlan | null {
     ids.add(cue.id); cues.push({ id: cue.id, text: cue.text.trim(), startMs: cue.startMs, endMs: cue.endMs });
   }
   const sorted = [...cues].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs || a.id.localeCompare(b.id));
-  if (sorted.some((cue, index) => index > 0 && cue.startMs < sorted[index - 1]!.endMs)) return null;
+  return sorted.some((cue, index) => index > 0 && cue.startMs < sorted[index - 1]!.endMs) ? null : sorted;
+}
+
+export function parseNarrationPlan(value: unknown): NarrationPlan | null {
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['sourceFingerprint', 'sourceScriptId', 'script', 'voiceModelId', 'voiceId', 'delivery', 'status', 'cues']) ||
+    typeof value.sourceFingerprint !== 'string' || !/^[0-9a-f]{8}$/.test(value.sourceFingerprint) ||
+    (value.sourceScriptId !== undefined && (typeof value.sourceScriptId !== 'string' || value.sourceScriptId.length > 200)) ||
+    typeof value.script !== 'string' || !value.script.trim() || value.script.length > 200_000 ||
+    typeof value.voiceModelId !== 'string' || value.voiceModelId.length > 200 ||
+    typeof value.voiceId !== 'string' || value.voiceId.length > 500 ||
+    (value.delivery !== undefined && parseVoiceDeliverySettings(value.delivery) === null) ||
+    typeof value.status !== 'string' || !(NARRATION_PLAN_STATUSES as readonly string[]).includes(value.status)) return null;
+  const sorted = parseSubtitleCues(value.cues);
+  if (sorted === null) return null;
   if (narrationScriptFromCues(sorted) !== normalizeNarrationText(value.script)) return null;
   return {
     sourceFingerprint: value.sourceFingerprint,
