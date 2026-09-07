@@ -34,6 +34,7 @@ import type {
 } from '../../../shared/timelineTypes';
 import { clipDurationMs, clipTimelineEndMs } from '../../../shared/timelineClipGeometry';
 import { addTitle, removeTitle, titleAt, updateTitle } from '../../../shared/timelineTitleLogic';
+import { applyTitleAppearanceToAutomaticCaptions } from '../../../shared/captionStyle';
 import { applySubtitleCues } from '../../../shared/subtitleWorkflow';
 import type { NarrationPlan } from '../../../shared/narrationPlan';
 import { applyTranscriptionCues, type TranscriptionDraft } from '../../../shared/transcription';
@@ -302,6 +303,17 @@ export function useTimelineEditor() {
   const deleteTitle = useCallback(
     (id: string) => {
       replaceTimeline((timeline) => removeTitle(timeline, id), 'Removed the title.');
+    },
+    [replaceTimeline]
+  );
+
+  const applyTitleStyleToAutomaticCaptions = useCallback(
+    (sourceTitleId: string) => {
+      replaceTimeline(
+        (timeline) => applyTitleAppearanceToAutomaticCaptions(timeline, sourceTitleId),
+        'Applied the title appearance to every automatic caption.',
+        'There are no automatic captions to style.'
+      );
     },
     [replaceTimeline]
   );
@@ -744,7 +756,7 @@ export function useTimelineEditor() {
     addTimelineTrack, removeTimelineTrack, renameTimelineTrack, insertTimelineTrack, createProject, deleteCurrentProject, deleteSelectedClip, duplicateSelectedClip, hasUnsavedTimeline, importAssets,
     importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
     cutAtPlayhead, transitionAtPlayhead, setTransitionAtPlayhead, removeTransitionAtPlayhead,
-    addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead, applyNarrationSubtitles, applyTranscriptionSubtitles,
+    addTitleAtPlayhead, editTitle, deleteTitle, applyTitleStyleToAutomaticCaptions, titleAtPlayhead, applyNarrationSubtitles, applyTranscriptionSubtitles,
     openProject, openProjectFolder, renameProject, placeSelectedAsset, placeAssetOnTimeline, assembleApprovedWriterShots, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,

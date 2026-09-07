@@ -6501,16 +6501,22 @@ button {
 .preview-title {
   grid-area: 1 / 1;
   max-width: 100%;
-  padding: 0 2%;
-  font-weight: 700;
   line-height: 1.1;
   text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  /* The export burns the words into whatever is behind them; a shadow is the
-     preview's stand-in for "readable over any picture". */
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
   user-select: none;
+}
+
+.caption-style-apply {
+  width: 100%;
+}
+
+.caption-style-note {
+  margin: 0;
+  color: var(--color-faint);
+  font-size: var(--text-caption);
+  line-height: 1.45;
 }
 
 .production-board {

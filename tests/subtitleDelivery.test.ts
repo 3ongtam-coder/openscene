@@ -28,9 +28,13 @@ describe('subtitle delivery', () => {
   it('serializes ASS while neutralizing override-tag input', () => {
     const unsafe = { ...timeline, titles: [{ ...timeline.titles[1]!, text: '{\\pos(0,0)} A\\B' }] };
     const sidecar = createSubtitleSidecar(unsafe, 'ass');
-    expect(sidecar.contents).toContain('Dialogue: 0,0:00:02.50,0:00:04.00');
-    expect(sidecar.contents).not.toContain('{\\pos');
-    expect(sidecar.contents).toContain('｛⧵pos(0,0)｝ A⧵B');
+    expect(sidecar.contents).toContain('PlayResX: 1920');
+    expect(sidecar.contents).toContain('Dialogue: 0,0:00:02.50,0:00:04.00,Caption1');
+
+    const portraitSidecar = createSubtitleSidecar(unsafe, 'ass', { width: 1_080, height: 1_920 });
+    expect(portraitSidecar.contents).toContain('PlayResX: 1080\nPlayResY: 1920');
+    expect(portraitSidecar.contents).toContain('{\\pos(540,1320)}');
+    expect(sidecar.contents).toContain('{\\pos(960,900)}｛⧵pos(0,0)｝ A⧵B');
   });
 
   it('refuses sidecar export when no approved automatic captions are on the timeline', () => {
