@@ -116,6 +116,8 @@ For local voice and automatic subtitles, place the [official VieNeu-TTS project]
 
 Prompt with a style, aspect ratio, and duration — and optionally a reference image to seed image-to-video.
 
+After the Writer prompt stage is approved, the storyboard production board turns those saved shots into a manual production checklist. Assign imported storyboard frames and character references, open one shot at a time, generate and review candidates, then explicitly assemble the complete approved set on the timeline. The board never starts a provider job, replaces a take, exports, or spends credits on its own.
+
 ![The Video Generation studio with style, aspect ratio, duration, and reference image controls](docs/assets/screenshot-video.png)
 
 ### Image generation

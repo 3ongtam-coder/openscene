@@ -5,6 +5,7 @@ import type { FramePreference } from '@openvideo/shared/outputFrame';
 import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/shared/timelineClipPlacement';
 import { placeClip, replaceClipSource } from '@openvideo/shared/timelineClipLogic';
 import { isStill, stillClipSource } from '@openvideo/shared/timelineStills';
+import { assembleApprovedProductionCut, buildApprovedProductionAssemblyPlan } from '@openvideo/shared/productionWorkflow';
 
 import { createInitialTimeline } from '@openvideo/shared/timelineLogic';
 import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, type TimelineDocument } from '@openvideo/shared/timelineTypes';
@@ -400,6 +401,32 @@ export function appendAssetToTimeline(project: MobileProject, asset: MobileAsset
   };
   writeProject(updated);
   return updated;
+}
+
+/** Uses the same all-shots-approved and no-duplicate rule as desktop. */
+export function assembleApprovedWriterShots(project: MobileProject):
+  | { readonly ok: true; readonly project: MobileProject }
+  | { readonly ok: false; readonly reason: string } {
+  const plan = buildApprovedProductionAssemblyPlan(project.ai, project.assets.map((asset) => ({
+    id: asset.id,
+    kind: asset.kind,
+    durationMs: asset.kind === 'video' ? asset.durationMs : null
+  })));
+  if (!plan.ok) return plan;
+  const track = project.timeline.tracks.find((entry) => entry.kind === 'video');
+  if (track === undefined) return { ok: false, reason: 'Add a video track before assembling the approved production cut.' };
+  const assemblyId = Date.now().toString(36);
+  let clipOrder = 0;
+  const assembled = assembleApprovedProductionCut({
+    timeline: project.timeline,
+    plan,
+    targetTrackId: track.id,
+    clipIdForShot: () => `production-${assemblyId}-${++clipOrder}`
+  });
+  if (!assembled.ok) return assembled;
+  const updated = { ...project, timeline: assembled.timeline };
+  writeProject(updated);
+  return { ok: true, project: updated };
 }
 
 /**

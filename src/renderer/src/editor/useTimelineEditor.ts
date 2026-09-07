@@ -45,6 +45,7 @@ import { useProjectAssetImports } from './useProjectAssetImports';
 import { useTimelinePlayback } from './useTimelinePlayback';
 import type { AiProjectDocument } from '../../../shared/aiProjectDomain';
 import { detachVideoAudioOnTimeline } from '../../../shared/detachVideoAudio';
+import { assembleApprovedProductionCut, buildApprovedProductionAssemblyPlan } from '../../../shared/productionWorkflow';
 
 type TimelineUpdate = (timeline: TimelineDocument) => TimelineDocument | null;
 
@@ -354,6 +355,41 @@ export function useTimelineEditor() {
     playback.setPlayheadMs(placement.playheadMs, timeline);
     setSelectedAssetId(asset.id);
     setSelectedClipId(placement.clip.id);
+    return true;
+  }, [playback, project, replaceTimeline]);
+
+  const assembleApprovedWriterShots = useCallback((): boolean => {
+    if (project === null) return false;
+    const plan = buildApprovedProductionAssemblyPlan(project.ai, project.assets.map((asset) => ({
+      id: asset.id,
+      kind: asset.kind,
+      durationMs: asset.metadata?.durationMs ?? null
+    })));
+    if (!plan.ok) {
+      setStatusMessage({ tone: 'warning', text: plan.reason });
+      return false;
+    }
+    const target = project.timeline.tracks.find((track) => track.kind === 'video');
+    if (target === undefined) {
+      setStatusMessage({ tone: 'warning', text: 'Add a video track before assembling the approved production cut.' });
+      return false;
+    }
+    const assembled = assembleApprovedProductionCut({
+      timeline: project.timeline,
+      plan,
+      targetTrackId: target.id,
+      clipIdForShot: () => createOpaqueId('production-clip')
+    });
+    if (!assembled.ok) {
+      setStatusMessage({ tone: 'warning', text: assembled.reason });
+      return false;
+    }
+    const timeline = replaceTimeline(
+      () => assembled.timeline,
+      `Assembled ${plan.shots.length} approved Writer shot(s) in production order.`
+    );
+    if (timeline === null) return false;
+    playback.setPlayheadMs(Math.max(0, timelineDurationMs(timeline) - plan.totalDurationMs), timeline);
     return true;
   }, [playback, project, replaceTimeline]);
 
@@ -709,7 +745,7 @@ export function useTimelineEditor() {
     importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
     cutAtPlayhead, transitionAtPlayhead, setTransitionAtPlayhead, removeTransitionAtPlayhead,
     addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead, applyNarrationSubtitles, applyTranscriptionSubtitles,
-    openProject, openProjectFolder, renameProject, placeSelectedAsset, placeAssetOnTimeline, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
+    openProject, openProjectFolder, renameProject, placeSelectedAsset, placeAssetOnTimeline, assembleApprovedWriterShots, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,
     splitSelectedClip, statusMessage, trimSelectedClip, updateAssetMetadata, updateSelectedClipEffects, detachSelectedClipAudio,
