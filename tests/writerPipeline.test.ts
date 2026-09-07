@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyAiProjectDocument, parseAiProjectDocument } from '../src/shared/aiProjectDomain';
 import { WRITER_STAGES, canOpenWriterStage, parseWriterPipelineState, type WriterStageArtifact } from '../src/shared/writerStages';
-import { approvedWriterShots, applyWriterPipeline, artifactFromWriterDraft, buildWriterStageRequest, editWriterPromptShot, parseWriterPromptText, pipelineBaseRequest, pipelineMatchesBrief, saveWriterArtifact, startWriterPipeline } from '../src/shared/writerPipeline';
+import { approvedWriterShots, applyWriterPipeline, applyWriterStyleLock, artifactFromWriterDraft, buildWriterStageRequest, editWriterPromptShot, parseWriterPromptText, pipelineBaseRequest, pipelineMatchesBrief, saveWriterArtifact, startWriterPipeline } from '../src/shared/writerPipeline';
 import { applyWriterDraft, compileWriterPrompt, parseWriterRequest, validateWriterResponse, writerResponseSchema, writerSystemPrompt, type WriterDraft, type WriterRequest } from '../src/shared/writerWorkflow';
 import { requestGeminiWriter } from '../src/shared/writerGeneration';
+import { chainContinuationFrame, nextApprovedWriterShotId } from '../src/shared/generationReview';
 
 const brief: WriterRequest = { mode: 'idea_to_script', sourceText: 'The first social network was yelling.', language: 'English', audience: 'Adults', tone: 'Deadpan satire', targetDurationSeconds: 16, videoStyle: 'cinematic-narrative', emotionalGoal: 'entertain' };
 const artifact = (stage: WriterStageArtifact['stage'], content = `Complete ${stage} document`): WriterStageArtifact => ({ stage, title: 'The Stone Age Scroll', content, modelId: 'gemini-3.1-flash-lite', approved: false });
@@ -24,6 +25,18 @@ function approvedWriting() {
 function approvedAll() { return saveWriterArtifact(approvedWriting(), artifactFromWriterDraft('prompts', production, 'test-model'), true); }
 
 describe('manual Writer pipeline', () => {
+  it('reapplies the approved Style Bible exactly once at the generation boundary', () => {
+    const first = applyWriterStyleLock('Grog raises the stone.\nAvoid: phones', production.styleBible);
+    expect(first).toContain('[OPENSCENE_STYLE_LOCK]');
+    expect(first).toContain('Palette: ochre');
+    expect(first).toContain('Forbidden changes: Red hide');
+    const revised = applyWriterStyleLock(`${first}\nMake the action faster.`, { ...production.styleBible, lighting: 'Blue moonlight' });
+    expect(revised.match(/\[OPENSCENE_STYLE_LOCK\]/g)).toHaveLength(1);
+    expect(revised).toContain('Make the action faster.');
+    expect(revised).toContain('Lighting: Blue moonlight');
+    expect(revised).not.toContain('Lighting: Morning sun');
+  });
+
   it('hands off only approved, explicitly imported shots with identity, dialogue and continuity intact', () => {
     const empty = createEmptyAiProjectDocument();
     expect(approvedWriterShots(empty)).toEqual([]);
@@ -32,6 +45,7 @@ describe('manual Writer pipeline', () => {
     if (!imported.ok) throw new Error(imported.message);
     const shots = approvedWriterShots(imported.document);
     expect(shots).toHaveLength(2);
+    expect(shots.map((shot) => shot.id)).toEqual(imported.document.shots.map((shot) => shot.id));
     expect(shots[0]?.durationSeconds).toBe(8);
     expect(shots[0]?.prompt).toContain('Character Grog: Red hide');
     expect(shots[0]?.prompt).toContain('Spoken lines: A mammoth!');
@@ -40,6 +54,60 @@ describe('manual Writer pipeline', () => {
     const revised = saveWriterArtifact(imported.document.writerPipeline!, artifact('concept', 'New idea'), true);
     expect(approvedWriterShots({ ...imported.document, writerPipeline: revised })).toEqual([]);
     expect(imported.document.generations).toEqual([]);
+  });
+
+  it('replaces the next real Writer shot start frame only from an approved preceding candidate', () => {
+    const imported = applyWriterPipeline(createEmptyAiProjectDocument(), approvedAll(), '2026-09-05T00:00:00.000Z', 'handoff');
+    if (!imported.ok) throw new Error(imported.message);
+    const [firstShot, secondShot] = imported.document.shots;
+    if (!firstShot || !secondShot) throw new Error('fixture shots missing');
+    const approvedSource = {
+      ...imported.document,
+      shots: imported.document.shots.map((shot) => shot.id === firstShot.id ? { ...shot, generationIds: ['generation-approved'] } : shot),
+      generations: [{
+        id: 'generation-approved', shotId: firstShot.id, providerId: 'gemini_veo', modelId: 'veo-3.1',
+        capability: 'text_to_video' as const, status: 'completed' as const, prompt: 'First shot', referenceAssetIds: [],
+        outputAssetIds: ['asset-video'], createdAt: '2026-09-05T00:01:00.000Z', updatedAt: '2026-09-05T00:02:00.000Z',
+        review: {
+          decision: 'approved' as const,
+          continuity: { identity: 'pass' as const, wardrobeProps: 'pass' as const, settingPalette: 'pass' as const, motionDirection: 'pass' as const, boundaryMatch: 'pass' as const },
+          notes: '', reviewedAt: '2026-09-05T00:03:00.000Z'
+        }
+      }]
+    };
+
+    expect(nextApprovedWriterShotId(approvedSource, firstShot.id)).toBe(secondShot.id);
+    expect(nextApprovedWriterShotId(approvedSource, secondShot.id)).toBeNull();
+    expect(chainContinuationFrame(approvedSource, {
+      sourceGenerationId: 'generation-approved', sourceAssetId: 'asset-wrong', targetShotId: secondShot.id,
+      frameAssetId: 'asset-frame', referenceId: 'reference-frame', label: 'Boundary'
+    })).toMatchObject({ ok: false, reason: 'The selected source video is not an output of this approved candidate.' });
+
+    const chained = chainContinuationFrame(approvedSource, {
+      sourceGenerationId: 'generation-approved', sourceAssetId: 'asset-video', targetShotId: secondShot.id,
+      frameAssetId: 'asset-frame', referenceId: 'reference-frame', label: 'Boundary'
+    });
+    expect(chained.ok).toBe(true);
+    if (!chained.ok) return;
+    expect(chained.document.referenceAssets).toContainEqual({
+      id: 'reference-frame', assetId: 'asset-frame', role: 'start_frame', label: 'Boundary'
+    });
+    expect(chained.document.shots.find((shot) => shot.id === secondShot.id)?.referenceAssetIds).toEqual(['reference-frame']);
+
+    const replacement = chainContinuationFrame({
+      ...chained.document,
+      generations: chained.document.generations.map((generation) => generation.id === 'generation-approved'
+        ? { ...generation, outputAssetIds: [...generation.outputAssetIds, 'asset-video-2'] }
+        : generation)
+    }, {
+      sourceGenerationId: 'generation-approved', sourceAssetId: 'asset-video-2', targetShotId: secondShot.id,
+      frameAssetId: 'asset-frame-2', referenceId: 'reference-frame-2', label: 'Replacement boundary'
+    });
+    expect(replacement.ok).toBe(true);
+    if (replacement.ok) {
+      expect(replacement.document.shots.find((shot) => shot.id === secondShot.id)?.referenceAssetIds).toEqual(['reference-frame-2']);
+      expect(replacement.document.referenceAssets.map((reference) => reference.id)).toEqual(['reference-frame', 'reference-frame-2']);
+    }
   });
   it('edits the actual production prompt without stripping typed whitespace or touching other shots', () => {
     const content = JSON.stringify(production);

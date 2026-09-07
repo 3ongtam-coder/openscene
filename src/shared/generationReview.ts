@@ -9,6 +9,7 @@ import {
   type GenerationReviewDecision
 } from './aiProjectDomain';
 import type { VideoOperation } from './mediaCapabilityRegistry';
+import { approvedWriterShots } from './writerPipeline';
 
 export function emptyContinuityReview(): ContinuityReview {
   return {
@@ -35,6 +36,70 @@ export type AddGenerationCandidateInput = {
 export type GenerationReviewResult =
   | { readonly ok: true; readonly document: AiProjectDocument }
   | { readonly ok: false; readonly reason: string };
+
+export type ChainContinuationFrameInput = {
+  readonly sourceGenerationId: string;
+  readonly sourceAssetId: string;
+  readonly targetShotId: string;
+  readonly frameAssetId: string;
+  readonly referenceId: string;
+  readonly label: string;
+};
+
+export function nextApprovedWriterShotId(document: AiProjectDocument, shotId: string): string | null {
+  const shots = approvedWriterShots(document);
+  const index = shots.findIndex((shot) => shot.id === shotId);
+  return index < 0 ? null : shots[index + 1]?.id ?? null;
+}
+
+/**
+ * Links a materialized tail frame to the immediately following Writer shot.
+ * Old start-frame references remain in the audit graph when generations used
+ * them, but the shot itself points at only the newly chosen boundary frame.
+ */
+export function chainContinuationFrame(
+  document: AiProjectDocument,
+  input: ChainContinuationFrameInput
+): GenerationReviewResult {
+  const source = document.generations.find((entry) => entry.id === input.sourceGenerationId);
+  if (source === undefined || source.review?.decision !== 'approved') {
+    return { ok: false, reason: 'Approve the source candidate before chaining its end frame.' };
+  }
+  if (!source.outputAssetIds.includes(input.sourceAssetId)) {
+    return { ok: false, reason: 'The selected source video is not an output of this approved candidate.' };
+  }
+  if (nextApprovedWriterShotId(document, source.shotId) !== input.targetShotId) {
+    return { ok: false, reason: 'Continuity frames can only be chained to the immediately following approved Writer shot.' };
+  }
+  const target = document.shots.find((entry) => entry.id === input.targetShotId);
+  if (target === undefined) return { ok: false, reason: 'The next Writer shot no longer exists.' };
+  if (document.referenceAssets.some((entry) => entry.id === input.referenceId)) {
+    return { ok: false, reason: 'The continuity reference id is already in use.' };
+  }
+
+  const priorStartFrameIds = new Set(target.referenceAssetIds.filter((referenceId) =>
+    document.referenceAssets.some((entry) => entry.id === referenceId && entry.role === 'start_frame')
+  ));
+  return {
+    ok: true,
+    document: {
+      ...document,
+      referenceAssets: [...document.referenceAssets, {
+        id: input.referenceId,
+        assetId: input.frameAssetId,
+        role: 'start_frame',
+        label: input.label.trim() || 'Continuity start frame'
+      }],
+      shots: document.shots.map((entry) => entry.id === target.id ? {
+        ...entry,
+        referenceAssetIds: [
+          ...entry.referenceAssetIds.filter((referenceId) => !priorStartFrameIds.has(referenceId)),
+          input.referenceId
+        ]
+      } : entry)
+    }
+  };
+}
 
 export function candidateApprovalBlockReason(candidate: Pick<GenerationRecord, 'status' | 'outputAssetIds' | 'review'>): string | null {
   const review = candidate.review ?? { decision: 'pending' as const, continuity: emptyContinuityReview(), notes: '' };

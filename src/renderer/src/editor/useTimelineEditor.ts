@@ -691,6 +691,11 @@ export function useTimelineEditor() {
     // the older timeline snapshot that happened to be on disk.
     setProject((current) => current === null || current.id !== response.value.id ? current : {
       ...current,
+      // Other main-process AI actions (for example, continuity-frame
+      // extraction) may have added a project asset immediately before this AI
+      // document save. Keep unsaved timeline edits, but accept the authoritative
+      // asset library from the same project snapshot.
+      assets: response.value.assets,
       ai: response.value.ai,
       updatedAt: response.value.updatedAt
     });

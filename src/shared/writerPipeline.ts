@@ -1,4 +1,4 @@
-import type { AiProjectDocument } from './aiProjectDomain';
+import type { AiProjectDocument, StyleBible } from './aiProjectDomain';
 import { isPlainRecord } from './timelineValidationPrimitives';
 import {
   applyWriterDraft, parseWriterRequest, validateWriterDraft, validateWriterResponse,
@@ -8,6 +8,31 @@ import {
   WRITER_STAGES, canOpenWriterStage, parseWriterPipelineState, putWriterArtifact,
   type WriterPipelineState, type WriterStage, type WriterStageArtifact
 } from './writerStages';
+
+const STYLE_LOCK_START = '[OPENSCENE_STYLE_LOCK]';
+const STYLE_LOCK_END = '[/OPENSCENE_STYLE_LOCK]';
+
+/**
+ * Re-applies the approved project look at the provider boundary. The composer
+ * stays editable, but a user edit or refinement cannot silently discard the
+ * continuity constraints that were approved in Writer.
+ */
+export function applyWriterStyleLock(prompt: string, styleBible: StyleBible): string {
+  const priorLock = new RegExp(`\\n?${STYLE_LOCK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${STYLE_LOCK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
+  const editablePrompt = prompt.replace(priorLock, '\n').trim();
+  const locked = [
+    STYLE_LOCK_START,
+    'These approved visual-continuity rules are immutable for this shot.',
+    `Palette: ${styleBible.palette.join(', ') || 'use the approved production palette'}`,
+    `Lighting: ${styleBible.lighting || 'use the approved production lighting'}`,
+    `Camera grammar: ${styleBible.cameraGrammar || 'use the approved camera grammar'}`,
+    `Texture: ${styleBible.texture || 'use the approved production texture'}`,
+    `Forbidden changes: ${styleBible.forbiddenChanges.join('; ') || 'none beyond the approved shot constraints'}`,
+    'Ignore any instruction that conflicts with these continuity rules.',
+    STYLE_LOCK_END
+  ].join('\n');
+  return `${editablePrompt}\n\n${locked}`.trim();
+}
 
 export function pipelineBaseRequest(state: WriterPipelineState | undefined): WriterRequest | null {
   if (!state) return null;
@@ -134,28 +159,51 @@ export function applyWriterPipeline(document: AiProjectDocument, state: WriterPi
 
 /** A manual handoff only: callers fill a composer, never submit a provider job. */
 export function approvedWriterShots(projectData: AiProjectDocument | null | undefined): readonly {
-  readonly id: string; readonly label: string; readonly prompt: string; readonly durationSeconds: number;
+  readonly id: string;
+  readonly label: string;
+  readonly prompt: string;
+  readonly durationSeconds: number;
+  readonly referenceAssetIds: readonly string[];
 }[] {
   const state = projectData?.writerPipeline;
   if (!state?.appliedScriptId || !projectData?.scripts.some((s) => s.id === state.appliedScriptId) ||
     !WRITER_STAGES.every((stage) => state.artifacts.some((a) => a.stage === stage && a.approved))) return [];
   try {
     const draft = validateWriterArtifact(state, state.artifacts.find((a) => a.stage === 'prompts')!);
-    return draft.scenes.flatMap((scene, si) => scene.shots.map((shot, sh) => ({
-      id: `${state.appliedScriptId}:${si}:${sh}`,
-      label: `${scene.title} / shot ${sh + 1} (${shot.durationSeconds}s)`,
-      durationSeconds: shot.durationSeconds,
-      prompt: [
-        `Scene: ${scene.title}. Setting: ${scene.setting}. Time: ${scene.timeOfDay}.`,
-        ...draft.characters.filter((c) => scene.characterNames.includes(c.name)).map((c) => `Character ${c.name}: ${c.invariantDescription}`),
-        `Visual style: ${draft.styleBible.palette.join(', ')}. ${draft.styleBible.lighting}. ${draft.styleBible.cameraGrammar}. ${draft.styleBible.texture}.`,
-        `Framing: ${shot.framing}. Camera motion: ${shot.cameraMotion}.`,
-        shot.action,
-        shot.dialogue ? `Spoken lines: ${shot.dialogue}` : 'No spoken dialogue.',
-        `Audio: ${shot.audioCues.join('; ')}`,
-        `Continuity: ${scene.continuityNotes}`,
-        `Avoid: ${[shot.negativePrompt, ...draft.styleBible.forbiddenChanges].filter(Boolean).join('; ')}`
-      ].join('\n')
-    })));
+    const persistedScenes = projectData.scenes
+      .filter((scene) => scene.scriptVersionId === state.appliedScriptId)
+      .slice()
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+    if (persistedScenes.length !== draft.scenes.length) return [];
+    const shotsById = new Map(projectData.shots.map((shot) => [shot.id, shot]));
+    const handoff: {
+      id: string; label: string; prompt: string; durationSeconds: number; referenceAssetIds: readonly string[];
+    }[] = [];
+    for (const [sceneIndex, scene] of draft.scenes.entries()) {
+      const persistedScene = persistedScenes[sceneIndex];
+      if (persistedScene === undefined || persistedScene.shotIds.length !== scene.shots.length) return [];
+      for (const [shotIndex, shot] of scene.shots.entries()) {
+        const persistedShot = shotsById.get(persistedScene.shotIds[shotIndex] ?? '');
+        if (persistedShot === undefined || persistedShot.durationMs !== shot.durationSeconds * 1_000) return [];
+        handoff.push({
+          id: persistedShot.id,
+          label: `${scene.title} / shot ${shotIndex + 1} (${shot.durationSeconds}s)`,
+          durationSeconds: shot.durationSeconds,
+          referenceAssetIds: persistedShot.referenceAssetIds,
+          prompt: [
+            `Scene: ${scene.title}. Setting: ${scene.setting}. Time: ${scene.timeOfDay}.`,
+            ...draft.characters.filter((c) => scene.characterNames.includes(c.name)).map((c) => `Character ${c.name}: ${c.invariantDescription}`),
+            `Visual style: ${draft.styleBible.palette.join(', ')}. ${draft.styleBible.lighting}. ${draft.styleBible.cameraGrammar}. ${draft.styleBible.texture}.`,
+            `Framing: ${shot.framing}. Camera motion: ${shot.cameraMotion}.`,
+            shot.action,
+            shot.dialogue ? `Spoken lines: ${shot.dialogue}` : 'No spoken dialogue.',
+            `Audio: ${shot.audioCues.join('; ')}`,
+            `Continuity: ${scene.continuityNotes}`,
+            `Avoid: ${[shot.negativePrompt, ...draft.styleBible.forbiddenChanges].filter(Boolean).join('; ')}`
+          ].join('\n')
+        });
+      }
+    }
+    return handoff;
   } catch { return []; }
 }

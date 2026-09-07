@@ -14,6 +14,7 @@ import {
   isPlainRecord,
   isUnknownArray
 } from '../shared/timelineValidationPrimitives';
+import { trackKindForAsset } from '../shared/timelineStills';
 import { hasDeterministicAssetPath } from './assetLibrarySupport';
 
 function getIsoTimestamp(record: Record<string, unknown>, key: string): string | null {
@@ -58,7 +59,10 @@ function parseAsset(value: unknown): MediaAsset | null {
   const id = getOpaqueId(value, 'id');
   const displayName = getTrimmedString(value, 'displayName', TIMELINE_VALIDATION_LIMITS.nameLength);
   const projectRelativePath = getRelativePath(value, 'projectRelativePath');
-  const kind = getMediaKind(value, 'kind');
+  // Images are project assets but never timeline track kinds or arbitrary IPC
+  // import requests. Keep that distinction local instead of widening the
+  // shared getMediaKind validator used by those narrower contracts.
+  const kind = value.kind === 'image' ? 'image' : getMediaKind(value, 'kind');
   const mimeType = getMimeType(value, 'mimeType');
   const byteLength = getFiniteNonNegative(value, 'byteLength');
   const metadata = value.metadata === null ? null : parseMetadata(value.metadata);
@@ -96,9 +100,13 @@ export function findInvalidAssetRelation(
   for (const track of timeline.tracks) {
     for (const clip of track.clips) {
       const asset = assetsById.get(clip.assetId);
-      if (asset === undefined || asset.kind !== track.kind) {
+      if (asset === undefined || trackKindForAsset(asset.kind) !== track.kind) {
         return { clipId: clip.id, trackKind: track.kind, reason: 'unavailable' };
       }
+      // A still is held for the authored clip length. It has no source
+      // duration to compare against, so the ordinary movie bounds checks do
+      // not apply (the clip validator already guarantees positive geometry).
+      if (asset.kind === 'image') continue;
       if (asset.metadata === null) {
         return { clipId: clip.id, trackKind: track.kind, reason: 'metadata_missing' };
       }
