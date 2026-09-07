@@ -27,6 +27,7 @@ import { useAiDomainModel } from './AiDomainModelContext';
 import { useProjectResultImport } from './ProjectResultImportContext';
 import { getVideoModelCapabilities, getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
+import { ProductionBoard } from './ProductionBoard';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
@@ -80,7 +81,7 @@ export function VideoGenerationWorkspace({
 }: VideoGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const videoModel = selectedModel('video-generation');
-  const { importAiResult, placeAiAssetOnTimeline } = useProjectResultImport();
+  const { importAiResult, placeAiAssetOnTimeline, assembleApprovedWriterShots } = useProjectResultImport();
   const [prompt, setPrompt] = useState('');
   const [writerShotId, setWriterShotId] = useState('');
   const [loadedWriterShotId, setLoadedWriterShotId] = useState('');
@@ -307,9 +308,12 @@ export function VideoGenerationWorkspace({
             capability: inputs.operation,
             prompt: promptText,
             createdAt: job.createdAt,
-            referenceAssetIds: !['image_to_video', 'start_end'].includes(inputs.operation) || inputs.referenceImage === undefined
-              ? []
-              : overrides?.referenceAssetIds ?? loadedReferenceAssetIds,
+            referenceAssetIds: overrides?.referenceAssetIds ?? (
+              ((inputs.operation === 'image_to_video' || inputs.operation === 'start_end') && inputs.referenceImage !== undefined) ||
+              (inputs.operation === 'reference_to_video' && (inputs.referenceImages?.length ?? 0) > 0)
+                ? loadedReferenceAssetIds
+                : []
+            ),
             ...(overrides?.parentGenerationId === undefined ? {} : { parentGenerationId: overrides.parentGenerationId })
           }));
           if (!recorded) {
@@ -432,7 +436,10 @@ export function VideoGenerationWorkspace({
       onReferenceImageChange(response.value);
     }
     else if (target === 'last') setLastFrame(response.value);
-    else setReferenceImages((current) => current.length >= 3 ? current : [...current, response.value as ReferenceImageSelection]);
+    else {
+      setLoadedReferenceAssetIds([]);
+      setReferenceImages((current) => current.length >= 3 ? current : [...current, response.value as ReferenceImageSelection]);
+    }
   };
 
   const handleImportToProject = async (job: VideoGenerationJob): Promise<void> => {
@@ -467,10 +474,11 @@ export function VideoGenerationWorkspace({
   };
 
   const loadSavedStartFrame = async (shotId: string): Promise<void> => {
-    if (!projectId || !writerDocument) return;
-    const shot = writerDocument.shots.find((entry) => entry.id === shotId);
+    const current = documentRef.current;
+    if (!projectId || !current) return;
+    const shot = current.shots.find((entry) => entry.id === shotId);
     const reference = shot?.referenceAssetIds
-      .map((id) => writerDocument.referenceAssets.find((entry) => entry.id === id))
+      .map((id) => current.referenceAssets.find((entry) => entry.id === id))
       .find((entry) => entry?.role === 'start_frame');
     if (reference === undefined) {
       setStatusMsg({ tone: 'warning', text: 'This Writer shot has no saved continuity start frame.' });
@@ -488,7 +496,60 @@ export function VideoGenerationWorkspace({
     onReferenceImageChange(response.value);
     setLoadedReferenceAssetIds([reference.id]);
     setSelectedOperation('image_to_video');
-    setStatusMsg({ tone: 'success', text: 'Saved continuity frame loaded as the first frame. Review it before generation.' });
+    setStatusMsg({ tone: 'success', text: 'Saved storyboard or continuity image loaded as the first frame. Review it before generation.' });
+  };
+
+  const openProductionShot = async (shotId: string): Promise<void> => {
+    const current = documentRef.current;
+    const shot = approvedWriterShots(current).find((entry) => entry.id === shotId);
+    if (current === null || shot === undefined) {
+      setStatusMsg({ tone: 'warning', text: 'The selected production shot is no longer available.' });
+      return;
+    }
+    if (!durationOptions.includes(shot.durationSeconds)) {
+      setStatusMsg({ tone: 'warning', text: `This shot needs ${shot.durationSeconds}s; the selected model accepts ${durationOptions.join('/')}s. Choose a compatible model first.` });
+      return;
+    }
+    setWriterShotId(shot.id);
+    setLoadedWriterShotId(shot.id);
+    setPrompt(shot.prompt);
+    setDurationSeconds(shot.durationSeconds);
+    setLoadedReferenceAssetIds([]);
+    setReferenceImages([]);
+    onReferenceImageChange(null);
+
+    const persistedShot = current.shots.find((entry) => entry.id === shot.id);
+    const scene = persistedShot === undefined ? undefined : current.scenes.find((entry) => entry.id === persistedShot.sceneId);
+    const startReference = persistedShot?.referenceAssetIds
+      .map((id) => current.referenceAssets.find((entry) => entry.id === id))
+      .find((entry) => entry?.role === 'start_frame');
+    if (startReference !== undefined) {
+      await loadSavedStartFrame(shot.id);
+      return;
+    }
+    const characterReferences = (scene?.characterIds ?? []).flatMap((characterId) =>
+      current.characters.find((entry) => entry.id === characterId)?.referenceAssetIds ?? []
+    ).map((id) => current.referenceAssets.find((entry) => entry.id === id))
+      .filter((entry): entry is NonNullable<typeof entry> => entry?.role === 'character')
+      .slice(0, 3);
+    if (projectId && characterReferences.length > 0 && isVideoOperationImplemented(videoModel.id, 'reference_to_video')) {
+      const loaded = await Promise.all(characterReferences.map(async (reference) => ({
+        reference,
+        response: await window.videoTool.aiGetProjectImageReference({ projectId, assetId: reference.assetId })
+      })));
+      const available = loaded.flatMap((entry) => entry.response.ok
+        ? [{ reference: entry.reference, value: entry.response.value }]
+        : []);
+      if (available.length > 0) {
+        setReferenceImages(available.map((entry) => entry.value));
+        setLoadedReferenceAssetIds(available.map((entry) => entry.reference.id));
+        setSelectedOperation('reference_to_video');
+        setStatusMsg({ tone: 'success', text: `Shot loaded with ${available.length} persisted character reference(s). Review everything before generating.` });
+        return;
+      }
+    }
+    setSelectedOperation(isVideoOperationImplemented(videoModel.id, 'text_to_video') ? 'text_to_video' : selectedOperation);
+    setStatusMsg({ tone: 'neutral', text: 'Shot loaded without a first frame. Review the prompt and choose inputs before generating.' });
   };
 
   const chainCandidateToNextShot = async (generationId: string): Promise<void> => {
@@ -553,6 +614,15 @@ export function VideoGenerationWorkspace({
       </header>
 
       <div className="studio-surface__body">
+        {writerDocument !== null && writerDocument !== undefined && onSaveAi !== undefined && projectId !== null && projectId !== undefined &&
+          <ProductionBoard
+            document={writerDocument}
+            assets={projectAssets}
+            busy={isGenerating || isSavingCandidate || isChainingFrame}
+            onSave={onSaveAi}
+            onOpenShot={openProductionShot}
+            onAssemble={assembleApprovedWriterShots}
+          />}
         <div className="studio-field">
           <span className="studio-field__label">Input mode</span>
           <div className="studio-chips" role="group" aria-label="Video input mode">
@@ -705,7 +775,12 @@ export function VideoGenerationWorkspace({
           {referenceImages.map((image, index) => <div className="studio-reference" key={`${image.displayName}-${index}`}>
             <img className="studio-reference__thumb" src={`data:${image.mimeType};base64,${image.base64}`} alt={`Asset reference ${image.displayName}`} />
             <span className="studio-reference__name">{image.displayName}</span>
-            <Button variant="ghost" onClick={() => setReferenceImages((current) => current.filter((_, position) => position !== index))} aria-label={`Remove asset reference ${index + 1}`}>Remove</Button>
+            <Button variant="ghost" onClick={() => {
+              // Once the loaded set is edited, its persisted IDs no longer map
+              // one-to-one to the bytes sent. Keep the candidate record honest.
+              setLoadedReferenceAssetIds([]);
+              setReferenceImages((current) => current.filter((_, position) => position !== index));
+            }} aria-label={`Remove asset reference ${index + 1}`}>Remove</Button>
           </div>)}
           <div className="studio-reference">
             <span className="studio-reference__empty">Order references deliberately; nothing is attached automatically.</span>
@@ -858,20 +933,7 @@ export function VideoGenerationWorkspace({
             <option value="">Choose a shot to load into the composer</option>
             {writerShots.map((shot) => <option key={shot.id} value={shot.id}>{shot.label}</option>)}
           </select>
-          <Button disabled={isGenerating || !writerShots.some((s) => s.id === writerShotId)} onClick={() => {
-            const shot = writerShots.find((s) => s.id === writerShotId);
-            if (!shot) return;
-            if (!durationOptions.includes(shot.durationSeconds)) {
-              setStatusMsg({ tone: 'warning', text: `This shot needs ${shot.durationSeconds}s; the selected operation accepts ${durationOptions.join('/')}s. Choose a compatible model or revise the Writer shot. Nothing was submitted.` });
-              return;
-            }
-            setPrompt(shot.prompt);
-            setDurationSeconds(shot.durationSeconds);
-            setLoadedWriterShotId(shot.id);
-            setLoadedReferenceAssetIds([]);
-            onReferenceImageChange(null);
-            setStatusMsg({ tone: 'neutral', text: 'Approved shot loaded, not generated. Style Bible is locked. Load any saved continuity frame explicitly before pressing Generate.' });
-          }}>Use approved shot (no generation)</Button>
+          <Button disabled={isGenerating || !writerShots.some((s) => s.id === writerShotId)} onClick={() => void openProductionShot(writerShotId)}>Use approved shot (no generation)</Button>
           {writerShotId !== '' && writerShots.find((shot) => shot.id === writerShotId)?.referenceAssetIds.some((referenceId) =>
             writerDocument?.referenceAssets.some((reference) => reference.id === referenceId && reference.role === 'start_frame')) === true &&
             <Button disabled={isGenerating || isChainingFrame} onClick={() => void loadSavedStartFrame(writerShotId)}>Load saved continuity frame</Button>}

@@ -99,16 +99,31 @@ function isJpeg(bytes: Buffer): boolean {
   return bytes.byteLength >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
+function isPng(bytes: Buffer): boolean {
+  return bytes.byteLength >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+}
+
+function isWebp(bytes: Buffer): boolean {
+  return bytes.byteLength >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+}
+
+function matchesImageMime(bytes: Buffer, mimeType: string): boolean {
+  return mimeType === 'image/jpeg' ? isJpeg(bytes)
+    : mimeType === 'image/png' ? isPng(bytes)
+      : mimeType === 'image/webp' ? isWebp(bytes)
+        : false;
+}
+
 function boundaryFrameTimes(durationMs: number): readonly number[] {
   return [...new Set([100, 500, 1_500].map((endGuardMs) => Math.max(0, durationMs - endGuardMs)))];
 }
 
 function referenceFromBytes(asset: MediaAsset, bytes: Buffer): ApiResponse<ReferenceImageSelection> {
-  if (asset.kind !== 'image' || asset.mimeType !== FRAME_MIME_TYPE) {
-    return fail('INVALID_INPUT', 'The saved continuity reference is not a supported JPEG image.');
+  if (asset.kind !== 'image' || !matchesImageMime(bytes, asset.mimeType)) {
+    return fail('INVALID_INPUT', 'The saved project reference is not a supported PNG, JPEG, or WebP image.');
   }
-  if (!isJpeg(bytes) || bytes.byteLength > REFERENCE_IMAGE_MAX_BYTES) {
-    return fail('INVALID_INPUT', `The saved continuity image is not a valid JPEG under ${REFERENCE_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
+  if (bytes.byteLength > REFERENCE_IMAGE_MAX_BYTES) {
+    return fail('INVALID_INPUT', `The saved project image is larger than ${REFERENCE_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
   }
   return ok({ displayName: asset.displayName, mimeType: asset.mimeType, base64: bytes.toString('base64') });
 }
@@ -236,17 +251,17 @@ export class ContinuityFrameService {
     const input = parseProjectAssetReferenceInput(payload);
     if (input === null) return fail('INVALID_INPUT', 'The project-image request was not valid.');
     const asset = await this.dependencies.projects.getAsset(input.projectId, input.assetId);
-    if (asset === null) return fail('ASSET_NOT_FOUND', 'The saved continuity image is no longer available.');
+    if (asset === null) return fail('ASSET_NOT_FOUND', 'The saved project image is no longer available.');
     let source: OpenedAssetPlaybackSource | null = null;
     try {
       source = await this.dependencies.assets.openPlaybackSource(input.projectId, input.assetId);
-      if (source === null) return fail('ASSET_NOT_FOUND', 'The saved continuity image file is no longer available.');
+      if (source === null) return fail('ASSET_NOT_FOUND', 'The saved project image file is no longer available.');
       if (source.byteLength > REFERENCE_IMAGE_MAX_BYTES) {
-        return fail('INVALID_INPUT', `The saved continuity image is larger than ${REFERENCE_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
+        return fail('INVALID_INPUT', `The saved project image is larger than ${REFERENCE_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
       }
       return referenceFromBytes(asset, await source.file.readFile());
     } catch {
-      return fail('ASSET_NOT_FOUND', 'The saved continuity image could not be read.');
+      return fail('ASSET_NOT_FOUND', 'The saved project image could not be read.');
     } finally {
       await source?.file.close().catch(() => undefined);
     }

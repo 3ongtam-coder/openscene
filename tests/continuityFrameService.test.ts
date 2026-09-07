@@ -145,6 +145,27 @@ describe('continuity frame service', () => {
     });
   });
 
+  it('loads an imported PNG storyboard through the same project-scoped path-free bridge', async () => {
+    await withTempDirectory(async (directory) => {
+      const fixture = await createFixture(directory);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+      const sourcePath = join(directory, 'storyboard.png');
+      await writeFile(sourcePath, png);
+      const image = await fixture.assets.import({
+        projectId: fixture.project.id,
+        sourcePath,
+        displayName: 'Storyboard.png',
+        kind: 'image',
+        mimeType: 'image/png'
+      });
+      const service = new ContinuityFrameService({ ...fixture, temporaryRoot: directory });
+      expect(await service.getReference({ projectId: fixture.project.id, assetId: image.id })).toEqual({
+        ok: true,
+        value: { displayName: 'Storyboard.png', mimeType: 'image/png', base64: png.toString('base64') }
+      });
+    });
+  });
+
   it('refuses an unprobed video before opening media or invoking FFmpeg', async () => {
     await withTempDirectory(async (directory) => {
       const fixture = await createFixture(directory, false);
