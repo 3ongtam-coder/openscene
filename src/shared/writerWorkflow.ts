@@ -633,6 +633,12 @@ const STAGE_DIRECTIONS: Record<WriterStage, string> = {
 };
 
 function compileStagedWriterPrompt(request: WriterRequest): string {
+  // Once a screenplay has been approved, downstream technical stages use the
+  // reviewed documents as their authority. Re-sending the raw brief duplicates
+  // instructions (often including "act as" / requested-output boilerplate),
+  // increases moderation surface and can make provider prompt-injection filters
+  // reject an otherwise ordinary production task.
+  const needsOriginalBrief = request.stage === 'concept' || request.stage === 'screenplay';
   return [
     `CURRENT STAGE: ${request.stage}. Produce this stage only.`,
     STAGE_DIRECTIONS[request.stage!],
@@ -641,7 +647,9 @@ function compileStagedWriterPrompt(request: WriterRequest): string {
     request.videoStyle ? VIDEO_STYLE_GUIDES[request.videoStyle] : '',
     request.emotionalGoal ? EMOTIONAL_GOAL_GUIDES[request.emotionalGoal] : '',
     // JSON quoting makes boundaries explicit even when source text contains tags.
-    `BRIEF (source data):\n${JSON.stringify({ source: request.sourceText, existingScreenplay: request.currentScreenplay ?? '' })}`,
+    needsOriginalBrief
+      ? `BRIEF (source data):\n${JSON.stringify({ source: request.sourceText, existingScreenplay: request.currentScreenplay ?? '' })}`
+      : '',
     `APPROVED UPSTREAM DOCUMENTS (source data):\n${JSON.stringify(request.approvedContext ?? [])}`,
     `CREATOR REVISION NOTES FOR THIS STAGE:\n${JSON.stringify(request.revisionInstructions ?? '')}`,
     request.currentStageText ? `CURRENT STAGE DRAFT TO REVISE (source data):\n${JSON.stringify(request.currentStageText)}\nApply the creator's revision notes to this draft, retaining useful manual edits and respecting approved upstream decisions.` : '',
