@@ -57,6 +57,7 @@ import type { SaveAiProjectDocumentInput } from '../shared/aiProjectDomain';
 import type { WriterDraft, WriterGenerationInput } from '../shared/writerWorkflow';
 import type { ComfyUiMotionWorkerStatus } from '../shared/comfyUiMotion';
 import type { StartTranscriptionInput, TranscriptionJob, WhisperCppRuntimeStatus } from '../shared/transcription';
+import type { ExtractContinuationFrameResult, ProjectAssetReferenceInput } from '../shared/continuityFrame';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -104,6 +105,8 @@ export interface VideoToolApi {
   aiGenerateVideo(request: VideoGenerationRequest): Promise<ApiResponse<VideoGenerationJob>>;
   aiGetComfyUiMotionStatus(): Promise<ApiResponse<ComfyUiMotionWorkerStatus>>;
   aiSelectReferenceImage(): Promise<ApiResponse<ReferenceImageSelection | null>>;
+  aiExtractContinuationFrame(input: ProjectAssetReferenceInput): Promise<ApiResponse<ExtractContinuationFrameResult>>;
+  aiGetProjectImageReference(input: ProjectAssetReferenceInput): Promise<ApiResponse<ReferenceImageSelection>>;
   aiGetVideoJob(jobId: string): Promise<ApiResponse<VideoGenerationJob>>;
   aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;
   aiListSpeechVoices(modelId: string): Promise<ApiResponse<readonly VoiceChoice[]>>;
@@ -231,6 +234,10 @@ const videoTool: VideoToolApi = {
   aiGenerateVideo: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateVideo, request) as Promise<ApiResponse<VideoGenerationJob>>,
   aiGetComfyUiMotionStatus: () => ipcRenderer.invoke(IPC_CHANNELS.aiGetComfyUiMotionStatus) as Promise<ApiResponse<ComfyUiMotionWorkerStatus>>,
   aiSelectReferenceImage: () => ipcRenderer.invoke(IPC_CHANNELS.aiSelectReferenceImage) as Promise<ApiResponse<ReferenceImageSelection | null>>,
+  aiExtractContinuationFrame: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.aiExtractContinuationFrame, input) as Promise<ApiResponse<ExtractContinuationFrameResult>>,
+  aiGetProjectImageReference: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.aiGetProjectImageReference, input) as Promise<ApiResponse<ReferenceImageSelection>>,
   aiGetVideoJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetVideoJob, jobId) as Promise<ApiResponse<VideoGenerationJob>>,
   aiGenerateSpeech: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateSpeech, request) as Promise<ApiResponse<TextToSpeechJob>>,
   aiListSpeechVoices: (modelId) =>

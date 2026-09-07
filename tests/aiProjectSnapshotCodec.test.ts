@@ -33,4 +33,28 @@ describe('AI project snapshot codec', () => {
     };
     expect(parsePersistedProject({ schemaVersion: 4, ...base, ai })).toBeNull();
   });
+
+  it('persists a project image held on a video track without inventing an image duration', () => {
+    const timeline = createInitialTimeline();
+    const videoTrack = timeline.tracks.find((track) => track.kind === 'video')!;
+    const still = {
+      id: 'asset-still', displayName: 'Continuity frame.jpg', projectRelativePath: 'assets/asset-still/original.jpg',
+      kind: 'image' as const, mimeType: 'image/jpeg', byteLength: 512, metadata: { durationMs: 0, width: 1280, height: 720 },
+      createdAt: timestamp, updatedAt: timestamp
+    };
+    const withStill = {
+      ...timeline,
+      tracks: timeline.tracks.map((track) => track.id === videoTrack.id ? {
+        ...track,
+        clips: [{
+          id: 'clip-still', assetId: still.id, timelineStartMs: 0,
+          sourceStartMs: 0, sourceEndMs: 4_000, sourceDurationMs: 4_000,
+          effects: { opacity: 1, scale: 1, positionX: 0, positionY: 0, rotation: 0, volume: 1 }, keyframes: []
+        }]
+      } : track)
+    };
+    expect(parsePersistedProject({
+      schemaVersion: 4, ...base, assets: [still], timeline: withStill, ai: createEmptyAiProjectDocument()
+    }))?.toMatchObject({ assets: [{ id: still.id, kind: 'image' }] });
+  });
 });
