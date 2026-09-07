@@ -201,6 +201,7 @@ function Shell() {
       // of one upright clip comes out upright rather than pillarboxed inside a
       // landscape frame, which is what this used to do to every phone video.
       ...(current.frame === undefined ? {} : { frame: current.frame }),
+      ...(current.subtitleDelivery === undefined ? {} : { subtitleDelivery: current.subtitleDelivery }),
       assets: current.assets.map((asset) => ({
         id: asset.id,
         uri: assetUri(current.id, asset),

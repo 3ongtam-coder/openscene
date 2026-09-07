@@ -103,6 +103,7 @@ Projects and past conversations live on the start page. Picking a chat reopens i
 - Review with a playhead and a best-effort Program Monitor
 - Export H.264/AAC MP4 through your local FFmpeg
 - Keyboard shortcuts throughout, remappable in Settings
+- Deliver reviewed automatic captions by burning them into the MP4, exporting a UTF-8 SRT/WebVTT/ASS sidecar, doing both, or doing neither. Manual titles always remain independent.
 
 ### Voice generation
 

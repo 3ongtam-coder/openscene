@@ -11,6 +11,8 @@ describe('renderer export panel source contract', () => {
     expect(exportPanelSource).toContain('window.videoTool.cancelExportJob');
     expect(exportPanelSource).toContain('window.videoTool.openExportResult');
     expect(exportPanelSource).toContain('window.videoTool.revealExportResult');
+    expect(exportPanelSource).toContain('Burn approved captions into MP4');
+    expect(exportPanelSource).toContain('SUBTITLE_SIDECAR_FORMATS');
     expect(exportPanelSource).not.toContain('ipcRenderer');
   });
 

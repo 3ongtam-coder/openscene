@@ -135,7 +135,7 @@ export function getExportStatusView(input: ExportUiInput): ExportStatusView {
         file measures leads here rather than trailing the size.
       */
       const review = input.job.state.review;
-      const ready = `${input.job.state.fileName} is ready. Size: ${formatExportBytes(input.job.state.fileSizeBytes)}.`;
+      const ready = `${input.job.state.fileName} is ready. Size: ${formatExportBytes(input.job.state.fileSizeBytes)}.${input.job.state.subtitleFileName === undefined ? '' : ` Subtitle: ${input.job.state.subtitleFileName}.`}`;
       if (review !== undefined && review.checked && !review.ok) {
         return {
           detail: `${exportReviewSummary(review)} ${ready}`,

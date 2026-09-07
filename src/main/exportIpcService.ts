@@ -5,6 +5,7 @@ import { audioProbeArgs, probeSaysAudible } from '../shared/audibleAssets';
 import { FILTER_LIST_ARGS, escapeFontPath, fontCandidates, supportsDrawtext } from '../shared/titleFont';
 import type { ApiResponse } from '../shared/models';
 import { EXPORT_DEFAULTS, type LocalExportJob, type LocalFfmpegRuntimeStatus, type StartExportJobInput } from '../shared/exportTypes';
+import { createSubtitleSidecar, DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleSidecar } from '../shared/subtitleDelivery';
 import { parseExportJobActionInput, parseStartExportJobInput } from '../shared/exportValidators';
 import type { LocalProjectSnapshot } from '../shared/timelineTypes';
 import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
@@ -16,7 +17,7 @@ import { discoverFfmpeg, type FfmpegDiscoveryResult } from './ffmpegDiscovery';
 import { startFfmpegExportProcess, type FfmpegExecution, type StartFfmpegExportProcessInput } from './ffmpegExportProcess';
 import { compileFfmpegTimeline, FfmpegTimelineError } from './ffmpegTimelineCompiler';
 import { ExportJobStore } from './exportJobStore';
-import { ExportOutputError, prepareExportOutputPath, removeExportOutput, validateExportOutput } from './exportOutputFiles';
+import { ExportOutputError, prepareExportOutputPath, removeExportOutput, validateExportOutput, writeExportSubtitleSidecar } from './exportOutputFiles';
 import { fail, ok } from './ipcResponses';
 
 type ProjectReader = {
@@ -47,6 +48,7 @@ type PreparedExport = {
   readonly stagingDirectory: string;
   /** What this run promises the file will be, to be checked against it after. */
   readonly promise: ExportPromise;
+  readonly sidecar?: SubtitleSidecar;
 };
 
 type PrepareExportInput = {
@@ -100,6 +102,14 @@ export class ExportIpcService {
       const project = await this.dependencies.projects.open(input.projectId);
       if (project === null) {
         return fail('PROJECT_NOT_FOUND', 'The project to export was not found.');
+      }
+      const delivery = input.subtitleDelivery ?? DEFAULT_SUBTITLE_DELIVERY;
+      if (delivery.sidecarFormat !== 'none') {
+        try {
+          createSubtitleSidecar(project.timeline, delivery.sidecarFormat);
+        } catch (error) {
+          return fail('EXPORT_REFUSED', error instanceof Error ? error.message : 'The subtitle sidecar could not be prepared.');
+        }
       }
       /*
         Whether this cut can be rendered at all, before anything is rendered.
@@ -260,6 +270,9 @@ export class ExportIpcService {
     const frameRate = input.request.frameRate ?? EXPORT_DEFAULTS.frameRate;
     let staged: StagedExportAssets | null = null;
     try {
+      const delivery = input.request.subtitleDelivery ?? DEFAULT_SUBTITLE_DELIVERY;
+      const exportTimeline = timelineForSubtitleDelivery(input.project.timeline, delivery);
+      const sidecar = delivery.sidecarFormat === 'none' ? undefined : createSubtitleSidecar(input.project.timeline, delivery.sidecarFormat);
       staged = await stageExportAssets({
         assets: this.dependencies.assets,
         project: input.project,
@@ -267,7 +280,7 @@ export class ExportIpcService {
         jobId: input.jobId
       });
       const compiled = compileFfmpegTimeline({
-        timeline: input.project.timeline,
+        timeline: exportTimeline,
         assetPaths: staged.assetPaths,
         // The compiler works from the timeline, which does not record what an
         // asset is; the project does. Without this a still is opened as a movie
@@ -285,7 +298,7 @@ export class ExportIpcService {
         audibleAssetIds: await this.audibleAssets(input.executablePath, staged.assetPaths),
         // Only looked for when there is something to draw: an export with no
         // titles must not fail because the machine has an unusual font layout.
-        ...((input.project.timeline.titles ?? []).length > 0
+        ...((exportTimeline.titles ?? []).length > 0
           ? { titleFontPath: await this.titleFont(input.executablePath) }
           : {}),
         outputPath,
@@ -307,7 +320,8 @@ export class ExportIpcService {
           // it should: a video clip whose source turned out to be silent maps
           // no audio, and a file with no sound is right in that case.
           hasSound: compiled.hasSound
-        }
+        },
+        ...(sidecar === undefined ? {} : { sidecar })
       };
     } catch (error: unknown) {
       await Promise.all([
@@ -341,6 +355,7 @@ export class ExportIpcService {
       return;
     }
     this.dependencies.jobs.markRunning(jobId, prepared.durationMs);
+    let subtitleOutputPath: string | undefined;
     try {
       const execution = this.startProcess({
         executablePath: prepared.executablePath,
@@ -358,7 +373,10 @@ export class ExportIpcService {
         return;
       }
       const output = await validateExportOutput(this.dependencies.exportsRoot, prepared.outputPath);
-      this.completedOutputs.set(jobId, prepared.outputPath);
+      const subtitleOutput = prepared.sidecar === undefined
+        ? undefined
+        : await writeExportSubtitleSidecar(this.dependencies.exportsRoot, jobId, prepared.sidecar);
+      subtitleOutputPath = subtitleOutput?.outputPath;
       /*
         Read the file back before calling it done.
 
@@ -371,7 +389,8 @@ export class ExportIpcService {
         prepared.promise,
         await measureExportedFile({ ffmpegPath: prepared.executablePath, filePath: prepared.outputPath })
       );
-      this.dependencies.jobs.markCompleted(jobId, output.fileName, output.fileSizeBytes, review);
+      this.dependencies.jobs.markCompleted(jobId, output.fileName, output.fileSizeBytes, review, subtitleOutput?.fileName);
+      this.completedOutputs.set(jobId, prepared.outputPath);
     } catch (error: unknown) {
       if (this.dependencies.jobs.get(jobId)?.state.kind === 'running') {
         const reason = error instanceof Error ? exportFailureReason(error) : 'The local FFmpeg export failed.';
@@ -382,7 +401,10 @@ export class ExportIpcService {
       const removePartialOutput = this.dependencies.jobs.get(jobId)?.state.kind === 'completed'
         ? Promise.resolve()
         : removeExportOutput(prepared.outputPath);
-      await Promise.all([removeExportStaging(prepared.stagingDirectory), removePartialOutput]);
+      const removePartialSubtitle = this.dependencies.jobs.get(jobId)?.state.kind === 'completed' || subtitleOutputPath === undefined
+        ? Promise.resolve()
+        : removeExportOutput(subtitleOutputPath);
+      await Promise.all([removeExportStaging(prepared.stagingDirectory), removePartialOutput, removePartialSubtitle]);
     }
   }
 
