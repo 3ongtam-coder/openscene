@@ -1,4 +1,4 @@
-import type { AiProjectDocument } from './aiProjectDomain';
+import type { AiProjectDocument, StyleBible } from './aiProjectDomain';
 import { isPlainRecord } from './timelineValidationPrimitives';
 import {
   applyWriterDraft, parseWriterRequest, validateWriterDraft, validateWriterResponse,
@@ -8,6 +8,31 @@ import {
   WRITER_STAGES, canOpenWriterStage, parseWriterPipelineState, putWriterArtifact,
   type WriterPipelineState, type WriterStage, type WriterStageArtifact
 } from './writerStages';
+
+const STYLE_LOCK_START = '[OPENSCENE_STYLE_LOCK]';
+const STYLE_LOCK_END = '[/OPENSCENE_STYLE_LOCK]';
+
+/**
+ * Re-applies the approved project look at the provider boundary. The composer
+ * stays editable, but a user edit or refinement cannot silently discard the
+ * continuity constraints that were approved in Writer.
+ */
+export function applyWriterStyleLock(prompt: string, styleBible: StyleBible): string {
+  const priorLock = new RegExp(`\\n?${STYLE_LOCK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${STYLE_LOCK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
+  const editablePrompt = prompt.replace(priorLock, '\n').trim();
+  const locked = [
+    STYLE_LOCK_START,
+    'These approved visual-continuity rules are immutable for this shot.',
+    `Palette: ${styleBible.palette.join(', ') || 'use the approved production palette'}`,
+    `Lighting: ${styleBible.lighting || 'use the approved production lighting'}`,
+    `Camera grammar: ${styleBible.cameraGrammar || 'use the approved camera grammar'}`,
+    `Texture: ${styleBible.texture || 'use the approved production texture'}`,
+    `Forbidden changes: ${styleBible.forbiddenChanges.join('; ') || 'none beyond the approved shot constraints'}`,
+    'Ignore any instruction that conflicts with these continuity rules.',
+    STYLE_LOCK_END
+  ].join('\n');
+  return `${editablePrompt}\n\n${locked}`.trim();
+}
 
 export function pipelineBaseRequest(state: WriterPipelineState | undefined): WriterRequest | null {
   if (!state) return null;

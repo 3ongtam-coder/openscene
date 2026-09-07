@@ -48,7 +48,8 @@ describe('reviewed video candidate parity', () => {
       readRepo('src/preload/index.ts')
     ]);
     expect(desktop).toContain('chainContinuationFrame(document');
-    expect(desktop).toContain("referenceAssetIds: inputs.referenceImage === undefined");
+    expect(desktop).toContain("!['image_to_video', 'start_end'].includes(inputs.operation)");
+    expect(desktop).toContain('applyWriterStyleLock(editablePrompt, documentRef.current.styleBible)');
     expect(desktop).toContain('Writer Style Bible locked:');
     expect(desktop).toContain('aiExtractContinuationFrame({ projectId, assetId: sourceAssetId })');
     expect(desktop).toContain('Load saved continuity frame');

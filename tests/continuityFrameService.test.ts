@@ -103,7 +103,7 @@ describe('continuity frame service', () => {
           displayName: 'Approved take - continuity frame.jpg',
           kind: 'image',
           mimeType: 'image/jpeg',
-          metadata: { durationMs: 0, width: 1280, height: 720 }
+          metadata: { durationMs: 0 }
         },
         reference: { mimeType: 'image/jpeg', base64: jpegFrame.toString('base64') }
       });
@@ -120,6 +120,28 @@ describe('continuity frame service', () => {
           base64: jpegFrame.toString('base64')
         }
       });
+    });
+  });
+
+  it('moves earlier when the nominal final timestamp produces no decodable frame', async () => {
+    await withTempDirectory(async (directory) => {
+      const fixture = await createFixture(directory);
+      const attemptedTimes: number[] = [];
+      const service = new ContinuityFrameService({
+        ...fixture,
+        temporaryRoot: directory,
+        discoverFfmpeg: async () => ({ kind: 'system', executablePath: 'ffmpeg' }),
+        runExtraction: async (input) => {
+          attemptedTimes.push(input.sourceTimeMs);
+          if (attemptedTimes.length === 1) throw new Error('No frame at rounded container end.');
+          await writeFile(input.outputPath, jpegFrame);
+        }
+      });
+
+      const response = await service.extract({ projectId: fixture.project.id, assetId: fixture.video.id });
+      expect(response.ok).toBe(true);
+      if (response.ok) expect(response.value.sourceTimeMs).toBe(7_500);
+      expect(attemptedTimes).toEqual([7_900, 7_500]);
     });
   });
 

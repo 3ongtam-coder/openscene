@@ -7,14 +7,15 @@ Issue: [#328](https://github.com/Theorvane/openscene/issues/328)
 - Approved Writer shots now expose their persisted `AiShot` ids, so candidate records cannot point at synthetic UI-only ids.
 - An approved, imported candidate can materialize a near-tail JPEG and attach it as the immediately following Writer shot's `start_frame` reference.
 - The next candidate records only references that were actually loaded into its provider request.
-- The approved Style Bible replaces the free-form visual preset while a Writer shot is loaded.
+- The approved Style Bible replaces the free-form visual preset while a Writer shot is loaded and is re-applied to the final provider prompt after every manual edit or refinement.
 
 ## Trust boundary
 
 - The renderer sends only `projectId` and `assetId`.
 - Main reopens the asset through `AssetLibraryStore`, stages it from the validated file handle, invokes FFmpeg without a shell, and imports the result through the normal project transaction.
 - The bridge returns bounded JPEG bytes and project metadata, never an absolute path.
-- Temporary files use a private directory and bounded Windows cleanup retries. Logs include ids, byte counts, duration, and stages; they exclude paths and image bytes.
+- Temporary files use a private directory and bounded Windows cleanup retries. A timed-out FFmpeg process is cancelled and allowed to release its file handles before cleanup. Logs include ids, byte counts, duration, and stages; they exclude paths and image bytes.
+- Tail extraction starts 100ms before the probed end, then falls back to 500ms and 1500ms guards for containers whose duration is rounded. The imported still does not inherit the source video's dimensions because FFmpeg may scale it down.
 
 ## Human gate
 
