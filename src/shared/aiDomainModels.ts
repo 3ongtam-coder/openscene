@@ -225,7 +225,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'google_gemini',
     label: 'Gemini Omni 1.1 Flash',
     providerLabel: 'Google Gemini',
-    description: 'Fast text/image-to-video with native audio, 3-10s at 720p.',
+    description: 'Paid Gemini API: fast text/image-to-video with native audio, 3-10s at 720p.',
     executionPath: 'api',
     domains: ['video-generation'],
     available: true
@@ -551,7 +551,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'google_gemini',
     label: 'Nano Banana 2',
     providerLabel: 'Google Nano Banana',
-    description: 'Recommended all-round Gemini image generation and reference editing model.',
+    description: 'Paid Gemini API: recommended all-round image generation and reference editing model.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
@@ -561,7 +561,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'google_gemini',
     label: 'Nano Banana 2 Lite',
     providerLabel: 'Google Nano Banana',
-    description: 'Fastest and lowest-cost Nano Banana model at 1K output.',
+    description: 'Paid Gemini API: fastest and lowest-cost Nano Banana model at 1K output.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
@@ -571,7 +571,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'google_gemini',
     label: 'Nano Banana Pro',
     providerLabel: 'Google Nano Banana',
-    description: 'Premium Gemini image model for complex, production-quality assets.',
+    description: 'Paid Gemini API: premium image model for complex, production-quality assets.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
@@ -581,7 +581,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'google_gemini',
     label: 'Nano Banana',
     providerLabel: 'Google Nano Banana',
-    description: 'Legacy Nano Banana model for fast 1K generation and editing.',
+    description: 'Paid Gemini API: legacy Nano Banana model for fast 1K generation and editing.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
