@@ -1,5 +1,19 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import type { AiProjectDocument } from '../../shared/aiProjectDomain';
+import {
+  CONTINUITY_REVIEW_FIELDS,
+  type AiProjectDocument,
+  type ContinuityReviewField,
+  type ContinuityReviewValue
+} from '../../shared/aiProjectDomain';
+import {
+  addGenerationCandidate,
+  decideGenerationCandidate,
+  emptyContinuityReview,
+  setCandidateContinuity,
+  setCandidateReviewNotes,
+  updateGenerationCandidate,
+  type GenerationReviewResult
+} from '../../shared/generationReview';
 import { approvedWriterShots } from '../../shared/writerPipeline';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
@@ -22,6 +36,14 @@ const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: strin
   { id: 'reference_to_video', label: 'References' },
   { id: 'motion_control', label: 'Motion' }
 ];
+const CONTINUITY_LABELS: Readonly<Record<ContinuityReviewField, string>> = {
+  identity: 'Character identity',
+  wardrobeProps: 'Wardrobe & props',
+  settingPalette: 'Setting & palette',
+  motionDirection: 'Motion direction',
+  boundaryMatch: 'Start / end boundary'
+};
+const REVIEW_VALUES: readonly Exclude<ContinuityReviewValue, 'unchecked'>[] = ['pass', 'warning', 'fail'];
 
 type VideoInputSnapshot = {
   readonly operation: VideoOperation;
@@ -36,6 +58,7 @@ type VideoGenerationWorkspaceProps = {
   readonly writerDocument?: AiProjectDocument | null;
   readonly projectId?: string | null;
   readonly projectAssets?: readonly MediaAsset[];
+  readonly onSaveAi?: (document: AiProjectDocument) => Promise<boolean>;
   /**
    * Controlled from App so the image studio's "Use for video" can hand a
    * generated still straight into this form. Keeping it local meant the handoff
@@ -47,6 +70,7 @@ type VideoGenerationWorkspaceProps = {
 
 export function VideoGenerationWorkspace({
   writerDocument,
+  onSaveAi,
   projectId,
   projectAssets = [],
   referenceImage,
@@ -54,9 +78,10 @@ export function VideoGenerationWorkspace({
 }: VideoGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const videoModel = selectedModel('video-generation');
-  const { importAiResult } = useProjectResultImport();
+  const { importAiResult, placeAiAssetOnTimeline } = useProjectResultImport();
   const [prompt, setPrompt] = useState('');
   const [writerShotId, setWriterShotId] = useState('');
+  const [loadedWriterShotId, setLoadedWriterShotId] = useState('');
   const writerShots = approvedWriterShots(writerDocument);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [durationSeconds, setDurationSeconds] = useState<number>(5);
@@ -92,6 +117,10 @@ export function VideoGenerationWorkspace({
   // Image-to-video seed: the bytes travel inline, so no path reaches here.
   const [jobs, setJobs] = useState<readonly VideoGenerationJob[]>([]);
   const [jobInputs, setJobInputs] = useState<Readonly<Record<string, VideoInputSnapshot>>>({});
+  const [candidateNotes, setCandidateNotes] = useState<Readonly<Record<string, string>>>({});
+  const documentRef = useRef<AiProjectDocument | null>(writerDocument ?? null);
+  const candidateSaveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
+  const [isSavingCandidate, setIsSavingCandidate] = useState(false);
   const pollTimers = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
   const activePollJobs = useRef<Set<string>>(new Set());
   const inFlightPollJobs = useRef<Set<string>>(new Set());
@@ -104,6 +133,39 @@ export function VideoGenerationWorkspace({
   const [note, setNote] = useState('');
   // Nothing to report until something happens; an idle card is just noise.
   const [statusMsg, setStatusMsg] = useState<{ text: string; tone: 'neutral' | 'success' | 'warning' | 'danger' } | null>(null);
+  const selectedCandidates = writerShotId === '' ? [] : (writerDocument?.generations ?? []).filter((entry) => entry.shotId === writerShotId).slice().reverse();
+
+  useEffect(() => {
+    documentRef.current = writerDocument ?? null;
+  }, [writerDocument]);
+
+  const persistCandidateChange = async (
+    change: (document: AiProjectDocument) => GenerationReviewResult
+  ): Promise<boolean> => {
+    setIsSavingCandidate(true);
+    const save = candidateSaveQueue.current.catch(() => false).then(async () => {
+      const current = documentRef.current;
+      if (current === null || onSaveAi === undefined) {
+        setStatusMsg({ tone: 'warning', text: 'Open a project with an approved Writer breakdown before recording candidates.' });
+        return false;
+      }
+      const result = change(current);
+      if (!result.ok) {
+        setStatusMsg({ tone: 'warning', text: result.reason });
+        return false;
+      }
+      documentRef.current = result.document;
+      const saved = await onSaveAi(result.document);
+      if (!saved && documentRef.current === result.document) documentRef.current = current;
+      return saved;
+    });
+    candidateSaveQueue.current = save;
+    try {
+      return await save;
+    } finally {
+      if (candidateSaveQueue.current === save) setIsSavingCandidate(false);
+    }
+  };
 
   const refreshMotionWorker = async (): Promise<void> => {
     setCheckingMotionWorker(true);
@@ -158,6 +220,8 @@ export function VideoGenerationWorkspace({
     readonly stylePreset?: string;
     readonly inputs?: VideoInputSnapshot;
     readonly modelId?: string;
+    readonly writerShotId?: string;
+    readonly parentGenerationId?: string;
   }): Promise<void> => {
     const promptText = overrides?.prompt ?? prompt;
     const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
@@ -178,6 +242,7 @@ export function VideoGenerationWorkspace({
         : {})
     };
     const targetModelId = overrides?.modelId ?? videoModel.id;
+    const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
       setStatusMsg({ text: `${videoModel.label} does not implement ${inputs.operation} in this build.`, tone: 'warning' });
       return;
@@ -224,6 +289,21 @@ export function VideoGenerationWorkspace({
         const job = response.value as VideoGenerationJob;
         setJobs((prev) => [job, ...prev]);
         setJobInputs((current) => ({ ...current, [job.id]: inputs }));
+        if (targetWriterShotId !== '') {
+          const recorded = await persistCandidateChange((document) => addGenerationCandidate(document, {
+            id: job.id,
+            shotId: targetWriterShotId,
+            providerId: job.provider,
+            modelId: job.modelId ?? targetModelId,
+            capability: inputs.operation,
+            prompt: promptText,
+            createdAt: job.createdAt,
+            ...(overrides?.parentGenerationId === undefined ? {} : { parentGenerationId: overrides.parentGenerationId })
+          }));
+          if (!recorded) {
+            setStatusMsg({ text: `Job ${job.id} started, but its candidate record could not be saved. Let it finish, then do not approve it until the project is checked.`, tone: 'warning' });
+          }
+        }
         setStatusMsg({ text: `Job started (${job.id}). Synthesizing video frames...`, tone: 'neutral' });
 
         // Poll for job completion
@@ -262,10 +342,16 @@ export function VideoGenerationWorkspace({
             if (updatedJob.status === 'completed') {
               stopPolling(intervalId);
               setIsGenerating(false);
+              if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+                status: 'completed', updatedAt: updatedJob.updatedAt
+              }));
               setStatusMsg({ text: `Video generation completed! Asset ready.`, tone: 'success' });
             } else if (updatedJob.status === 'failed') {
               stopPolling(intervalId);
               setIsGenerating(false);
+              if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+                status: 'failed', error: updatedJob.error ?? 'Unknown error', updatedAt: updatedJob.updatedAt
+              }));
               setStatusMsg({ text: `Generation failed: ${updatedJob.error ?? 'Unknown error'}`, tone: 'danger' });
             }
           } catch (error) {
@@ -306,13 +392,15 @@ export function VideoGenerationWorkspace({
     // Shown in the composer as well, so what was asked for is visible rather
     // than only implied by a new job appearing.
     setPrompt(refined.prompt);
+    const sourceCandidate = documentRef.current?.generations.find((entry) => entry.id === job.id);
     void handleGenerate({
       prompt: refined.prompt,
       aspectRatio: job.aspectRatio,
       durationSeconds: job.durationSeconds,
       ...(job.modelId === undefined ? {} : { modelId: job.modelId }),
       ...(job.stylePreset === undefined ? {} : { stylePreset: job.stylePreset }),
-      inputs: jobInputs[job.id] ?? { operation: job.operation ?? 'text_to_video' }
+      inputs: jobInputs[job.id] ?? { operation: job.operation ?? 'text_to_video' },
+      ...(sourceCandidate === undefined ? {} : { writerShotId: sourceCandidate.shotId, parentGenerationId: sourceCandidate.id })
     });
   };
 
@@ -333,9 +421,30 @@ export function VideoGenerationWorkspace({
     try {
       const status = await importAiResult(job.id);
       setStatusMsg(status);
+      if (status.importedAssetId !== undefined && documentRef.current?.generations.some((entry) => entry.id === job.id)) {
+        const saved = await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+          outputAssetIds: [status.importedAssetId!], updatedAt: new Date().toISOString()
+        }));
+        if (saved) setStatusMsg({ tone: 'success', text: 'Candidate imported. Complete the continuity review before approval.' });
+      }
     } catch (err) {
       setStatusMsg({ text: `Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, tone: 'danger' });
     }
+  };
+
+  const setContinuity = async (generationId: string, field: ContinuityReviewField, value: ContinuityReviewValue): Promise<void> => {
+    const current = documentRef.current?.generations.find((entry) => entry.id === generationId);
+    const notes = candidateNotes[generationId] ?? current?.review?.notes ?? '';
+    await persistCandidateChange((document) => setCandidateContinuity(document, generationId, field, value, notes));
+  };
+
+  const decideCandidate = async (generationId: string, decision: 'approved' | 'rejected'): Promise<void> => {
+    const current = documentRef.current?.generations.find((entry) => entry.id === generationId);
+    const notes = candidateNotes[generationId] ?? current?.review?.notes ?? '';
+    const saved = await persistCandidateChange((document) => decideGenerationCandidate(document, generationId, decision, notes, new Date().toISOString()));
+    if (saved) setStatusMsg({ tone: decision === 'approved' ? 'success' : 'neutral', text: decision === 'approved'
+      ? 'Candidate approved for this Writer shot. Any previously approved take was replaced.'
+      : 'Candidate rejected. It remains in the project history for comparison.' });
   };
 
   return (
@@ -526,9 +635,14 @@ export function VideoGenerationWorkspace({
                       ))}
                     </ol>
                   )}
+                  {job.status === 'completed' && job.previewUrl !== undefined && (
+                    <video className="studio-job__preview" controls preload="metadata" src={job.previewUrl}>
+                      Generated video preview is unavailable in this renderer.
+                    </video>
+                  )}
                   {job.status === 'completed' && job.outputFilePath !== undefined && (
-                    <Button variant="primary" onClick={() => void handleImportToProject(job)}>
-                      Import to project
+                    <Button variant="primary" disabled={(writerDocument?.generations.find((entry) => entry.id === job.id)?.outputAssetIds.length ?? 0) > 0} onClick={() => void handleImportToProject(job)}>
+                      {(writerDocument?.generations.find((entry) => entry.id === job.id)?.outputAssetIds.length ?? 0) > 0 ? 'Imported' : 'Import to project'}
                     </Button>
                   )}
                   {(job.status === 'completed' || job.status === 'failed') && (
@@ -563,13 +677,79 @@ export function VideoGenerationWorkspace({
             </ul>
           )}
         </div>
+
+        <div className="studio-field">
+          <span className="studio-field__label">Shot candidates & continuity approval</span>
+          {writerShotId === '' ? (
+            <p className="studio-empty">Choose an approved Writer shot below. Generations without a Writer shot remain ad-hoc jobs and cannot be continuity-approved.</p>
+          ) : selectedCandidates.length === 0 ? (
+            <p className="studio-empty">No saved candidates for this shot yet. The next generation will be recorded here.</p>
+          ) : (
+            <ul className="studio-job-list">
+              {selectedCandidates.map((candidate) => {
+                const review = candidate.review ?? { decision: 'pending' as const, continuity: emptyContinuityReview(), notes: '' };
+                const outputNames = candidate.outputAssetIds.map((assetId) => projectAssets.find((asset) => asset.id === assetId)?.displayName ?? assetId);
+                return (
+                  <li key={candidate.id} className="studio-job studio-candidate">
+                    <div className="studio-job__row">
+                      <span className={`studio-job__status studio-job__status--${candidate.status}`}>{candidate.status}</span>
+                      <span className="studio-job__provider">{candidate.modelId}</span>
+                      <span className={`studio-candidate__decision studio-candidate__decision--${review.decision}`}>{review.decision}</span>
+                    </div>
+                    <p className="studio-job__prompt">{originalOf(candidate.prompt)}</p>
+                    {outputNames.length === 0
+                      ? <p className="studio-reference__empty">Not imported. Import the completed job above before approval.</p>
+                      : <p className="studio-reference__empty">Project asset: {outputNames.join(', ')}</p>}
+                    <div className="studio-candidate__checklist" aria-label="Human continuity review">
+                      {CONTINUITY_REVIEW_FIELDS.map((field) => (
+                        <div className="studio-candidate__check" key={field}>
+                          <span>{CONTINUITY_LABELS[field]}</span>
+                          <div className="studio-chips" role="group" aria-label={CONTINUITY_LABELS[field]}>
+                            {REVIEW_VALUES.map((value) => <button key={value} type="button"
+                              disabled={isSavingCandidate}
+                              aria-pressed={review.continuity[field] === value}
+                              className={`studio-chip${review.continuity[field] === value ? ' studio-chip--selected' : ''}`}
+                              onClick={() => void setContinuity(candidate.id, field, value)}>{value}</button>)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <textarea className="studio-refine__input" rows={2}
+                      disabled={isSavingCandidate}
+                      value={candidateNotes[candidate.id] ?? review.notes}
+                      onChange={(event) => setCandidateNotes((current) => ({ ...current, [candidate.id]: event.target.value }))}
+                      onBlur={() => {
+                        const notes = candidateNotes[candidate.id];
+                        if (notes !== undefined && notes !== review.notes) void persistCandidateChange((document) => setCandidateReviewNotes(document, candidate.id, notes));
+                      }}
+                      placeholder="Review notes; required when accepting a warning."
+                      aria-label="Candidate review notes" />
+                    <div className="studio-candidate__actions">
+                      <Button variant="primary" disabled={isSavingCandidate || review.decision === 'approved'} onClick={() => void decideCandidate(candidate.id, 'approved')}>Approve candidate</Button>
+                      <Button variant="ghost" disabled={isSavingCandidate || review.decision === 'rejected'} onClick={() => void decideCandidate(candidate.id, 'rejected')}>Reject</Button>
+                      {review.decision === 'approved' && candidate.outputAssetIds[0] !== undefined && <Button variant="ghost" disabled={isSavingCandidate} onClick={() => {
+                        const placed = placeAiAssetOnTimeline(candidate.outputAssetIds[0]!);
+                        setStatusMsg({ tone: placed ? 'success' : 'warning', text: placed
+                          ? 'Approved candidate added to the timeline. Review the cut, then save the timeline.'
+                          : 'The approved asset could not be placed. Wait for metadata probing or add a compatible video track.' });
+                      }}>Add approved to timeline</Button>}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Composer mirrors the chat prompt card: write, then act. */}
       <div className="studio-composer">
         {writerShots.length > 0 && <div className="studio-field">
           <label className="studio-field__label" htmlFor="writer-video-shot">Approved Writer shot</label>
-          <select id="writer-video-shot" disabled={isGenerating} value={writerShotId} onChange={(e) => setWriterShotId(e.target.value)}>
+          <select id="writer-video-shot" disabled={isGenerating} value={writerShotId} onChange={(e) => {
+            setWriterShotId(e.target.value);
+            setLoadedWriterShotId('');
+          }}>
             <option value="">Choose a shot to load into the composer</option>
             {writerShots.map((shot) => <option key={shot.id} value={shot.id}>{shot.label}</option>)}
           </select>
@@ -580,9 +760,12 @@ export function VideoGenerationWorkspace({
               setStatusMsg({ tone: 'warning', text: `This shot needs ${shot.durationSeconds}s; the selected operation accepts ${durationOptions.join('/')}s. Choose a compatible model or revise the Writer shot. Nothing was submitted.` });
               return;
             }
-            setPrompt(shot.prompt); setDurationSeconds(shot.durationSeconds);
+            setPrompt(shot.prompt); setDurationSeconds(shot.durationSeconds); setLoadedWriterShotId(shot.id);
             setStatusMsg({ tone: 'neutral', text: 'Approved shot loaded, not generated. Review the prompt, visual preset and any reference image before pressing Generate. References are not attached automatically.' });
           }}>Use approved shot (no generation)</Button>
+          <span className="studio-reference__empty">{loadedWriterShotId === writerShotId && writerShotId !== ''
+            ? 'The next generation will be saved as a candidate for this Writer shot.'
+            : 'Select a shot and press Use approved shot before generation to link the candidate.'}</span>
         </div>}
         <textarea
           className="studio-composer__input"

@@ -401,6 +401,7 @@ export function App(): ReactElement {
               >
                 <VideoGenerationWorkspace
                   writerDocument={editor.project?.ai ?? null}
+                  onSaveAi={editor.saveAiProjectDocument}
                   projectId={editor.project?.id ?? null}
                   projectAssets={editor.project?.assets ?? []}
                   referenceImage={videoReferenceImage}

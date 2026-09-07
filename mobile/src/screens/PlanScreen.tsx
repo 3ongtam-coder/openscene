@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { composeShotPrompt, refineShotPrompt, revisionsOf, takeLabel } from '@openvideo/shared/shotPrompt';
 import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
 import { approvedWriterShots } from '@openvideo/shared/writerPipeline';
+import {
+  CONTINUITY_REVIEW_FIELDS,
+  type ContinuityReview,
+  type ContinuityReviewField,
+  type ContinuityReviewValue
+} from '@openvideo/shared/aiProjectDomain';
+import { candidateApprovalBlockReason, emptyContinuityReview } from '@openvideo/shared/generationReview';
 import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
 import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
@@ -13,7 +21,7 @@ import { isFrameExtractionAvailable } from '../../modules/video-export';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { generateShot } from '../lib/videoGeneration';
-import { appendAssetToTimeline, clipIdForAsset, readProject, replaceTakeInTimeline } from '../lib/projectStore';
+import { appendAssetToTimeline, assetUri, clipIdForAsset, readProject, replaceTakeInTimeline, saveGeneratedVideoCandidate, type MobileAsset } from '../lib/projectStore';
 import { SpendPrompt } from '../components/SpendPrompt';
 import { FormScreen } from '../components/FormScreen';
 import { useRevealOnFocus } from '../components/KeyboardAwareScroll';
@@ -37,6 +45,10 @@ type ShotState =
 type ShotTake = {
   readonly prompt: string;
   readonly takeNumber: number;
+  readonly assetId: string;
+  readonly decision: 'pending' | 'approved' | 'rejected';
+  readonly continuityReview: ContinuityReview;
+  readonly reviewNotes: string;
   readonly clipId?: string;
   readonly operation?: VideoOperation;
   /** The frame this shot started from, so a redo continues from the same place. */
@@ -44,6 +56,15 @@ type ShotTake = {
   readonly lastFrame?: { readonly base64: string; readonly mimeType: string };
   readonly referenceImages?: readonly { readonly base64: string; readonly mimeType: string }[];
 };
+
+const REVIEW_LABELS: Readonly<Record<ContinuityReviewField, string>> = {
+  identity: 'Identity',
+  wardrobeProps: 'Wardrobe / props',
+  settingPalette: 'Setting / palette',
+  motionDirection: 'Motion direction',
+  boundaryMatch: 'Start / end boundary'
+};
+const REVIEW_VALUES: readonly Exclude<ContinuityReviewValue, 'unchecked'>[] = ['pass', 'warning', 'fail'];
 
 const LENGTHS = [8, 16, 30, 45, 60] as const;
 const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: string }[] = [
@@ -74,7 +95,8 @@ export function PlanScreen({
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [prompt, setPrompt] = useState('');
   const [writerMessage, setWriterMessage] = useState('');
-  const writerShots = approvedWriterShots(projectId === null ? null : readProject(projectId)?.ai);
+  const activeProject = projectId === null ? null : readProject(projectId);
+  const writerShots = approvedWriterShots(activeProject?.ai);
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
   const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
   // Keyed by shot index, because the plan can change under them and an array
@@ -216,11 +238,7 @@ export function PlanScreen({
         mark({ kind: 'failed', message: 'The project could not be read to save this shot.' });
         break;
       }
-      const placed = appendAssetToTimeline(project, result.asset);
-      if (placed === null) {
-        mark({ kind: 'failed', message: 'The clip was generated but no video track would take it.' });
-        continue;
-      }
+      saveGeneratedVideoCandidate(project, result.asset);
       // Kept so this shot can be asked for again with a change: the prompt to
       // build on, the clip the next take stands in for, and the frame this one
       // started from.
@@ -229,10 +247,11 @@ export function PlanScreen({
         [shot.index]: {
           prompt: shotPrompt,
           takeNumber: 1,
+          assetId: result.asset.id,
+          decision: 'pending',
+          continuityReview: emptyContinuityReview(),
+          reviewNotes: '',
           operation: shotOperation,
-          ...(clipIdForAsset(placed, result.asset.id) === null
-            ? {}
-            : { clipId: clipIdForAsset(placed, result.asset.id) as string }),
           ...(startFrame === undefined ? {} : { startFrame }),
           ...(shotOperation === 'start_end' && lastFrame !== null ? { lastFrame } : {}),
           ...(shotOperation === 'reference_to_video' ? { referenceImages: assetReferences } : {})
@@ -296,22 +315,9 @@ export function PlanScreen({
       return;
     }
 
-    /*
-      Standing in for the previous take where there is one to stand in for.
-
-      Without a clip to replace — the first take failed, or its clip has since
-      been deleted — the new take is appended instead. Appending is the honest
-      fallback: the take exists and was paid for, so it belongs in the project
-      even when the editor cannot say exactly where.
-    */
-    const placed =
-      take.clipId === undefined
-        ? appendAssetToTimeline(project, result.asset)
-        : replaceTakeInTimeline(project, take.clipId, result.asset) ?? appendAssetToTimeline(project, result.asset);
-    if (placed === null) {
-      mark({ kind: 'failed', message: 'The take was generated but no video track would take it.' });
-      return;
-    }
+    // Keep the new take in the library. The existing approved clip stays on the
+    // timeline until this candidate passes review and the user approves it.
+    saveGeneratedVideoCandidate(project, result.asset);
 
     setTakes((current) => ({
       ...current,
@@ -319,12 +325,57 @@ export function PlanScreen({
         ...take,
         prompt: refined.prompt,
         takeNumber: take.takeNumber + 1,
-        ...(take.clipId === undefined && clipIdForAsset(placed, result.asset.id) !== null
-          ? { clipId: clipIdForAsset(placed, result.asset.id) as string }
-          : {})
+        assetId: result.asset.id,
+        decision: 'pending',
+        continuityReview: emptyContinuityReview(),
+        reviewNotes: ''
       }
     }));
     mark({ kind: 'done' });
+  };
+
+  const reviewTake = (index: number, field: ContinuityReviewField, value: ContinuityReviewValue): void => {
+    setTakes((current) => {
+      const take = current[index];
+      return take === undefined ? current : {
+        ...current,
+        [index]: { ...take, decision: 'pending', continuityReview: { ...take.continuityReview, [field]: value } }
+      };
+    });
+  };
+
+  const approveTake = (index: number): void => {
+    const take = takes[index];
+    if (projectId === null || take === undefined) return;
+    const blocked = candidateApprovalBlockReason({
+      status: 'completed',
+      outputAssetIds: [take.assetId],
+      review: { decision: take.decision, continuity: take.continuityReview, notes: take.reviewNotes }
+    });
+    if (blocked !== null) {
+      setShotStates((current) => current.map((entry, position) => position === index - 1 ? { kind: 'failed', message: blocked } : entry));
+      return;
+    }
+    const project = readProject(projectId);
+    const asset = project?.assets.find((entry) => entry.id === take.assetId);
+    if (project === null || asset === undefined) {
+      setWriterMessage('This candidate is no longer available in the project library.');
+      return;
+    }
+    const placed = take.clipId === undefined
+      ? appendAssetToTimeline(project, asset)
+      : replaceTakeInTimeline(project, take.clipId, asset) ?? appendAssetToTimeline(project, asset);
+    if (placed === null) {
+      setWriterMessage('The candidate is safe in the library, but no video track could accept it.');
+      return;
+    }
+    const clipId = take.clipId ?? clipIdForAsset(placed, asset.id) ?? undefined;
+    setTakes((current) => ({
+      ...current,
+      [index]: { ...take, decision: 'approved', ...(clipId === undefined ? {} : { clipId }) }
+    }));
+    setWriterMessage(`Take ${take.takeNumber} approved and placed on the timeline.`);
+    setShotStates((current) => current.map((entry, position) => position === index - 1 ? { kind: 'done' } : entry));
   };
 
   const start = (): void => {
@@ -493,6 +544,7 @@ export function PlanScreen({
       </Text>
       {plan.shots.map((shot) => {
         const take = takes[shot.index];
+        const candidateAsset = take === undefined ? undefined : activeProject?.assets.find((asset) => asset.id === take.assetId);
         const revisions = take === undefined ? [] : revisionsOf(take.prompt);
         return (
           <View key={shot.index}>
@@ -520,7 +572,7 @@ export function PlanScreen({
             {take !== undefined && (
               <View style={styles.takeRow}>
                 <Text style={styles.takeLabel}>
-                  {takeLabel(take.takeNumber)}
+                  {takeLabel(take.takeNumber)} · {take.decision}
                   {revisions.length > 0 ? ` · ${revisions.length} change${revisions.length === 1 ? '' : 's'}` : ''}
                 </Text>
                 <Pressable
@@ -534,6 +586,47 @@ export function PlanScreen({
                 >
                   <Text style={styles.redoText}>{redoing === shot.index ? 'Redoing…' : 'Redo with a note'}</Text>
                 </Pressable>
+              </View>
+            )}
+
+            {take !== undefined && (
+              <View style={styles.reviewCard}>
+                <Text style={styles.label}>Continuity review</Text>
+                {candidateAsset !== undefined && projectId !== null && <CandidateVideo key={candidateAsset.id} projectId={projectId} asset={candidateAsset} />}
+                {CONTINUITY_REVIEW_FIELDS.map((field) => (
+                  <View key={field}>
+                    <Text style={styles.body}>{REVIEW_LABELS[field]}</Text>
+                    <View style={styles.row}>
+                      {REVIEW_VALUES.map((value) => <Chip key={value} label={value}
+                        selected={take.continuityReview[field] === value}
+                        onPress={() => reviewTake(shot.index, field, value)} />)}
+                    </View>
+                  </View>
+                ))}
+                <TextInput
+                  style={styles.shotInput}
+                  value={take.reviewNotes}
+                  onChangeText={(value) => setTakes((current) => ({
+                    ...current,
+                    [shot.index]: { ...take, decision: 'pending', reviewNotes: value }
+                  }))}
+                  placeholder="Review notes; required if you accept a warning"
+                  placeholderTextColor={theme.textWeaker}
+                  multiline
+                  accessibilityLabel={`Review notes for shot ${shot.index}`}
+                />
+                <View style={styles.row}>
+                  <Pressable accessibilityRole="button" disabled={take.decision === 'approved'}
+                    onPress={() => approveTake(shot.index)}
+                    style={press([styles.approve, take.decision === 'approved' && styles.approveOff])}>
+                    <Text style={styles.approveText}>{take.decision === 'approved' ? 'Approved on timeline' : 'Approve to timeline'}</Text>
+                  </Pressable>
+                  <Pressable accessibilityRole="button" disabled={take.decision === 'rejected'}
+                    onPress={() => setTakes((current) => ({ ...current, [shot.index]: { ...take, decision: 'rejected' } }))}
+                    style={press([styles.redo, take.decision === 'rejected' && styles.approveOff])}>
+                    <Text style={styles.redoText}>Reject candidate</Text>
+                  </Pressable>
+                </View>
               </View>
             )}
 
@@ -603,7 +696,7 @@ export function PlanScreen({
         )}
         {shotStates.some((state) => state.kind === 'done') && (
           <Text style={styles.footnote}>
-            Finished shots are appended to the project&apos;s video track — open Edit to see them.
+            Finished candidates are saved in the project library. Review each one above; only an approved take changes the timeline.
           </Text>
         )}
       </View>
@@ -651,6 +744,11 @@ function ReferenceRow({ value, empty, onPick, onRemove }: {
       <Text style={styles.redoText}>{value === null ? 'Choose image' : 'Remove'}</Text>
     </Pressable>
   </View>;
+}
+
+function CandidateVideo({ projectId, asset }: { readonly projectId: string; readonly asset: MobileAsset }) {
+  const player = useVideoPlayer(assetUri(projectId, asset));
+  return <VideoView player={player} style={styles.candidateVideo} contentFit="contain" nativeControls />;
 }
 
 function Chip({ label, selected, disabled = false, onPress }: { label: string; selected: boolean; disabled?: boolean; onPress: () => void }) {
@@ -711,6 +809,8 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top'
   },
   takeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
+  reviewCard: { marginTop: 10, padding: 12, gap: 8, borderRadius: 10, borderWidth: 1, borderColor: theme.line, backgroundColor: theme.surface },
+  candidateVideo: { width: '100%', aspectRatio: 16 / 9, borderRadius: 10, backgroundColor: '#000' },
   takeLabel: { flex: 1, color: theme.textWeak, fontSize: 13 },
   redo: {
     justifyContent: 'center',

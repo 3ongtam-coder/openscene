@@ -8,7 +8,7 @@ import { AssetLibraryStore } from '../src/main/assetLibraryStore';
 import { ProjectStore } from '../src/main/projectStore';
 import { createTimelineAssetRequestHandler } from '../src/main/timelineAssetResponse';
 import { TimelineIpcService } from '../src/main/timelineIpcService';
-import { speechPreviewUrl } from '../src/shared/mediaPlaybackUrls';
+import { speechPreviewUrl, videoPreviewUrl } from '../src/shared/mediaPlaybackUrls';
 import { createMp4MediaFixture, type Mp4MediaFixture } from './helpers/mediaFixtures';
 
 let mediaFixture: Mp4MediaFixture | undefined;
@@ -76,6 +76,29 @@ describe('timeline asset response', () => {
       expect(Buffer.from(await response.arrayBuffer())).toEqual(speechBytes.subarray(5, 12));
       expect(url).not.toContain(speechPath);
       expect((await handler(new Request('video-tool-asset://speech-preview/../escape'))).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('streams a generated video candidate by opaque job id', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'video-candidate-preview-'));
+    const videoPath = join(directory, 'generated.mp4');
+    const videoBytes = Buffer.from('candidate-video-bytes');
+    try {
+      await writeFile(videoPath, videoBytes);
+      const handler = createTimelineAssetRequestHandler({
+        openAssetPlaybackSource: async () => null,
+        openGeneratedVideoSource: async (jobId) => jobId === 'video-job-1'
+          ? { file: await open(videoPath, 'r'), filePath: videoPath, byteLength: videoBytes.byteLength, mimeType: 'video/mp4' }
+          : null
+      });
+      const url = videoPreviewUrl('video-job-1');
+      const response = await handler(new Request(url));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('video/mp4');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(videoBytes);
+      expect(url).not.toContain(videoPath);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

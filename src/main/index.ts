@@ -31,7 +31,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
 import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
@@ -585,7 +585,8 @@ app.whenReady().then(async () => {
   installDisplayMediaHandler();
   registerTimelineAssetProtocol({
     openAssetPlaybackSource: (projectId, assetId) => timelineIpcService.openAssetPlaybackSource(projectId, assetId),
-    openGeneratedSpeechSource: (jobId) => openCompletedSpeechPreviewSource(jobId)
+    openGeneratedSpeechSource: (jobId) => openCompletedSpeechPreviewSource(jobId),
+    openGeneratedVideoSource: (jobId) => openCompletedVideoPreviewSource(jobId)
   });
   await installIpcHandlers();
   createWindow();

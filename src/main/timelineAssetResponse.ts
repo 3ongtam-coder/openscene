@@ -6,6 +6,7 @@ import { isOpaqueId } from './projectStoreSupport';
 export type MediaPlaybackResolver = {
   openAssetPlaybackSource(projectId: string, assetId: string): Promise<OpenedAssetPlaybackSource | null>;
   openGeneratedSpeechSource?(jobId: string): Promise<OpenedAssetPlaybackSource | null>;
+  openGeneratedVideoSource?(jobId: string): Promise<OpenedAssetPlaybackSource | null>;
 };
 
 function notFound(): Response {
@@ -101,6 +102,17 @@ export function createTimelineAssetRequestHandler(
       resolver.openGeneratedSpeechSource !== undefined
     ) {
       const source = await resolver.openGeneratedSpeechSource(segments[0]);
+      return source === null ? notFound() : streamAssetResponse(request, source);
+    }
+    if (
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      url.hostname === 'video-preview' &&
+      segments.length === 1 &&
+      segments[0] !== undefined &&
+      isOpaqueId(segments[0]) &&
+      resolver.openGeneratedVideoSource !== undefined
+    ) {
+      const source = await resolver.openGeneratedVideoSource(segments[0]);
       return source === null ? notFound() : streamAssetResponse(request, source);
     }
     const projectId = segments[0];

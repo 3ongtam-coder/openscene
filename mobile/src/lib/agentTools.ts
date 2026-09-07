@@ -13,7 +13,7 @@ import type { ImageAspectRatio } from '@openvideo/shared/providerSeams';
 import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
 import type { VideoAspectRatio } from '@openvideo/shared/videoGeneration';
 import { readKey, type ProviderSlot } from './credentials';
-import { appendAssetToTimeline, readProject, saveGeneratedImage } from './projectStore';
+import { readProject, saveGeneratedImage, saveGeneratedVideoCandidate } from './projectStore';
 import { generateShot } from './videoGeneration';
 import type { SpendFeature } from './permissions';
 import type { ToolSchema } from './agentChatClient';
@@ -69,7 +69,7 @@ const VIDEO_MODEL_IDS = getDomainModels('video-generation')
 export const GENERATE_VIDEO_TOOL: AgentTool = {
   name: 'generate_video',
   description:
-    'Generate one video shot and append it to the open project. This charges your provider account. Plan and price first.',
+    'Generate one video candidate and save it to the open project for human continuity review. This charges your provider account. Plan and price first.',
   parameters: {
     type: 'object',
     properties: {
@@ -100,12 +100,8 @@ export const GENERATE_VIDEO_TOOL: AgentTool = {
     if (!result.ok) return { summary: result.message };
     const project = readProject(context.projectId);
     if (project === null) return { summary: 'The shot was generated but the project could not be read to save it.' };
-    return {
-      summary:
-        appendAssetToTimeline(project, result.asset) === null
-          ? 'The shot was generated but no video track would take it.'
-          : `Generated and appended "${result.asset.displayName}" to the timeline.`
-    };
+    saveGeneratedVideoCandidate(project, result.asset);
+    return { summary: `Generated "${result.asset.displayName}" and saved it as a candidate. Open Video to review it before changing the timeline.` };
   }
 };
 
