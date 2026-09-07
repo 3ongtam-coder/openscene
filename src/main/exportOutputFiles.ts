@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
 import { basename, isAbsolute, resolve } from 'node:path';
+import type { SubtitleSidecar } from '../shared/subtitleDelivery';
 
 import { isInsideDirectory, isOpaqueId } from './projectStoreSupport';
 
@@ -75,4 +76,49 @@ export async function validateExportOutput(rootDirectory: string, outputPath: st
 
 export async function removeExportOutput(outputPath: string): Promise<void> {
   await rm(outputPath, { force: true });
+}
+
+export type WrittenSubtitleSidecar = {
+  readonly outputPath: string;
+  readonly fileName: string;
+  readonly fileSizeBytes: number;
+};
+
+/** Writes a generated-name UTF-8 sidecar beside the MP4 without accepting any renderer path. */
+export async function writeExportSubtitleSidecar(
+  rootDirectory: string,
+  jobId: string,
+  sidecar: SubtitleSidecar
+): Promise<WrittenSubtitleSidecar> {
+  if (!isAbsolute(rootDirectory) || !isOpaqueId(jobId)) {
+    throw new ExportOutputError('Subtitle output configuration was not safe.');
+  }
+  await mkdir(rootDirectory, { recursive: true, mode: 0o700 });
+  const rootRealPath = await secureRootPath(rootDirectory);
+  const outputPath = resolve(rootRealPath, `${jobId}.${sidecar.extension}`);
+  if (!isInsideDirectory(rootRealPath, outputPath)) throw new ExportOutputError('Subtitle output path escaped its configured root.');
+  let created = false;
+  try {
+    const file = await open(outputPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    created = true;
+    try {
+      await file.writeFile(sidecar.contents, { encoding: 'utf8' });
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    const validated = await open(outputPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const [real, stats, pathStats] = await Promise.all([realpath(outputPath), validated.stat(), lstat(outputPath)]);
+      if (!isInsideDirectory(rootRealPath, real) || pathStats.isSymbolicLink() || !stats.isFile() || stats.size <= 0 || stats.dev !== pathStats.dev || stats.ino !== pathStats.ino) {
+        throw new ExportOutputError('The subtitle sidecar was not a valid contained file.');
+      }
+      return { outputPath, fileName: basename(outputPath), fileSizeBytes: stats.size };
+    } finally {
+      await validated.close();
+    }
+  } catch (error) {
+    if (created) await rm(outputPath, { force: true });
+    throw error;
+  }
 }

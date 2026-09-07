@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 
 import type { LocalExportJob } from '../../../shared/exportTypes';
+import { automaticCaptionTitles, DEFAULT_SUBTITLE_DELIVERY, SUBTITLE_SIDECAR_FORMATS, type SubtitleDelivery, type SubtitleSidecarFormat } from '../../../shared/subtitleDelivery';
 import { outputFrameFor, type FramePreference } from '../../../shared/outputFrame';
 import {
   DEFAULT_EXPORT_FRAME,
@@ -64,10 +65,22 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
   const project = editor.project;
   const hasProject = project !== null;
   const [framePreference, setFramePreference] = useState<FramePreference>(DEFAULT_EXPORT_FRAME);
+  const [subtitleDelivery, setSubtitleDelivery] = useState<SubtitleDelivery>(DEFAULT_SUBTITLE_DELIVERY);
 
   useEffect(() => {
     setFramePreference(project === null ? DEFAULT_EXPORT_FRAME : readFramePreference(project.id));
+    setSubtitleDelivery(DEFAULT_SUBTITLE_DELIVERY);
   }, [project?.id]);
+
+  const automaticCaptionCount = useMemo(
+    () => project === null ? 0 : automaticCaptionTitles(project.timeline).length,
+    [project]
+  );
+  useEffect(() => {
+    if (automaticCaptionCount === 0) {
+      setSubtitleDelivery((current) => current.sidecarFormat === 'none' ? current : { ...current, sidecarFormat: 'none' });
+    }
+  }, [automaticCaptionCount]);
 
   /*
     The frame this cut goes into, decided by the rule both surfaces share.
@@ -126,7 +139,8 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
       projectId: project.id,
       // Sent explicitly: the main process falls back to the first video asset's
       // size, which is the answer this control exists to replace.
-      ...(frame === null ? {} : { width: frame.width, height: frame.height })
+      ...(frame === null ? {} : { width: frame.width, height: frame.height }),
+      subtitleDelivery
     });
     setIsStarting(false);
     if (response.ok) {
@@ -134,7 +148,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
       return;
     }
     setUnavailableReason(errorMessage(response.error));
-  }, [actionState.canStart, frame, project]);
+  }, [actionState.canStart, frame, project, subtitleDelivery]);
 
   const cancelExport = useCallback(async (): Promise<void> => {
     if (job === null || !actionState.canCancel) return;
@@ -212,6 +226,24 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
                 what the file will be. */}
             <span className="export-panel__frame-size">{frame === null ? '—' : `${frame.width} × ${frame.height}`}</span>
           </label>
+          <fieldset className="export-panel__captions" disabled={!hasProject || isStarting || actionState.canCancel}>
+            <legend>Automatic captions ({automaticCaptionCount})</legend>
+            <label>
+              <input type="checkbox" checked={subtitleDelivery.burnAutomaticCaptions}
+                onChange={(event) => setSubtitleDelivery((current) => ({ ...current, burnAutomaticCaptions: event.target.checked }))} />
+              Burn approved captions into MP4
+            </label>
+            <label htmlFor="export-subtitle-sidecar">
+              Subtitle sidecar
+              <select id="export-subtitle-sidecar" value={subtitleDelivery.sidecarFormat}
+                onChange={(event) => setSubtitleDelivery((current) => ({ ...current, sidecarFormat: event.target.value as SubtitleSidecarFormat }))}>
+                {SUBTITLE_SIDECAR_FORMATS.map((format) => <option key={format} value={format} disabled={format !== 'none' && automaticCaptionCount === 0}>
+                  {format === 'none' ? 'None' : format.toUpperCase()}
+                </option>)}
+              </select>
+            </label>
+            <span>Sidecars contain automatic captions only; manual timeline titles remain in the MP4.</span>
+          </fieldset>
           <div className="export-popover__actions" role="toolbar" aria-label="MP4 export actions">
             <Button variant="primary" onClick={() => void startExport()} disabled={!actionState.canStart || isStarting}>Export MP4</Button>
             <Button variant="stop" onClick={() => void cancelExport()} disabled={!actionState.canCancel || isCancelling}>Cancel</Button>

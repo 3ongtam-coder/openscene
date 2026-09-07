@@ -6,6 +6,7 @@ import { resolveTimelineTrackForAsset, trackAppendStartMs } from '@openvideo/sha
 import { placeClip, replaceClipSource } from '@openvideo/shared/timelineClipLogic';
 import { isStill, stillClipSource } from '@openvideo/shared/timelineStills';
 import { assembleApprovedProductionCut, buildApprovedProductionAssemblyPlan } from '@openvideo/shared/productionWorkflow';
+import { parseSubtitleDelivery, type SubtitleDelivery } from '@openvideo/shared/subtitleDelivery';
 
 import { createInitialTimeline } from '@openvideo/shared/timelineLogic';
 import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, type TimelineDocument } from '@openvideo/shared/timelineTypes';
@@ -89,6 +90,8 @@ export type MobileProject = {
    * the footage already. Absent means the footage decides.
    */
   readonly frame?: FramePreference;
+  /** Mobile currently supports the burn decision; sidecar delivery remains desktop-only. */
+  readonly subtitleDelivery?: SubtitleDelivery;
 };
 
 export type ProjectSummary = { readonly id: string; readonly name: string; readonly updatedAt: string };
@@ -161,6 +164,8 @@ export function readProject(id: string): MobileProject | null {
       ? createEmptyAiProjectDocument()
       : parseAiProjectDocument(candidate.ai, new Set(assets.map((asset) => asset.id)));
     if (ai === null) return null;
+    const subtitleDelivery = candidate.subtitleDelivery === undefined ? undefined : parseSubtitleDelivery(candidate.subtitleDelivery);
+    if (subtitleDelivery === null || subtitleDelivery?.sidecarFormat !== 'none') return null;
     return {
       schemaVersion: PROJECT_SCHEMA_VERSION,
       id: candidate.id,
@@ -175,7 +180,8 @@ export function readProject(id: string): MobileProject | null {
       ai,
       // A stored preference nobody recognises reads as absent, which is the
       // footage deciding — the same answer a project written before this had.
-      ...(isFramePreference(candidate.frame) ? { frame: candidate.frame } : {})
+      ...(isFramePreference(candidate.frame) ? { frame: candidate.frame } : {}),
+      ...(subtitleDelivery === undefined ? {} : { subtitleDelivery })
     };
   } catch {
     // An unreadable project is reported as absent rather than crashing the list;
@@ -211,6 +217,9 @@ export function writeProject(project: MobileProject): void {
   if (!dir.exists) dir.create({ intermediates: true });
   const ai = parseAiProjectDocument(project.ai, new Set(project.assets.map((asset) => asset.id)));
   if (ai === null) throw new Error('Invalid AI project document.');
+  if (project.subtitleDelivery !== undefined && (parseSubtitleDelivery(project.subtitleDelivery) === null || project.subtitleDelivery.sidecarFormat !== 'none')) {
+    throw new Error('Mobile subtitle delivery must use burn-in or no automatic captions; sidecar files are desktop-only.');
+  }
   projectFile(project.id).write(JSON.stringify({ ...project, schemaVersion: PROJECT_SCHEMA_VERSION, ai, updatedAt: new Date().toISOString() }));
   announce();
 }

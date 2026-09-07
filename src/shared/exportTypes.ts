@@ -1,4 +1,5 @@
 import type { ExportReview } from './exportReview';
+import type { SubtitleDelivery } from './subtitleDelivery';
 
 export const EXPORT_DEFAULTS = {
   width: 1920,
@@ -11,6 +12,8 @@ export type StartExportJobInput = {
   readonly width?: number;
   readonly height?: number;
   readonly frameRate?: number;
+  /** Absent preserves pre-caption export behavior: burn timeline captions and create no sidecar. */
+  readonly subtitleDelivery?: SubtitleDelivery;
 };
 
 export type ExportJobActionInput = {
@@ -36,6 +39,7 @@ export type ExportJobState =
       readonly completedAt: string;
       readonly fileName: string;
       readonly fileSizeBytes: number;
+      readonly subtitleFileName?: string;
       /**
        * What the finished file turned out to be, read back off the file.
        *
