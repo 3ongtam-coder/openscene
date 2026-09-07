@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 import { requestAgentRouterCodexWriter, type AgentRouterCodexRunner } from '../src/main/agentRouterCodexWriter';
@@ -39,11 +39,17 @@ describe('AgentRouter Codex Writer bridge', () => {
       expect(input.args.join(' ')).not.toContain('router-secret');
       expect(input.args.join(' ')).not.toContain(request.sourceText);
       expect(input.stdin).toContain(request.sourceText);
-      expect(input.stdin).toContain('"framing":{"type":"string"}');
+      expect(input.stdin).not.toContain('"framing":{"type":"string"}');
       expect(input.env.AGENT_ROUTER_TOKEN).toBe('router-secret');
       const outputIndex = input.args.indexOf('-o');
       const resultPath = input.args[outputIndex + 1];
       expect(resultPath).toBeTruthy();
+      const schemaIndex = input.args.indexOf('--output-schema');
+      const schemaPath = input.args[schemaIndex + 1];
+      expect(schemaPath).toBeTruthy();
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toMatchObject({
+        required: ['title', 'screenplay', 'characters', 'styleBible', 'scenes']
+      });
       await writeFile(resultPath!, JSON.stringify(draft), 'utf8');
       input.onProgress?.({ type: 'started', pid: 123 });
       input.onProgress?.({ type: 'codex_event', eventType: 'thread.started' });
@@ -83,6 +89,30 @@ describe('AgentRouter Codex Writer bridge', () => {
       })).rejects.toThrow('Rejected [REDACTED] for [REDACTED_INPUT]');
       const logs = errorLog.mock.calls.flat().join('\n');
       expect(logs).not.toContain(privateModelOutput);
+      expect(logs).not.toContain('router-secret');
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('turns a provider content block into an actionable error without exposing the payload', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const runCli: AgentRouterCodexRunner = async () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({
+        type: 'turn.failed',
+        error: { message: '{"error":{"code":"content-blocked","message":"content-blocked (request id: safe123)"}}' }
+      }),
+      stderr: ''
+    });
+    try {
+      await expect(requestAgentRouterCodexWriter({
+        apiKey: 'router-secret', modelId: 'agentrouter/glm-5.3', request,
+        executable: 'codex-test.exe', runCli
+      })).rejects.toThrow('AgentRouter blocked the request before the model generated a response');
+      const logs = errorLog.mock.calls.flat().join('\n');
+      expect(logs).toContain('Request ID: safe123');
+      expect(logs).not.toContain(request.sourceText);
       expect(logs).not.toContain('router-secret');
     } finally {
       errorLog.mockRestore();

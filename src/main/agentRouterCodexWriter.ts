@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, extname, join, resolve } from 'node:path';
 
@@ -26,6 +26,7 @@ const AGENT_ROUTER_HEARTBEAT_MS = 10_000;
 const MAX_CLI_OUTPUT_BYTES = 16 * 1024 * 1024;
 const TEMP_DIRECTORY_PREFIX = 'openscene-agentrouter-codex-';
 const RESULT_FILE_NAME = 'writer-result.json';
+const SCHEMA_FILE_NAME = 'writer-schema.json';
 
 export type AgentRouterCodexProgressEvent =
   | { readonly type: 'started'; readonly pid?: number }
@@ -239,7 +240,7 @@ function codexEnvironment(apiKey: string): NodeJS.ProcessEnv {
   return { ...env, AGENT_ROUTER_TOKEN: apiKey, OPENAI_API_KEY: apiKey };
 }
 
-function codexArguments(modelId: string, resultPath: string): readonly string[] {
+function codexArguments(modelId: string, resultPath: string, schemaPath: string): readonly string[] {
   return [
     'exec',
     '--ignore-user-config',
@@ -249,6 +250,7 @@ function codexArguments(modelId: string, resultPath: string): readonly string[] 
     '--sandbox', 'read-only',
     '--json',
     '-o', resultPath,
+    '--output-schema', schemaPath,
     '-c', 'approval_policy="never"',
     '-c', `model="${modelId}"`,
     '-c', 'model_provider="agentrouter"',
@@ -270,8 +272,7 @@ function compileAgentRouterWriterInput(request: WriterRequest): string {
     writerSystemPrompt(request),
     'Do not inspect files, run commands, browse, or call tools. Complete this writing task directly.',
     compileWriterPrompt(request),
-    'Return exactly one JSON object and no prose. The object must satisfy this JSON Schema:',
-    JSON.stringify(writerResponseSchema(request))
+    'Return exactly one JSON object and no prose. The response shape is enforced separately by the client.'
   ].join('\n\n');
 }
 
@@ -321,6 +322,16 @@ function extractCodexError(stdout: string): string {
     }
   }
   return messages.at(-1) ?? '';
+}
+
+function actionableCodexError(detail: string): string {
+  if (!/content-blocked/i.test(detail)) return detail;
+  const requestId = detail.match(/request id:\s*([A-Za-z0-9_-]+)/i)?.[1];
+  return [
+    'AgentRouter blocked the request before the model generated a response.',
+    'Retry once; if it persists, use Gemini for this stage or revise sensitive wording in the approved material.',
+    ...(requestId === undefined ? [] : [`Request ID: ${requestId}.`])
+  ].join(' ');
 }
 
 function isSafeTempDirectory(path: string): boolean {
@@ -416,10 +427,12 @@ export async function requestAgentRouterCodexWriter(input: AgentRouterCodexWrite
     terminalLog(runId, 'info', 'client.resolved', { executable: basename(executable) });
     workspace = await mkdtemp(join(tmpdir(), TEMP_DIRECTORY_PREFIX));
     const resultPath = join(workspace, RESULT_FILE_NAME);
+    const schemaPath = join(workspace, SCHEMA_FILE_NAME);
+    await writeFile(schemaPath, JSON.stringify(writerResponseSchema(request)), 'utf8');
     terminalLog(runId, 'info', 'workspace.created', { directory: basename(workspace) });
     const result = await (input.runCli ?? runAgentRouterCodex)({
       executable,
-      args: codexArguments(agentRouterNativeModelId(input.modelId), resultPath),
+      args: codexArguments(agentRouterNativeModelId(input.modelId), resultPath, schemaPath),
       cwd: workspace,
       env: codexEnvironment(apiKey),
       stdin: compileAgentRouterWriterInput(request),
@@ -429,7 +442,7 @@ export async function requestAgentRouterCodexWriter(input: AgentRouterCodexWrite
     });
     const codexError = extractCodexError(result.stdout);
     if (result.exitCode !== 0 || codexError) {
-      const detail = safeDetail(codexError || result.stderr, apiKey, privateText);
+      const detail = actionableCodexError(safeDetail(codexError || result.stderr, apiKey, privateText));
       throw new Error(`AgentRouter Writer failed${detail ? `: ${detail}` : '.'}`);
     }
     let rawResult: string;
