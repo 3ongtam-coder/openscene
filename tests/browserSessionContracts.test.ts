@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildGeminiBrowserImagePrompt,
+  geminiBrowserModelTierFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -51,5 +52,12 @@ describe('browser session shared boundary', () => {
       'Visual style: Cinematic.',
       'Do not include: text, watermark.'
     ].join('\n'));
+  });
+
+  it('maps API image models onto the model tiers Gemini Apps exposes', () => {
+    expect(geminiBrowserModelTierFor('gemini-3.1-flash-image')).toBe('flash');
+    expect(geminiBrowserModelTierFor('gemini-3.1-flash-lite-image')).toBe('flash-lite');
+    expect(geminiBrowserModelTierFor('gemini-3-pro-image')).toBe('pro');
+    expect(geminiBrowserModelTierFor('gemini-2.5-flash-image')).toBe('flash');
   });
 });

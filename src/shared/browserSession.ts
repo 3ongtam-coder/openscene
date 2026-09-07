@@ -29,6 +29,15 @@ export type GeminiBrowserImagePromptInput = {
   readonly negativePrompt?: string;
 };
 
+export type GeminiBrowserModelTier = 'flash' | 'flash-lite' | 'pro';
+
+/** Map API catalog choices onto the model tiers exposed by Gemini Apps. */
+export function geminiBrowserModelTierFor(modelId: string): GeminiBrowserModelTier {
+  if (modelId.includes('flash-lite')) return 'flash-lite';
+  if (modelId.includes('pro')) return 'pro';
+  return 'flash';
+}
+
 /**
  * Gemini Apps does not expose the API's aspect-ratio fields to this bridge.
  * Preserve the same intent as explicit prompt text so the user can review the

@@ -1,4 +1,5 @@
 import type { Rectangle, WebContents } from 'electron';
+import type { GeminiBrowserModelTier } from '../shared/browserSession';
 
 const INPUT_SELECTORS = [
   'rich-textarea div[contenteditable="true"]',
@@ -14,12 +15,21 @@ const DOWNLOAD_SELECTORS = [
   'button[aria-label*="Tải xuống"]'
 ] as const;
 
+const MODEL_PICKER_SELECTORS = [
+  'button[aria-label*="mode picker" i]',
+  'button[aria-label*="open mode picker" i]',
+  'button[aria-label*="model picker" i]',
+  'button[aria-label*="chọn chế độ" i]'
+] as const;
+
 const POLL_INTERVAL_MS = 1_000;
 
 type AutomationState = {
   readonly url: string;
   readonly input?: Rectangle;
   readonly downloadButtons: readonly Rectangle[];
+  readonly modelPicker?: { readonly rectangle: Rectangle; readonly text: string };
+  readonly modelOptions: readonly { readonly rectangle: Rectangle; readonly text: string }[];
   readonly actionRequired?: 'sign_in' | 'verification' | 'rate_limit';
 };
 
@@ -32,6 +42,7 @@ export type GeminiBrowserAutomationProgress =
 
 export type GeminiBrowserAutomationInput = {
   readonly prompt: string;
+  readonly modelTier: GeminiBrowserModelTier;
   readonly timeoutMs: number;
   readonly onProgress?: (stage: GeminiBrowserAutomationProgress, elapsedMs: number) => void;
 };
@@ -78,6 +89,20 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
         if (rect) buttons.push(rect);
       }
     }
+    const modelPickerSelectors = ${JSON.stringify(MODEL_PICKER_SELECTORS)};
+    let modelPicker;
+    for (const selector of modelPickerSelectors) {
+      const element = [...document.querySelectorAll(selector)].find((candidate) => visibleRect(candidate));
+      const rectangle = element ? visibleRect(element) : null;
+      if (element && rectangle) {
+        modelPicker = { rectangle, text: (element.textContent || element.getAttribute('aria-label') || '').trim() };
+        break;
+      }
+    }
+    const modelOptions = [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"]')]
+      .map((element) => ({ element, rectangle: visibleRect(element) }))
+      .filter((entry) => entry.rectangle)
+      .map((entry) => ({ rectangle: entry.rectangle, text: (entry.element.textContent || '').trim() }));
     const url = location.href;
     const text = (document.body?.innerText || '').toLowerCase();
     let actionRequired;
@@ -88,8 +113,47 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
     } else if (/you(?:'|’)ve reached (?:your|the) limit|too many requests|rate limit|đã đạt giới hạn/.test(text)) {
       actionRequired = 'rate_limit';
     }
-    return { url, ...(input ? { input } : {}), downloadButtons: buttons, ...(actionRequired ? { actionRequired } : {}) };
+    return {
+      url,
+      ...(input ? { input } : {}),
+      downloadButtons: buttons,
+      ...(modelPicker ? { modelPicker } : {}),
+      modelOptions,
+      ...(actionRequired ? { actionRequired } : {})
+    };
   })()`, true) as Promise<AutomationState>;
+}
+
+function normalizedLabel(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function matchesTier(label: string, tier: GeminiBrowserModelTier): boolean {
+  const normalized = normalizedLabel(label);
+  if (tier === 'flash-lite') return normalized.includes('flash-lite') || normalized.includes('flash lite');
+  if (tier === 'pro') return /(?:^|\s)pro(?:\s|$)/.test(normalized);
+  return normalized.includes('flash') && !normalized.includes('lite');
+}
+
+async function selectModelTier(
+  webContents: WebContents,
+  state: AutomationState,
+  tier: GeminiBrowserModelTier
+): Promise<void> {
+  if (state.modelPicker === undefined) {
+    throw new Error(`Gemini loaded, but its model picker was not found. OpenScene cannot guarantee the requested ${tier} tier.`);
+  }
+  if (matchesTier(state.modelPicker.text, tier)) return;
+  clickAt(webContents, state.modelPicker.rectangle);
+  await delay(600);
+  const openState = await readState(webContents);
+  if (openState.actionRequired !== undefined) throw actionRequiredError(openState.actionRequired);
+  const option = openState.modelOptions.find((candidate) => matchesTier(candidate.text, tier));
+  if (option === undefined) {
+    throw new Error(`The signed-in Gemini account does not expose the requested ${tier} model tier.`);
+  }
+  clickAt(webContents, option.rectangle);
+  await delay(800);
 }
 
 function actionRequiredError(kind: NonNullable<AutomationState['actionRequired']>): Error {
@@ -126,8 +190,10 @@ export async function automateGeminiImageGeneration(
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
 
-  const ready = await waitForInput(webContents, deadline);
+  let ready = await waitForInput(webContents, deadline);
   input.onProgress?.('ready', Date.now() - startedAt);
+  await selectModelTier(webContents, ready, input.modelTier);
+  ready = await waitForInput(webContents, deadline);
   const initialDownloadCount = ready.downloadButtons.length;
   clickAt(webContents, ready.input!);
   await delay(150);

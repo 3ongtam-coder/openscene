@@ -6,7 +6,7 @@ Google's Gemini API quota and the consumer Gemini Apps allowance are separate. A
 
 1. The user signs in once under Settings. Cookies remain in the existing encrypted vault and are restored only into an isolated in-memory Electron partition.
 2. Image Generation defaults Google models to **Signed-in session**; **API key** remains selectable.
-3. Generate starts a hidden real Chromium renderer, loads `gemini.google.com/app`, fills the normalized image prompt, submits it, waits for a new generated-image download control, and clicks it.
+3. Generate starts a hidden real Chromium renderer, loads `gemini.google.com/app`, maps the selected catalog model onto the matching Flash, Flash-Lite, or Pro tier in Gemini Apps, fills the normalized image prompt, submits it, waits for a new generated-image download control, and clicks it. If that account does not expose the requested tier, the job fails instead of silently using a different model.
 4. Main intercepts that user-account download inside the isolated session, limits it to 50 MB, and verifies PNG, JPEG, or WebP magic bytes before handing it to the existing image job.
 5. The ordinary result preview, save, and Use for video actions continue unchanged.
 

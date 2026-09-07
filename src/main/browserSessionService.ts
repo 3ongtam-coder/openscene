@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import {
   BROWSER_SESSION_PROVIDERS,
   buildGeminiBrowserImagePrompt,
+  geminiBrowserModelTierFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -23,6 +24,7 @@ const GEMINI_DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_BROWSER_IMAGE_BYTES = 50 * 1024 * 1024;
 
 export type GeminiBrowserImageGenerationInput = {
+  readonly modelId: string;
   readonly prompt: string;
   readonly aspectRatio: string;
   readonly stylePreset?: string;
@@ -350,6 +352,7 @@ export class BrowserSessionService {
       );
       await automateGeminiImageGeneration(automationWindow.webContents, {
         prompt,
+        modelTier: geminiBrowserModelTierFor(input.modelId),
         timeoutMs: GEMINI_IMAGE_TIMEOUT_MS,
         onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
       });
