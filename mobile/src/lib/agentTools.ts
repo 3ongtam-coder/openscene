@@ -4,7 +4,7 @@ import { planVideoStoryboard } from '@openvideo/shared/videoStoryboardPlan';
 import { timelineDurationMs } from '@openvideo/shared/timelineLogic';
 import {
   requestBytePlusImage,
-  requestImagenImage,
+  requestNanoBananaImage,
   requestOpenAiImage,
   type GeneratedImageData
 } from '@openvideo/shared/imageGeneration';
@@ -52,7 +52,10 @@ export type ToolContext = {
 
 const IMAGE_BINDINGS: Readonly<Record<string, { slot: ProviderSlot; request: (input: never) => Promise<GeneratedImageData> }>> = {
   'gpt-image-1': { slot: 'openaiApiKey', request: requestOpenAiImage as never },
-  'imagen-4.0-generate-001': { slot: 'geminiApiKey', request: requestImagenImage as never },
+  'gemini-3.1-flash-image': { slot: 'geminiApiKey', request: requestNanoBananaImage as never },
+  'gemini-3.1-flash-lite-image': { slot: 'geminiApiKey', request: requestNanoBananaImage as never },
+  'gemini-3-pro-image': { slot: 'geminiApiKey', request: requestNanoBananaImage as never },
+  'gemini-2.5-flash-image': { slot: 'geminiApiKey', request: requestNanoBananaImage as never },
   'seedream-3-0-t2i-250415': { slot: 'bytePlusApiKey', request: requestBytePlusImage as never }
 };
 

@@ -278,6 +278,127 @@ export async function requestVeoVideo(input: VideoRequestInput): Promise<VideoDo
   }
 }
 
+type GeminiInteractionVideo = {
+  readonly type?: string;
+  readonly mime_type?: string;
+  readonly uri?: string;
+};
+
+type GeminiInteractionVideoResponse = {
+  readonly id?: string;
+  /** SDK-shaped responses expose this; raw REST responses expose steps. */
+  readonly output_video?: GeminiInteractionVideo;
+  readonly steps?: readonly {
+    readonly type?: string;
+    readonly content?: readonly GeminiInteractionVideo[];
+  }[];
+};
+
+function geminiVideoFileId(uri: string): string | undefined {
+  const match = uri.match(/(?:^|\/)files\/([A-Za-z0-9_-]+)(?::download)?(?:[/?#]|$)/);
+  return match?.[1];
+}
+
+/**
+ * Gemini Omni over the Interactions API: create with URI delivery, poll the
+ * returned File resource until ACTIVE, then hand its authenticated download URL
+ * to the platform-specific downloader.
+ */
+export async function requestGeminiOmniVideo(input: VideoRequestInput): Promise<VideoDownload> {
+  assertImplementedVideoRequest(input);
+  const operationId = resolveVideoOperation(input);
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
+  const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
+  const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': input.apiKey };
+  const base = 'https://generativelanguage.googleapis.com/v1beta';
+  const startedAt = Date.now();
+  input.onProgress?.('submitting', 0);
+
+  const images = operationId === 'reference_to_video'
+    ? input.referenceImages ?? []
+    : [input.referenceImage, input.lastFrame].filter(
+        (image): image is NonNullable<typeof image> => image !== undefined
+      );
+  const tags = operationId === 'start_end'
+    ? '<FIRST_FRAME> <LAST_FRAME> '
+    : operationId === 'image_to_video'
+      ? '<FIRST_FRAME> '
+      : operationId === 'reference_to_video'
+        ? `${images.map((_, index) => `<IMAGE_REF_${index}>`).join(' ')} `
+        : '';
+  const task = operationId === 'reference_to_video'
+    ? 'reference_to_video'
+    : operationId === 'text_to_video'
+      ? 'text_to_video'
+      : 'image_to_video';
+
+  const startResponse = await fetchWithTimeout(fetchImpl, `${base}/interactions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: input.modelId,
+      input: [
+        ...images.map((image) => ({ type: 'image', data: image.base64, mime_type: image.mimeType })),
+        { type: 'text', text: `${tags}${input.prompt}` }
+      ],
+      response_format: {
+        type: 'video',
+        delivery: 'uri',
+        aspect_ratio: input.aspectRatio,
+        duration: `${input.durationSeconds}s`,
+        resolution: '720p'
+      },
+      generation_config: { video_config: { task } },
+      background: false,
+      store: false,
+      stream: false
+    })
+  }, pollTimeoutMs);
+  await expectOk(startResponse, 'Google Gemini Omni');
+  const interaction = (await startResponse.json()) as GeminiInteractionVideoResponse;
+  const video = interaction.output_video?.uri
+    ? interaction.output_video
+    : interaction.steps
+        ?.flatMap((step) => step.content ?? [])
+        .find((content) => content.type === 'video' && typeof content.uri === 'string');
+  const uri = video?.uri;
+  if (typeof uri !== 'string' || uri.length === 0) {
+    throw new Error('Google Gemini Omni finished without a video URI.');
+  }
+  const mimeType = video?.mime_type ?? 'video/mp4';
+  const fileId = geminiVideoFileId(uri);
+  if (fileId === undefined) {
+    throw new Error('Google Gemini Omni returned a video URI with an invalid File id.');
+  }
+
+  const deadline = startedAt + pollTimeoutMs;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(`Google Gemini Omni generation did not finish within ${Math.round(pollTimeoutMs / 60_000)} minutes.`);
+    }
+    input.onProgress?.('generating', Date.now() - startedAt);
+    await sleep(pollIntervalMs);
+    const pollResponse = await fetchWithTimeout(fetchImpl, `${base}/files/${encodeURIComponent(fileId)}`, {
+      method: 'GET',
+      headers: { 'x-goog-api-key': input.apiKey }
+    });
+    await expectOk(pollResponse, 'Google Gemini Omni');
+    const file = (await pollResponse.json()) as { readonly state?: string; readonly error?: { readonly message?: string } };
+    if (file.state === 'FAILED') {
+      throw new Error(`Google Gemini Omni generation failed: ${file.error?.message ?? 'unknown error'}.`);
+    }
+    if (file.state !== 'ACTIVE') continue;
+    input.onProgress?.('ready', Date.now() - startedAt);
+    return {
+      url: `${base}/files/${encodeURIComponent(fileId)}:download?alt=media`,
+      headers: { 'x-goog-api-key': input.apiKey },
+      providerJobId: interaction.id ?? `files/${fileId}`,
+      mimeType
+    };
+  }
+}
+
 /** OpenAI Sora over /v1/videos: create → poll → hand back the content URL. */
 export async function requestSoraVideo(input: VideoRequestInput): Promise<VideoDownload> {
   assertImplementedVideoRequest(input);
@@ -503,6 +624,12 @@ export function supportsReferenceImage(modelOrProviderId: string): boolean {
 }
 
 /** The adapter a provider id resolves to, or undefined when none is ported. */
-export function videoAdapterFor(providerId: string): ((input: VideoRequestInput) => Promise<VideoDownload>) | undefined {
+export function videoAdapterFor(
+  providerId: string,
+  modelId?: string
+): ((input: VideoRequestInput) => Promise<VideoDownload>) | undefined {
+  if (providerId === 'google_gemini' && modelId === 'gemini-omni-1.1-flash') {
+    return requestGeminiOmniVideo;
+  }
   return VIDEO_ADAPTERS[providerId];
 }

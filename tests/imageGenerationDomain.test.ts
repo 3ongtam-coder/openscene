@@ -64,7 +64,7 @@ describe('image generation domain', () => {
     // model in the video picker, where nothing could run it.
     expect(getDomainModel('video-generation', 'gpt-image-1')).toBeUndefined();
     expect(getDomainModel('voice-generation', 'seedream-4-0-250828')).toBeUndefined();
-    expect(getDomainModel('edit-agent', 'imagen-4.0-generate-001')).toBeUndefined();
+    expect(getDomainModel('edit-agent', 'gemini-3.1-flash-image')).toBeUndefined();
   });
 });
 

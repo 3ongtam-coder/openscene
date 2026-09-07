@@ -21,6 +21,7 @@ import { discoverFfmpeg } from './ffmpegDiscovery';
 import type { CredentialStore } from './credentialStore';
 import {
   generateElevenLabsSpeech,
+  generateGeminiOmniVideo,
   generateLumaVideo,
   generateOpenAiSpeech,
   generateRunwayVideo,
@@ -32,7 +33,7 @@ import {
 import { voiceChoices, type VoiceChoice } from '../shared/voiceCatalog';
 import {
   generateBytePlusImage,
-  generateImagenImage,
+  generateNanoBananaImage,
   generateOpenAiImage,
   imageExtensionFor,
   type GeneratedImage
@@ -150,6 +151,7 @@ type CloudProviderResult =
 
 const VIDEO_PROVIDER_LABELS: Record<VideoGenerationProviderId, string> = {
   gemini_veo: 'Google Veo',
+  gemini_omni: 'Google Gemini Omni',
   openai_sora: 'OpenAI Sora',
   runway_gen4: 'Runway',
   kling_v3: 'Kling',
@@ -160,7 +162,8 @@ const VIDEO_PROVIDER_LABELS: Record<VideoGenerationProviderId, string> = {
 
 const IMAGE_PROVIDER_LABELS: Record<ImageGenerationProviderId, string> = {
   openai_images: 'OpenAI Images',
-  google_imagen: 'Google Imagen',
+  google_imagen: 'Google Imagen (legacy)',
+  google_nano_banana: 'Google Nano Banana',
   byteplus_seedream: 'BytePlus Seedream',
   stability_image: 'Stability AI',
   flux_image: 'Black Forest Labs',
@@ -169,7 +172,7 @@ const IMAGE_PROVIDER_LABELS: Record<ImageGenerationProviderId, string> = {
 
 const IMAGE_MODEL_PROVIDERS: Record<string, { seam: ImageGenerationProviderId; credentialKey: string }> = {
   openai: { seam: 'openai_images', credentialKey: 'openaiApiKey' },
-  google_gemini: { seam: 'google_imagen', credentialKey: 'geminiApiKey' },
+  google_gemini: { seam: 'google_nano_banana', credentialKey: 'geminiApiKey' },
   byteplus: { seam: 'byteplus_seedream', credentialKey: 'bytePlusApiKey' },
   stability: { seam: 'stability_image', credentialKey: 'stabilityApiKey' },
   black_forest_labs: { seam: 'flux_image', credentialKey: 'blackForestLabsApiKey' },
@@ -220,6 +223,7 @@ async function invokeCloudVideoProvider(
     }
     const adapters: Readonly<Partial<Record<typeof binding.adapterId, (input: typeof synthesisInput) => Promise<{ bytes: Buffer; providerJobId: string }>>>> = {
       google_veo: generateVeoVideo,
+      google_omni: generateGeminiOmniVideo,
       openai_sora: generateSoraVideo,
       runway: generateRunwayVideo,
       luma: generateLumaVideo
@@ -289,7 +293,7 @@ async function invokeCloudImageProvider(
     if (model.providerId === 'openai') {
       image = await generateOpenAiImage(synthesisInput);
     } else if (model.providerId === 'google_gemini') {
-      image = await generateImagenImage(synthesisInput);
+      image = await generateNanoBananaImage(synthesisInput);
     } else if (model.providerId === 'byteplus') {
       image = await generateBytePlusImage(synthesisInput);
     } else {
