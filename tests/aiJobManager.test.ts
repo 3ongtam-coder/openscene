@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createImageGenerationJob,
   createSpeechGenerationJob,
   createVideoGenerationJob,
   getCompletedAiSource,
   openCompletedSpeechPreviewSource,
   getSpeechGenerationJob,
-  getVideoGenerationJob
+  getVideoGenerationJob,
+  getImageGenerationJob,
+  setAiJobManagerBrowserImageGenerator
 } from '../src/main/aiJobManager';
 import { createVoiceDeliverySettings } from '../src/shared/voiceDelivery';
 
@@ -115,6 +118,50 @@ describe('AI Job Manager and cloud provider seams', () => {
       vi.unstubAllGlobals();
     }
   }, 10_000);
+
+  it('runs Gemini images through the injected browser session without an API key', async () => {
+    const generatedPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const generate = vi.fn(async () => ({
+      bytes: generatedPng,
+      mimeType: 'image/png',
+      providerJobId: 'gemini-browser-test'
+    }));
+    setAiJobManagerBrowserImageGenerator(generate);
+    try {
+      const job = await createImageGenerationJob({
+        prompt: 'A cinematic apple',
+        aspectRatio: '16:9',
+        stylePreset: 'Cinematic',
+        negativePrompt: 'text',
+        modelId: 'gemini-3.1-flash-image',
+        mode: 'browser_session'
+      });
+      expect(job).toMatchObject({ mode: 'browser_session', provider: 'google_nano_banana', status: 'queued' });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(generate).toHaveBeenCalledWith({
+        prompt: 'A cinematic apple',
+        aspectRatio: '16:9',
+        stylePreset: 'Cinematic',
+        negativePrompt: 'text'
+      });
+      expect(getImageGenerationJob(job.id)).toMatchObject({
+        status: 'completed',
+        previewMimeType: 'image/png',
+        previewBase64: generatedPng.toString('base64')
+      });
+    } finally {
+      setAiJobManagerBrowserImageGenerator(undefined);
+    }
+  });
+
+  it('does not let a non-Gemini model masquerade as a browser-session job', async () => {
+    await expect(createImageGenerationJob({
+      prompt: 'A protected boundary',
+      aspectRatio: '1:1',
+      modelId: 'gpt-image-1',
+      mode: 'browser_session'
+    })).rejects.toThrow('available only for Google Gemini models');
+  });
 
   it('rejects invalid model controls before a job or provider call is queued', async () => {
     await expect(createVideoGenerationJob({

@@ -1,7 +1,12 @@
-import { BrowserWindow, session, type Cookie, type CookiesSetDetails } from 'electron';
+import { BrowserWindow, session, type Cookie, type CookiesSetDetails, type DownloadItem, type WebContents } from 'electron';
+import { randomUUID } from 'node:crypto';
+import { readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   BROWSER_SESSION_PROVIDERS,
+  buildGeminiBrowserImagePrompt,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -9,8 +14,52 @@ import {
   type BrowserSessionStatus
 } from '../shared/browserSession';
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
+import { automateGeminiImageGeneration, detectDownloadedImageMime } from './geminiBrowserImageAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
+const GEMINI_IMAGE_TIMEOUT_MS = 4 * 60_000;
+const GEMINI_PAGE_LOAD_TIMEOUT_MS = 60_000;
+const GEMINI_DOWNLOAD_TIMEOUT_MS = 60_000;
+const MAX_BROWSER_IMAGE_BYTES = 50 * 1024 * 1024;
+
+export type GeminiBrowserImageGenerationInput = {
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly stylePreset?: string;
+  readonly negativePrompt?: string;
+};
+
+export type BrowserSessionGeneratedImage = {
+  readonly bytes: Buffer;
+  readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  readonly providerJobId: string;
+};
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function removeTemporaryDownload(filePath: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await unlink(filePath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return;
+      if (code !== 'EBUSY' && code !== 'EPERM') return;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+}
 
 function partitionFor(providerId: BrowserSessionProviderId): string {
   // No `persist:` prefix: Chromium never writes this isolated profile as
@@ -57,7 +106,42 @@ function toElectronCookie(cookie: BrowserSessionStoredCookie): CookiesSetDetails
 export class BrowserSessionService {
   private readonly activeProviders = new Set<BrowserSessionProviderId>();
 
-  constructor(private readonly vault: BrowserSessionVault) {}
+  constructor(
+    private readonly vault: BrowserSessionVault,
+    private readonly temporaryDirectory: string = tmpdir()
+  ) {}
+
+  private async loadIntoPartition(providerId: BrowserSessionProviderId): Promise<Electron.Session> {
+    const isolatedSession = session.fromPartition(partitionFor(providerId), { cache: false });
+    await isolatedSession.clearStorageData();
+    const existing = await this.vault.loadSecret(providerId);
+    if (existing !== null) {
+      for (const cookie of existing.cookies) {
+        await isolatedSession.cookies.set(toElectronCookie(cookie));
+      }
+    }
+    return isolatedSession;
+  }
+
+  private async persistPartition(providerId: BrowserSessionProviderId, isolatedSession: Electron.Session): Promise<void> {
+    const policy = getBrowserSessionProviderPolicy(providerId);
+    const collected = new Map<string, BrowserSessionStoredCookie>();
+    for (const sourceUrl of policy.allowedNavigationOrigins) {
+      const cookies = await isolatedSession.cookies.get({ url: sourceUrl });
+      for (const cookie of cookies) {
+        const stored = toStoredCookie(providerId, sourceUrl, cookie);
+        if (stored !== null) collected.set(cookieKey(stored), stored);
+      }
+    }
+    if (collected.size > 0) {
+      await this.vault.save({
+        version: 1,
+        providerId,
+        storedAt: new Date().toISOString(),
+        cookies: [...collected.values()]
+      });
+    }
+  }
 
   async getStatuses(): Promise<readonly BrowserSessionStatus[]> {
     return Promise.all(BROWSER_SESSION_PROVIDERS.map(async (providerId) => {
@@ -67,7 +151,7 @@ export class BrowserSessionService {
           providerId,
           kind: 'needs_user_action',
           origin: policy.applicationOrigin,
-          reason: 'Finish signing in in the isolated browser window, then close it.'
+          reason: 'A sign-in window or background provider operation is active.'
         } satisfies BrowserSessionStatus;
       }
       return this.vault.getStatus(providerId);
@@ -87,14 +171,7 @@ export class BrowserSessionService {
 
     this.activeProviders.add(providerId);
     try {
-      const isolatedSession = session.fromPartition(partitionFor(providerId), { cache: false });
-      await isolatedSession.clearStorageData();
-      const existing = await this.vault.loadSecret(providerId);
-      if (existing !== null) {
-        for (const cookie of existing.cookies) {
-          await isolatedSession.cookies.set(toElectronCookie(cookie));
-        }
-      }
+      const isolatedSession = await this.loadIntoPartition(providerId);
 
       const loginWindow = new BrowserWindow({
         width: 1120,
@@ -155,6 +232,154 @@ export class BrowserSessionService {
       });
     } finally {
       this.activeProviders.delete(providerId);
+    }
+  }
+
+  /**
+   * Generate through the normal Gemini web application in a real, hidden
+   * Chromium renderer. Cookie material remains inside the isolated Electron
+   * session; automation sees only DOM geometry and the downloaded image.
+   */
+  async generateGeminiImage(input: GeminiBrowserImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
+    const providerId = 'gemini' as const;
+    const policy = getBrowserSessionProviderPolicy(providerId);
+    if (this.activeProviders.has(providerId)) {
+      throw new Error('Gemini is already being used by another browser-session operation. Wait for it to finish and retry.');
+    }
+
+    const requestId = randomUUID().slice(0, 8);
+    const log = (event: string, details: Readonly<Record<string, unknown>> = {}): void => {
+      const suffix = Object.keys(details).length === 0 ? '' : ` ${JSON.stringify(details)}`;
+      console.info(`[OpenScene][Gemini Browser Image][${requestId}] ${event}${suffix}`);
+    };
+    const prompt = buildGeminiBrowserImagePrompt(input);
+    const temporaryPath = join(this.temporaryDirectory, `openscene-gemini-image-${requestId}.download`);
+    let isolatedSession: Electron.Session | undefined;
+    let automationWindow: BrowserWindow | undefined;
+    let activeDownloadItem: DownloadItem | undefined;
+    let downloadListener: ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void) | undefined;
+    let downloadTimer: ReturnType<typeof setTimeout> | undefined;
+
+    this.activeProviders.add(providerId);
+    log('request.start', {
+      promptCharacters: prompt.length,
+      aspectRatio: input.aspectRatio,
+      timeoutSeconds: GEMINI_IMAGE_TIMEOUT_MS / 1_000,
+      visible: false
+    });
+
+    try {
+      const stored = await this.vault.loadSecret(providerId);
+      if (stored === null || stored.cookies.length === 0) {
+        throw new Error('No Gemini browser session is stored. Open Settings, sign in to Gemini, close that window, then retry.');
+      }
+      isolatedSession = await this.loadIntoPartition(providerId);
+      automationWindow = new BrowserWindow({
+        width: 1280,
+        height: 900,
+        show: false,
+        skipTaskbar: true,
+        title: 'OpenScene Gemini image worker',
+        webPreferences: {
+          partition: partitionFor(providerId),
+          contextIsolation: true,
+          sandbox: true,
+          nodeIntegration: false,
+          webSecurity: true,
+          devTools: false,
+          backgroundThrottling: false
+        }
+      });
+
+      const guardNavigation = (event: Electron.Event, url: string): void => {
+        if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault();
+      };
+      automationWindow.webContents.on('will-navigate', guardNavigation);
+      automationWindow.webContents.on('will-redirect', guardNavigation);
+      automationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+      const download = new Promise<BrowserSessionGeneratedImage>((resolve, reject) => {
+        downloadListener = (event, item, sourceWebContents) => {
+          if (automationWindow === undefined || sourceWebContents.id !== automationWindow.webContents.id) return;
+          const declaredMime = item.getMimeType().toLowerCase();
+          const filename = item.getFilename().toLowerCase();
+          const looksLikeImage = declaredMime.startsWith('image/') || /\.(?:png|jpe?g|webp)$/.test(filename);
+          if (!looksLikeImage) {
+            event.preventDefault();
+            reject(new Error('Gemini attempted a non-image download, so OpenScene rejected it.'));
+            return;
+          }
+          activeDownloadItem = item;
+          item.setSavePath(temporaryPath);
+          log('download.started', { declaredMime, filenameExtension: filename.split('.').pop() ?? '' });
+          item.once('done', (_doneEvent, state) => {
+            void (async () => {
+              if (state !== 'completed') {
+                reject(new Error(`Gemini image download ${state}.`));
+                return;
+              }
+              const bytes = await readFile(temporaryPath);
+              if (bytes.length === 0 || bytes.length > MAX_BROWSER_IMAGE_BYTES) {
+                reject(new Error('Gemini returned an empty or unexpectedly large image download.'));
+                return;
+              }
+              const mimeType = detectDownloadedImageMime(bytes);
+              if (mimeType === null) {
+                reject(new Error('Gemini download was not a valid PNG, JPEG, or WebP image.'));
+                return;
+              }
+              log('download.completed', { bytes: bytes.length, mimeType });
+              resolve({ bytes, mimeType, providerJobId: `gemini-browser-${requestId}` });
+            })().catch((error: unknown) => {
+              reject(error instanceof Error ? error : new Error('Gemini image download could not be read.'));
+            });
+          });
+        };
+        isolatedSession!.on('will-download', downloadListener);
+      });
+      // Automation can fail before it reaches the download await. Attach a
+      // rejection observer now so an early rejected download never becomes an
+      // unhandled promise while the browser loop is still running.
+      void download.catch(() => undefined);
+
+      log('browser.loading', { origin: policy.applicationOrigin });
+      await withTimeout(
+        automationWindow.loadURL(policy.loginUrl),
+        GEMINI_PAGE_LOAD_TIMEOUT_MS,
+        'Gemini did not finish loading within 60 seconds.'
+      );
+      await automateGeminiImageGeneration(automationWindow.webContents, {
+        prompt,
+        timeoutMs: GEMINI_IMAGE_TIMEOUT_MS,
+        onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
+      });
+      const downloadTimeout = new Promise<never>((_resolve, reject) => {
+        downloadTimer = setTimeout(
+          () => reject(new Error('Gemini created an image, but the full-size download did not finish within 60 seconds.')),
+          GEMINI_DOWNLOAD_TIMEOUT_MS
+        );
+      });
+      const result = await Promise.race([download, downloadTimeout]);
+      log('request.completed');
+      return result;
+    } catch (error) {
+      log('request.failed', { error: error instanceof Error ? error.message : 'unknown error' });
+      throw error;
+    } finally {
+      if (downloadTimer !== undefined) clearTimeout(downloadTimer);
+      if (isolatedSession !== undefined && downloadListener !== undefined) {
+        isolatedSession.removeListener('will-download', downloadListener);
+      }
+      if (activeDownloadItem?.getState() === 'progressing') activeDownloadItem.cancel();
+      if (isolatedSession !== undefined) {
+        await this.persistPartition(providerId, isolatedSession).catch((error: unknown) => {
+          log('session.persist.failed', { error: error instanceof Error ? error.message : 'unknown error' });
+        });
+      }
+      if (automationWindow !== undefined && !automationWindow.isDestroyed()) automationWindow.destroy();
+      await removeTemporaryDownload(temporaryPath);
+      this.activeProviders.delete(providerId);
+      log('cleanup.complete');
     }
   }
 

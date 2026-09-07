@@ -35,4 +35,23 @@ describe('browser session security wiring', () => {
     expect(mobile).toContain('browser-session sign-in is desktop-only');
     expect(mobile).toContain('Keychain or Keystore');
   });
+
+  it('runs Gemini image automation inside the isolated browser without replaying cookies over HTTP', async () => {
+    const [service, automation, studio, mobile] = await Promise.all([
+      readRepo('src/main/browserSessionService.ts'),
+      readRepo('src/main/geminiBrowserImageAutomation.ts'),
+      readRepo('src/renderer/src/ImageGenerationWorkspace.tsx'),
+      readRepo('mobile/src/screens/ImageScreen.tsx')
+    ]);
+    expect(service).toContain('show: false');
+    expect(service).toContain("partition: partitionFor(providerId)");
+    expect(service).toContain("isolatedSession!.on('will-download'");
+    expect(service).not.toMatch(/fetch\(|batchexecute|StreamGenerate/);
+    expect(automation).toContain('[data-test-id="download-generated-image-button"]');
+    expect(automation).toContain('webContents.insertText(input.prompt)');
+    expect(automation).toContain("keyCode: 'ENTER'");
+    expect(studio).toContain("mode: generationMode");
+    expect(studio).toContain('hidden signed-in Gemini image worker');
+    expect(mobile).toContain('Signed-in Gemini browser automation is desktop-only');
+  });
 });

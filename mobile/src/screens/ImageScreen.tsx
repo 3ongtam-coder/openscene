@@ -156,6 +156,11 @@ export function ImageScreen({
         onSelect={(next) => setModelId(next.id)}
         onConnectionChange={refreshConnections}
       />
+      {model?.providerId === 'google_gemini' && (
+        <Text style={styles.sessionNote}>
+          Signed-in Gemini browser automation is desktop-only. Mobile continues to use the official Gemini API key.
+        </Text>
+      )}
 
       <Text style={styles.label}>Aspect ratio</Text>
       <View style={styles.row}>
@@ -257,5 +262,6 @@ const styles = StyleSheet.create({
   error: { color: theme.danger, fontSize: 13, lineHeight: 19, marginTop: 14 },
   resultBox: { marginTop: 20, gap: 8 },
   resultImage: { width: '100%', aspectRatio: 1, borderRadius: 12, backgroundColor: theme.surface },
-  footnote: { color: theme.textWeaker, fontSize: 11 }
+  footnote: { color: theme.textWeaker, fontSize: 11 },
+  sessionNote: { color: theme.textWeaker, fontSize: 12, lineHeight: 18, marginTop: 8 }
 });

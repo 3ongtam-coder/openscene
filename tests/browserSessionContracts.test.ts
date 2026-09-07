@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildGeminiBrowserImagePrompt,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -35,5 +36,20 @@ describe('browser session shared boundary', () => {
   it('keeps the official application origin separate from login redirect origins', () => {
     expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://gemini.google.com');
     expect(getBrowserSessionProviderPolicy('grok').applicationOrigin).toBe('https://grok.com');
+  });
+
+  it('builds a complete image request for the browser UI without dropping controls', () => {
+    expect(buildGeminiBrowserImagePrompt({
+      prompt: 'A red apple on a dark table',
+      aspectRatio: '16:9',
+      stylePreset: 'Cinematic',
+      negativePrompt: 'text, watermark'
+    })).toBe([
+      'Create one image (do not answer with only text).',
+      'A red apple on a dark table',
+      'Use a 16:9 aspect ratio.',
+      'Visual style: Cinematic.',
+      'Do not include: text, watermark.'
+    ].join('\n'));
   });
 });
