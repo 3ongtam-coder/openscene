@@ -1,6 +1,7 @@
 import { parseSubtitleCues, type SubtitleCue } from './narrationPlan';
 import { hasAllowedKeys, isPlainRecord } from './timelineValidationPrimitives';
 import type { TimelineDocument, TimelineTitle } from './timelineTypes';
+import { applyCaptionPreset, copyTitleAppearance, DEFAULT_CAPTION_PRESET_ID, isAutomaticCaptionId } from './captionStyle';
 import { timelineTimeMsAt } from './timelineClipGeometry';
 
 export const TRANSCRIPTION_DRAFT_STATUSES = ['draft', 'approved'] as const;
@@ -96,15 +97,12 @@ export function updateTranscriptionDraft(
   return parsed;
 }
 
-function automaticCaption(title: TimelineTitle): boolean {
-  return title.id.startsWith('auto-caption-') || title.id.startsWith('transcript-caption-');
-}
-
 export function applyTranscriptionCues(timeline: TimelineDocument, draft: TranscriptionDraft): TimelineDocument {
   if (draft.status !== 'approved') throw new Error('Approve the transcript before applying its captions.');
   const sourceClips = timeline.tracks.flatMap((track) => track.clips).filter((clip) => clip.assetId === draft.sourceAssetId);
   if (sourceClips.length === 0) throw new Error('Place the transcript source asset on the timeline before applying captions.');
-  const retained = (timeline.titles ?? []).filter((title) => !automaticCaption(title));
+  const priorAppearance = (timeline.titles ?? []).find((title) => isAutomaticCaptionId(title.id));
+  const retained = (timeline.titles ?? []).filter((title) => !isAutomaticCaptionId(title.id));
   const captions: TimelineTitle[] = [];
   const hash = (value: string): string => {
     let output = 0x811c9dc5;
@@ -115,7 +113,7 @@ export function applyTranscriptionCues(timeline: TimelineDocument, draft: Transc
     const sourceStartMs = Math.max(cue.startMs, clip.sourceStartMs);
     const sourceEndMs = Math.min(cue.endMs, clip.sourceEndMs);
     if (sourceEndMs <= sourceStartMs) continue;
-    captions.push({
+    const caption = applyCaptionPreset({
       id: `transcript-caption-${hash(`${draft.id}:${clip.id}`)}-${index + 1}`,
       text: cue.text,
       timelineStartMs: Math.floor(timelineTimeMsAt(clip, sourceStartMs)),
@@ -123,14 +121,13 @@ export function applyTranscriptionCues(timeline: TimelineDocument, draft: Transc
       sizePx: 64,
       color: '#ffffff',
       positionX: 0,
-      positionY: 360
-    });
+      positionY: 0
+    }, DEFAULT_CAPTION_PRESET_ID);
+    captions.push(priorAppearance === undefined ? caption : copyTitleAppearance(caption, priorAppearance));
   }
   if (captions.length === 0) throw new Error('No transcript cues overlap the placed source clips.');
   captions.sort((left, right) => left.timelineStartMs - right.timelineStartMs || left.timelineEndMs - right.timelineEndMs || left.id.localeCompare(right.id));
   return { ...timeline, titles: [...retained, ...captions] };
 }
 
-export function isAutomaticCaptionId(id: string): boolean {
-  return id.startsWith('auto-caption-') || id.startsWith('transcript-caption-');
-}
+export { isAutomaticCaptionId } from './captionStyle';

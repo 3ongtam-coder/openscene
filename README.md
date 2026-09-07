@@ -104,6 +104,7 @@ Projects and past conversations live on the start page. Picking a chat reopens i
 - Export H.264/AAC MP4 through your local FFmpeg
 - Keyboard shortcuts throughout, remappable in Settings
 - Deliver reviewed automatic captions by burning them into the MP4, exporting a UTF-8 SRT/WebVTT/ASS sidecar, doing both, or doing neither. Manual titles always remain independent.
+- Style titles and approved captions with shared Clean, Boxed, Cinema or Social presets, bounded outline/background controls, and aspect-aware title-safe anchors used by preview and final renderers.
 
 ### Voice generation
 

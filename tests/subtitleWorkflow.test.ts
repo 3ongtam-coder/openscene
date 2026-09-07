@@ -6,6 +6,7 @@ import { voiceChoices } from '../src/shared/voiceCatalog';
 import { parseTimelineDocument } from '../src/shared/timelineDocumentValidators';
 import { createInitialTimeline } from '../src/shared/timelineLogic';
 import type { WriterDraft } from '../src/shared/writerWorkflow';
+import { applyCaptionPreset } from '../src/shared/captionStyle';
 
 const draft: WriterDraft = {
   title: 'Yelling', screenplay: 'Approved screenplay', characters: [{ name: 'Grog', invariantDescription: 'Red hide' }],
@@ -81,11 +82,13 @@ describe('narration and automatic subtitles', () => {
     const draftPlan = createNarrationPlan({ ai: createEmptyAiProjectDocument(), script: 'First. Second.', durationMs: 5_000, voiceModelId: 'tts-1', voiceId: 'alloy' });
     expect(() => applySubtitleCues(createInitialTimeline(), draftPlan)).toThrow('Approve');
     const plan = updateNarrationPlan(draftPlan, {}, true);
-    const timeline = { ...createInitialTimeline(), titles: [{ id: 'manual-title', text: 'Manual', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 72, color: '#ffffff', positionX: 0, positionY: 0 }, { id: 'auto-caption-old-1', text: 'Old', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 360 }] };
+    const priorCaption = applyCaptionPreset({ id: 'auto-caption-old-1', text: 'Old', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 0 }, 'boxed');
+    const timeline = { ...createInitialTimeline(), titles: [{ id: 'manual-title', text: 'Manual', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 72, color: '#ffffff', positionX: 0, positionY: 0 }, priorCaption] };
     const applied = applySubtitleCues(timeline, plan);
     expect(applied.titles?.some((title) => title.id === 'manual-title')).toBe(true);
     expect(applied.titles?.some((title) => title.id === 'auto-caption-old-1')).toBe(false);
     expect(applied.titles?.filter((title) => title.id.startsWith(`auto-caption-${narrationFingerprint(plan.script)}`))).toHaveLength(plan.cues.length);
+    expect(applied.titles?.find((title) => title.id.startsWith('auto-caption-'))?.style).toEqual(priorCaption.style);
     expect(parseTimelineDocument(applied)).not.toBeNull();
   });
 

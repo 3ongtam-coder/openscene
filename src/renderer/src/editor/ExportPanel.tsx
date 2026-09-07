@@ -7,9 +7,8 @@ import {
   DEFAULT_EXPORT_FRAME,
   EXPORT_FRAME_LABELS,
   EXPORT_FRAME_PREFERENCES,
-  EXPORT_FRAME_STORAGE_KEY,
-  parseExportFramePreferences,
-  serializeExportFramePreferences
+  readExportFramePreference,
+  writeExportFramePreference
 } from './exportFramePreference';
 import { errorMessage, type StatusMessage } from '../appTypes';
 import { Button, StatusCard } from '../ui';
@@ -31,28 +30,6 @@ function getActionStatus(responseMessage: string): StatusMessage {
  * preferences live. A storage that refuses to answer is the default, not an
  * error: the worst that costs is exporting the shape the footage already is.
  */
-function readFramePreference(projectId: string): FramePreference {
-  if (typeof window === 'undefined') return DEFAULT_EXPORT_FRAME;
-  try {
-    return parseExportFramePreferences(window.localStorage.getItem(EXPORT_FRAME_STORAGE_KEY))[projectId] ?? DEFAULT_EXPORT_FRAME;
-  } catch {
-    return DEFAULT_EXPORT_FRAME;
-  }
-}
-
-function writeFramePreference(projectId: string, preference: FramePreference): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const stored = parseExportFramePreferences(window.localStorage.getItem(EXPORT_FRAME_STORAGE_KEY));
-    window.localStorage.setItem(
-      EXPORT_FRAME_STORAGE_KEY,
-      serializeExportFramePreferences({ ...stored, [projectId]: preference })
-    );
-  } catch {
-    // A preference that could not be saved still applies to this export.
-  }
-}
-
 export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
   const [job, setJob] = useState<LocalExportJob | null>(null);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
@@ -68,7 +45,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
   const [subtitleDelivery, setSubtitleDelivery] = useState<SubtitleDelivery>(DEFAULT_SUBTITLE_DELIVERY);
 
   useEffect(() => {
-    setFramePreference(project === null ? DEFAULT_EXPORT_FRAME : readFramePreference(project.id));
+    setFramePreference(project === null ? DEFAULT_EXPORT_FRAME : readExportFramePreference(project.id));
     setSubtitleDelivery(DEFAULT_SUBTITLE_DELIVERY);
   }, [project?.id]);
 
@@ -215,7 +192,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
               onChange={(event) => {
                 const next = event.target.value as FramePreference;
                 setFramePreference(next);
-                if (project !== null) writeFramePreference(project.id, next);
+                if (project !== null) writeExportFramePreference(project.id, next);
               }}
             >
               {EXPORT_FRAME_PREFERENCES.map((preference) => (

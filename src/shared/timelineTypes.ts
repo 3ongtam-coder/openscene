@@ -187,6 +187,19 @@ export type TimelineTitle = {
   readonly color: string;
   readonly positionX: number;
   readonly positionY: number;
+  /** Absent means the legacy unboxed regular style, keeping older projects readable. */
+  readonly style?: TimelineTitleStyle;
+};
+
+export type TimelineTitleStyle = {
+  readonly fontWeight: 'regular' | 'bold';
+  readonly outlineColor: string;
+  readonly outlineWidthPx: number;
+  readonly backgroundColor: string;
+  readonly backgroundOpacity: number;
+  readonly paddingPx: number;
+  /** `free` uses only positionX/Y; the other values add an aspect-aware title-safe anchor. */
+  readonly placement: 'free' | 'top' | 'center' | 'bottom';
 };
 
 export const DEFAULT_TITLE: Omit<TimelineTitle, 'id' | 'timelineStartMs' | 'timelineEndMs'> = {

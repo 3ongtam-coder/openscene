@@ -5,6 +5,7 @@ import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/vi
 import type { CompositionSegment } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
 import { DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleDelivery } from '@openvideo/shared/subtitleDelivery';
+import { resolvedTitleStyle, titleOutputPosition } from '@openvideo/shared/captionStyle';
 import * as Sharing from 'expo-sharing';
 import VideoExport, { areLayersComposited, areStillsRenderable } from '../../modules/video-export';
 import type { EditorAsset } from './editorState';
@@ -179,15 +180,25 @@ export async function exportTimeline(input: {
       dips: plan.dips.map((dip) => ({ startMs: dip.startMs, durationMs: dip.durationMs })),
       // Words over the finished picture. Already in output-frame pixels and
       // timeline milliseconds, so there is nothing to convert.
-      titles: plan.titles.map((title) => ({
-        text: title.text,
-        timelineStartMs: title.timelineStartMs,
-        timelineEndMs: title.timelineEndMs,
-        sizePx: title.sizePx,
-        color: title.color,
-        positionX: title.positionX,
-        positionY: title.positionY
-      }))
+      titles: plan.titles.map((title) => {
+        const style = resolvedTitleStyle(title);
+        const position = titleOutputPosition(title, { width: plan.width, height: plan.height });
+        return {
+          text: title.text,
+          timelineStartMs: title.timelineStartMs,
+          timelineEndMs: title.timelineEndMs,
+          sizePx: title.sizePx,
+          color: title.color,
+          positionX: position.x,
+          positionY: position.y,
+          fontWeight: style.fontWeight,
+          outlineColor: style.outlineColor,
+          outlineWidthPx: style.outlineWidthPx,
+          backgroundColor: style.backgroundColor,
+          backgroundOpacity: style.backgroundOpacity,
+          paddingPx: style.paddingPx
+        };
+      })
     });
     /*
       Read the file back before calling it done.

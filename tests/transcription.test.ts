@@ -10,6 +10,7 @@ import { DEFAULT_CLIP_EFFECTS } from '../src/shared/timelineTypes';
 import { applyTranscriptionCues, parseStartTranscriptionInput, parseTranscriptionDraft, updateTranscriptionDraft } from '../src/shared/transcription';
 import { parseTimelineDocument } from '../src/shared/timelineDocumentValidators';
 import { parseWhisperSrt, resolveWhisperCppRuntime } from '../src/main/whisperCppAdapter';
+import { applyCaptionPreset } from '../src/shared/captionStyle';
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -49,7 +50,7 @@ describe('local transcription contract', () => {
     const placed = placeClip(initial, { trackId: INITIAL_AUDIO_TRACK_ID, clip: { id: 'source-clip', assetId: 'audio-1', timelineStartMs: 5_000, sourceStartMs: 100, sourceEndMs: 2_500, sourceDurationMs: 2_500, effects: { ...DEFAULT_CLIP_EFFECTS, speed: 2 }, keyframes: [] } });
     const timeline = { ...placed!, titles: [
       { id: 'manual-title', text: 'Manual', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 72, color: '#ffffff', positionX: 0, positionY: 0 },
-      { id: 'auto-caption-old', text: 'Old', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 360 }
+      applyCaptionPreset({ id: 'auto-caption-old', text: 'Old', timelineStartMs: 0, timelineEndMs: 1_000, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 0 }, 'cinema')
     ] };
     expect(() => applyTranscriptionCues(timeline, draft())).toThrow('Approve');
     const applied = applyTranscriptionCues(timeline, updateTranscriptionDraft(draft(), draft().cues, true));
@@ -57,6 +58,7 @@ describe('local transcription contract', () => {
     expect(applied.titles?.some((title) => title.id === 'auto-caption-old')).toBe(false);
     expect(applied.titles?.filter((title) => title.id.startsWith('transcript-caption-'))).toHaveLength(2);
     expect(applied.titles?.find((title) => title.id.startsWith('transcript-caption-'))).toMatchObject({ timelineStartMs: 5_000, timelineEndMs: 5_500 });
+    expect(applied.titles?.find((title) => title.id.startsWith('transcript-caption-'))?.style).toMatchObject({ placement: 'bottom', fontWeight: 'regular' });
     expect(parseTimelineDocument(applied)).not.toBeNull();
   });
 

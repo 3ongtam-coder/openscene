@@ -1,4 +1,4 @@
-import { isAutomaticCaptionId } from './transcription';
+import { isAutomaticCaptionId, resolvedTitleStyle, titleOutputPosition } from './captionStyle';
 import type { TimelineDocument, TimelineTitle } from './timelineTypes';
 import { hasAllowedKeys, isPlainRecord } from './timelineValidationPrimitives';
 
@@ -30,6 +30,13 @@ export type SubtitleSidecar = {
   readonly contents: string;
   readonly cueCount: number;
 };
+
+export type SubtitleFrame = {
+  readonly width: number;
+  readonly height: number;
+};
+
+const DEFAULT_SUBTITLE_FRAME: SubtitleFrame = Object.freeze({ width: 1_920, height: 1_080 });
 
 export function automaticCaptionTitles(timeline: TimelineDocument): readonly TimelineTitle[] {
   return (timeline.titles ?? [])
@@ -85,7 +92,30 @@ function assText(text: string): string {
     .replace(/\n/g, '\\N');
 }
 
-export function createSubtitleSidecar(timeline: TimelineDocument, format: Exclude<SubtitleSidecarFormat, 'none'>): SubtitleSidecar {
+function assColor(color: string, opacity = 1): string {
+  const red = color.slice(1, 3);
+  const green = color.slice(3, 5);
+  const blue = color.slice(5, 7);
+  const alpha = Math.round(255 * (1 - Math.max(0, Math.min(1, opacity)))).toString(16).padStart(2, '0');
+  return `&H${alpha}${blue}${green}${red}`.toUpperCase();
+}
+
+function assStyle(title: TimelineTitle, index: number): string {
+  const style = resolvedTitleStyle(title);
+  const boxed = style.backgroundOpacity > 0;
+  return [
+    `Style: Caption${index + 1}`, 'Arial', Math.round(title.sizePx), assColor(title.color), assColor(title.color),
+    assColor(style.outlineColor), assColor(style.backgroundColor, style.backgroundOpacity), style.fontWeight === 'bold' ? -1 : 0,
+    0, 0, 0, 100, 100, 0, 0, boxed ? 3 : 1,
+    Math.round(boxed ? style.paddingPx : style.outlineWidthPx), 0, 5, 60, 60, 48, 1
+  ].join(',');
+}
+
+export function createSubtitleSidecar(
+  timeline: TimelineDocument,
+  format: Exclude<SubtitleSidecarFormat, 'none'>,
+  frame: SubtitleFrame = DEFAULT_SUBTITLE_FRAME
+): SubtitleSidecar {
   const cues = automaticCaptionTitles(timeline);
   if (cues.length === 0) throw new Error('Apply approved automatic captions to the timeline before exporting a subtitle sidecar.');
   if (cues.length > SUBTITLE_DELIVERY_LIMITS.cues || cues.some((cue) =>
@@ -107,10 +137,11 @@ export function createSubtitleSidecar(timeline: TimelineDocument, format: Exclud
   }
   return {
     format, extension: 'ass', mimeType: 'text/x-ssa', cueCount: cues.length,
-    contents: `[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,60,60,48,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n${cues.map((cue) => {
+    contents: `[Script Info]\nScriptType: v4.00+\nPlayResX: ${frame.width}\nPlayResY: ${frame.height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n${cues.map(assStyle).join('\n')}\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n${cues.map((cue, index) => {
       const start = Math.floor(cue.timelineStartMs / 10);
       const end = Math.max(start + 1, Math.ceil(cue.timelineEndMs / 10));
-      return `Dialogue: 0,${assClock(start)},${assClock(end)},Default,,0,0,0,,${assText(cue.text)}`;
+      const position = titleOutputPosition(cue, frame);
+      return `Dialogue: 0,${assClock(start)},${assClock(end)},Caption${index + 1},,0,0,0,,{\\pos(${Math.round(frame.width / 2 + position.x)},${Math.round(frame.height / 2 + position.y)})}${assText(cue.text)}`;
     }).join('\n')}\n`
   };
 }
