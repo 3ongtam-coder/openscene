@@ -27,6 +27,15 @@ export const REFERENCE_ASSET_ROLES = [
 ] as const;
 export const GENERATION_CAPABILITIES = VIDEO_OPERATIONS;
 export const GENERATION_STATUSES = ['draft', 'queued', 'running', 'needs_user_action', 'completed', 'failed', 'cancelled'] as const;
+export const GENERATION_REVIEW_DECISIONS = ['pending', 'approved', 'rejected'] as const;
+export const CONTINUITY_REVIEW_VALUES = ['unchecked', 'pass', 'warning', 'fail'] as const;
+export const CONTINUITY_REVIEW_FIELDS = [
+  'identity',
+  'wardrobeProps',
+  'settingPalette',
+  'motionDirection',
+  'boundaryMatch'
+] as const;
 export const PROVENANCE_SOURCES = ['user', 'provider', 'import', 'local_model'] as const;
 
 export type ScriptSourceKind = (typeof SCRIPT_SOURCE_KINDS)[number];
@@ -34,6 +43,9 @@ export type ScriptStatus = (typeof SCRIPT_STATUSES)[number];
 export type ReferenceAssetRole = (typeof REFERENCE_ASSET_ROLES)[number];
 export type GenerationCapability = (typeof GENERATION_CAPABILITIES)[number];
 export type AiGenerationStatus = (typeof GENERATION_STATUSES)[number];
+export type GenerationReviewDecision = (typeof GENERATION_REVIEW_DECISIONS)[number];
+export type ContinuityReviewValue = (typeof CONTINUITY_REVIEW_VALUES)[number];
+export type ContinuityReviewField = (typeof CONTINUITY_REVIEW_FIELDS)[number];
 export type ProvenanceSource = (typeof PROVENANCE_SOURCES)[number];
 
 export type ScriptVersion = {
@@ -97,6 +109,15 @@ export type ReferenceAsset = {
   readonly label: string;
 };
 
+export type ContinuityReview = Readonly<Record<ContinuityReviewField, ContinuityReviewValue>>;
+
+export type GenerationReview = {
+  readonly decision: GenerationReviewDecision;
+  readonly continuity: ContinuityReview;
+  readonly notes: string;
+  readonly reviewedAt?: string;
+};
+
 export type GenerationRecord = {
   readonly id: string;
   readonly shotId: string;
@@ -109,6 +130,8 @@ export type GenerationRecord = {
   readonly outputAssetIds: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly parentGenerationId?: string;
+  readonly review?: GenerationReview;
   readonly provenanceId?: string;
   readonly error?: string;
   readonly estimatedCostUsd?: number;
@@ -207,11 +230,19 @@ export function removeAssetFromAiProjectDocument(document: AiProjectDocument, as
       referenceAssetIds: shot.referenceAssetIds.filter(keepReference)
     })),
     referenceAssets: document.referenceAssets.filter((reference) => reference.assetId !== assetId),
-    generations: document.generations.map((generation) => ({
-      ...generation,
-      referenceAssetIds: generation.referenceAssetIds.filter(keepReference),
-      outputAssetIds: generation.outputAssetIds.filter(keepAsset)
-    })),
+    generations: document.generations.map((generation) => {
+      const outputAssetIds = generation.outputAssetIds.filter(keepAsset);
+      const lostApprovedOutput = generation.review?.decision === 'approved' && outputAssetIds.length === 0;
+      const resetReview = lostApprovedOutput
+        ? (({ reviewedAt: _reviewedAt, ...review }) => ({ ...review, decision: 'pending' as const }))(generation.review!)
+        : undefined;
+      return {
+        ...generation,
+        referenceAssetIds: generation.referenceAssetIds.filter(keepReference),
+        outputAssetIds,
+        ...(resetReview === undefined ? {} : { review: resetReview })
+      };
+    }),
     provenance: document.provenance.map((record) => ({
       ...record,
       inputAssetIds: record.inputAssetIds.filter(keepAsset),
@@ -364,8 +395,22 @@ function parseReferenceAsset(value: unknown): ReferenceAsset | null {
   return id === null || assetId === null || role === null || label === null ? null : { id, assetId, role, label };
 }
 
+function parseGenerationReview(value: unknown): GenerationReview | null {
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['decision', 'continuity', 'notes', 'reviewedAt'])) return null;
+  const decision = getEnum(value, 'decision', GENERATION_REVIEW_DECISIONS);
+  const notes = getText(value, 'notes', LIMITS.mediumText);
+  const reviewedAt = value.reviewedAt === undefined ? undefined : getIsoTimestamp(value, 'reviewedAt');
+  if (!isPlainRecord(value.continuity) || !hasAllowedKeys(value.continuity, CONTINUITY_REVIEW_FIELDS)) return null;
+  const continuityRecord = value.continuity;
+  const continuityEntries = CONTINUITY_REVIEW_FIELDS.map((field) => [field, getEnum(continuityRecord, field, CONTINUITY_REVIEW_VALUES)] as const);
+  if (decision === null || notes === null || reviewedAt === null || continuityEntries.some(([, entry]) => entry === null)) return null;
+  const continuity = Object.fromEntries(continuityEntries) as ContinuityReview;
+  if ((decision === 'approved' || decision === 'rejected') !== (reviewedAt !== undefined)) return null;
+  return { decision, continuity, notes, ...(reviewedAt === undefined ? {} : { reviewedAt }) };
+}
+
 function parseGeneration(value: unknown): GenerationRecord | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['id', 'shotId', 'providerId', 'modelId', 'capability', 'status', 'prompt', 'referenceAssetIds', 'outputAssetIds', 'createdAt', 'updatedAt', 'provenanceId', 'error', 'estimatedCostUsd'])) return null;
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['id', 'shotId', 'providerId', 'modelId', 'capability', 'status', 'prompt', 'referenceAssetIds', 'outputAssetIds', 'createdAt', 'updatedAt', 'parentGenerationId', 'review', 'provenanceId', 'error', 'estimatedCostUsd'])) return null;
   const id = getOpaqueId(value, 'id');
   const shotId = getOpaqueId(value, 'shotId');
   const providerId = getText(value, 'providerId', LIMITS.shortText, false);
@@ -377,11 +422,13 @@ function parseGeneration(value: unknown): GenerationRecord | null {
   const outputAssetIds = getUniqueIdList(value.outputAssetIds);
   const createdAt = getIsoTimestamp(value, 'createdAt');
   const updatedAt = getIsoTimestamp(value, 'updatedAt');
+  const parentGenerationId = value.parentGenerationId === undefined ? undefined : getOpaqueId(value, 'parentGenerationId');
+  const review = value.review === undefined ? undefined : parseGenerationReview(value.review);
   const provenanceId = value.provenanceId === undefined ? undefined : getOpaqueId(value, 'provenanceId');
   const error = getOptionalText(value, 'error', LIMITS.mediumText);
   const estimatedCostUsd = value.estimatedCostUsd === undefined ? undefined : getFiniteNonNegative(value, 'estimatedCostUsd');
-  if (id === null || shotId === null || providerId === null || modelId === null || capability === null || status === null || prompt === null || referenceAssetIds === null || outputAssetIds === null || createdAt === null || updatedAt === null || provenanceId === null || error === null || estimatedCostUsd === null || (estimatedCostUsd !== undefined && (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > 1_000_000))) return null;
-  return { id, shotId, providerId, modelId, capability, status, prompt, referenceAssetIds, outputAssetIds, createdAt, updatedAt, ...(provenanceId === undefined ? {} : { provenanceId }), ...(error === undefined ? {} : { error }), ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }) };
+  if (id === null || shotId === null || providerId === null || modelId === null || capability === null || status === null || prompt === null || referenceAssetIds === null || outputAssetIds === null || createdAt === null || updatedAt === null || parentGenerationId === null || review === null || provenanceId === null || error === null || estimatedCostUsd === null || (estimatedCostUsd !== undefined && (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > 1_000_000))) return null;
+  return { id, shotId, providerId, modelId, capability, status, prompt, referenceAssetIds, outputAssetIds, createdAt, updatedAt, ...(parentGenerationId === undefined ? {} : { parentGenerationId }), ...(review === undefined ? {} : { review }), ...(provenanceId === undefined ? {} : { provenanceId }), ...(error === undefined ? {} : { error }), ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }) };
 }
 
 function parseProvenance(value: unknown): ProvenanceRecord | null {
@@ -458,6 +505,28 @@ function relationsAreValid(document: AiProjectDocument, availableAssetIds?: Read
     !shots.has(generation.shotId) ||
     generation.referenceAssetIds.some((id) => !references.has(id)) ||
     (generation.provenanceId !== undefined && !provenance.has(generation.provenanceId)))) return false;
+
+  for (const generation of document.generations) {
+    if (generation.parentGenerationId !== undefined) {
+      const parent = generations.get(generation.parentGenerationId);
+      if (parent === undefined || parent.shotId !== generation.shotId || parent.id === generation.id) return false;
+      const visited = new Set<string>([generation.id]);
+      let cursor: GenerationRecord | undefined = parent;
+      while (cursor !== undefined) {
+        if (visited.has(cursor.id)) return false;
+        visited.add(cursor.id);
+        cursor = cursor.parentGenerationId === undefined ? undefined : generations.get(cursor.parentGenerationId);
+      }
+    }
+    if (generation.review?.decision === 'approved') {
+      const values = Object.values(generation.review.continuity);
+      if (generation.status !== 'completed' || generation.outputAssetIds.length === 0 || values.includes('unchecked') || values.includes('fail')) return false;
+      if (values.includes('warning') && generation.review.notes.trim().length === 0) return false;
+    }
+  }
+  for (const shot of document.shots) {
+    if (document.generations.filter((generation) => generation.shotId === shot.id && generation.review?.decision === 'approved').length > 1) return false;
+  }
 
   if (availableAssetIds !== undefined) {
     if (document.referenceAssets.some((reference) => !availableAssetIds.has(reference.assetId))) return false;
