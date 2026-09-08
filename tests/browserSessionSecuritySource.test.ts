@@ -32,6 +32,7 @@ describe('browser session security wiring', () => {
     expect(desktop).toContain('window.videoTool.startBrowserSession(providerId)');
     expect(desktop).toContain('window.videoTool.clearBrowserSession(providerId)');
     expect(desktop).toContain("does not read another browser's profile");
+    expect(desktop).toContain('Show Google Flow while generating');
     expect(mobile).toContain('browser-session sign-in is desktop-only');
     expect(mobile).toContain('Keychain or Keystore');
   });
@@ -43,7 +44,8 @@ describe('browser session security wiring', () => {
       readRepo('src/renderer/src/ImageGenerationWorkspace.tsx'),
       readRepo('mobile/src/screens/ImageScreen.tsx')
     ]);
-    expect(service).toContain('show: false');
+    expect(service).toContain('show: showBrowserWindow');
+    expect(service).toContain("The Google Flow window was closed before image generation completed.");
     expect(service).toContain("partition: partitionFor(providerId)");
     expect(service).toContain("isolatedSession!.on('will-download'");
     expect(service).not.toMatch(/fetch\(|batchexecute|StreamGenerate/);
@@ -55,7 +57,8 @@ describe('browser session security wiring', () => {
     expect(automation).toContain("'Nano Banana 2'");
     expect(service).toContain('webContents.downloadURL(generatedImageUrl)');
     expect(studio).toContain("mode: generationMode");
-    expect(studio).toContain('hidden signed-in Google Flow image worker');
+    expect(studio).toContain('Opening the signed-in Google Flow window');
+    expect(studio).toContain('showBrowserWindow: flowWindowVisible');
     expect(mobile).toContain('Signed-in Google Flow automation is desktop-only');
   });
 });

@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildGoogleFlowImagePrompt,
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
   googleFlowImageModelFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionCookieSourceAllowed,
   isBrowserSessionNavigationAllowed,
-  parseBrowserSessionProviderId
+  parseGoogleFlowPreferences,
+  parseBrowserSessionProviderId,
+  serializeGoogleFlowPreferences
 } from '../src/shared/browserSession';
 
 describe('browser session shared boundary', () => {
@@ -63,5 +67,13 @@ describe('browser session shared boundary', () => {
     expect(googleFlowImageModelFor('gemini-3.1-flash-lite-image')).toBe('nano-banana-2');
     expect(googleFlowImageModelFor('gemini-3-pro-image')).toBe('nano-banana-pro');
     expect(googleFlowImageModelFor('gemini-2.5-flash-image')).toBe('nano-banana-2');
+  });
+
+  it('keeps the visible Flow worker default safe when its renderer preference is missing or malformed', () => {
+    expect(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY).toBe('openvideo-google-flow-preferences-v1');
+    expect(parseGoogleFlowPreferences(null)).toEqual(DEFAULT_GOOGLE_FLOW_PREFERENCES);
+    expect(parseGoogleFlowPreferences('{')).toEqual(DEFAULT_GOOGLE_FLOW_PREFERENCES);
+    const hidden = { schemaVersion: 1 as const, showWindowDuringGeneration: false };
+    expect(parseGoogleFlowPreferences(serializeGoogleFlowPreferences(hidden))).toEqual(hidden);
   });
 });

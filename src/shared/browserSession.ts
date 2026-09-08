@@ -33,6 +33,40 @@ export type GoogleFlowImagePromptInput = {
 
 export type GoogleFlowImageModel = 'nano-banana-2' | 'nano-banana-pro';
 
+export const GOOGLE_FLOW_PREFERENCES_STORAGE_KEY = 'openvideo-google-flow-preferences-v1';
+
+export type GoogleFlowPreferences = {
+  readonly schemaVersion: 1;
+  readonly showWindowDuringGeneration: boolean;
+};
+
+export const DEFAULT_GOOGLE_FLOW_PREFERENCES: GoogleFlowPreferences = {
+  schemaVersion: 1,
+  // Visible by default while the Flow integration is experimental, so UI
+  // changes, account prompts, and generation progress remain observable.
+  showWindowDuringGeneration: true
+};
+
+export function parseGoogleFlowPreferences(raw: string | null): GoogleFlowPreferences {
+  if (raw === null) return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+  try {
+    const value = JSON.parse(raw) as { schemaVersion?: unknown; showWindowDuringGeneration?: unknown };
+    if (value.schemaVersion !== 1 || typeof value.showWindowDuringGeneration !== 'boolean') {
+      return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+    }
+    return { schemaVersion: 1, showWindowDuringGeneration: value.showWindowDuringGeneration };
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+  }
+}
+
+export function serializeGoogleFlowPreferences(preferences: GoogleFlowPreferences): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    showWindowDuringGeneration: preferences.showWindowDuringGeneration
+  });
+}
+
 /** Map API catalog choices onto the image models exposed by Google Flow. */
 export function googleFlowImageModelFor(modelId: string): GoogleFlowImageModel {
   if (modelId.includes('pro')) return 'nano-banana-pro';
