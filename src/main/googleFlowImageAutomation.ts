@@ -92,8 +92,8 @@ export function buildGoogleFlowStateProbeScript(): string {
       .filter((entry) => entry.rectangle);
     const viewH = window.innerHeight;
 
-    const inputs = visible('[contenteditable="true"], textarea');
-      const promptEntry = inputs.find(({ rectangle }) => rectangle.width > 100 && rectangle.y > viewH * 0.45);
+    const inputs = visible('[contenteditable]:not([contenteditable="false"]), textarea, [role="textbox"]');
+    const promptEntry = inputs.find(({ rectangle }) => rectangle.width > 100 && rectangle.y > viewH * 0.45);
     const input = promptEntry?.rectangle;
 
     const projectLink = visible('a[href*="/fx/tools/flow/project/"], a[href*="/project/"]')
@@ -150,10 +150,15 @@ export function buildGoogleFlowStateProbeScript(): string {
       return /untitled|project name|project title/i.test(label(element));
     });
 
-    const configCandidates = visible('button[aria-haspopup="menu"]')
+    // The current Flow editor renders the bottom configuration pill as a
+    // regular button (for example "Video 720p 8s x2") rather than always
+    // exposing aria-haspopup=menu. Search all interactive controls, but keep
+    // the geometry and media-setting checks narrow enough to avoid nav items.
+    const configCandidates = interactive
       .filter(({ element, rectangle }) => {
         const text = label(element);
-        return rectangle.y > viewH * 0.65 && /crop_|image|video|banana|imagen|veo/i.test(text);
+        return rectangle.y > viewH * 0.55 && rectangle.width > 100
+          && /crop_|image|video|banana|imagen|veo|(?:^|\\s)x[1-4](?:\\s|$)|\\b\\d{3,4}p\\b|\\b\\d{1,3}s\\b/i.test(text);
       });
     const configEntry = configCandidates.find(({ element }) => /crop_|(?:^|\\s)x[1-4](?:\\s|$)|landscape|portrait/i.test(label(element)))
       || configCandidates[0];
@@ -161,22 +166,31 @@ export function buildGoogleFlowStateProbeScript(): string {
       ? { rectangle: configEntry.rectangle, text: label(configEntry.element) }
       : undefined;
 
-    const tabs = visible('[role="tab"]').map(({ element, rectangle }) => ({
+    // Flow has used tabs, menu items, radio controls, and plain buttons for
+    // the same configuration choices across UI revisions. Return the common
+    // geometry contract so the driver does not depend on one ARIA role.
+    const tabs = visible('[role="tab"], [role="radio"], button').map(({ element, rectangle }) => ({
       rectangle,
       text: label(element),
       selected: element.getAttribute('aria-selected') === 'true'
+        || element.getAttribute('aria-checked') === 'true'
+        || element.getAttribute('aria-pressed') === 'true'
+        || element.getAttribute('data-state') === 'checked'
     }));
     const menuItems = visible('[role="menuitem"], [role="option"]').map(({ element, rectangle }) => ({
       rectangle,
       text: label(element),
       selected: element.getAttribute('aria-selected') === 'true' || element.getAttribute('aria-checked') === 'true'
     }));
-    const modelEntry = buttons.find(({ element, rectangle }) => {
+    const modelEntries = buttons.filter(({ element, rectangle }) => {
       const text = label(element);
       return rectangle.width > 100 && /nano banana|imagen/i.test(text)
-        && (/arrow_drop_down/i.test(text) || element.getAttribute('aria-haspopup') !== null)
         && (!configEntry || element !== configEntry.element);
     });
+    const modelEntry = modelEntries.find(({ element }) => {
+      const text = label(element);
+      return /arrow_drop_down/i.test(text) || element.getAttribute('aria-haspopup') !== null;
+    }) || modelEntries[0];
     const modelDropdown = modelEntry
       ? { rectangle: modelEntry.rectangle, text: label(modelEntry.element) }
       : undefined;
@@ -185,7 +199,7 @@ export function buildGoogleFlowStateProbeScript(): string {
       const text = label(element);
       const aria = element.getAttribute('aria-label') || '';
       return rectangle.y > viewH * 0.65 && !element.disabled
-        && (/arrow_forward/i.test(text) || /^(generate|create)$/i.test(aria));
+        && (/arrow_forward|send/i.test(text) || /generate|create|submit|send/i.test(aria));
     });
 
     const images = visible('img').flatMap(({ element, rectangle }) => {
@@ -297,6 +311,13 @@ async function waitForProjectEditor(
   let createdProject = false;
   let rememberedProjectAttempted = false;
   let lastHeartbeat = Date.now();
+  const readinessDetails = (state: AutomationState): Readonly<Record<string, unknown>> => ({
+    projectCandidates: state.projectCandidates?.length ?? 0,
+    requestedProject: projectName ?? '',
+    inputFound: state.input !== undefined,
+    configFound: state.configButton !== undefined,
+    projectPage: isFlowProjectUrl(state.url)
+  });
   while (Date.now() < deadline) {
     let state: AutomationState;
     try {
@@ -345,8 +366,7 @@ async function waitForProjectEditor(
       enteredProject = true;
       createdProject = matchingProject === undefined && state.newProject !== undefined && projectTarget === state.newProject;
       onProject({
-        projectCandidates: state.projectCandidates?.length ?? 0,
-        requestedProject: projectName ?? '',
+        ...readinessDetails(state),
         matchingProject: matchingProject?.text ?? '',
         creatingProject: createdProject
       });
@@ -356,8 +376,7 @@ async function waitForProjectEditor(
     if (Date.now() - lastHeartbeat >= 10_000) {
       lastHeartbeat = Date.now();
       onProject({
-        projectCandidates: state.projectCandidates?.length ?? 0,
-        requestedProject: projectName ?? '',
+        ...readinessDetails(state),
         matchingProject: matchingProject?.text ?? '',
         creatingProject: createdProject
       });
@@ -448,18 +467,33 @@ export function flowOrientationForAspectRatio(aspectRatio: string): 'Landscape' 
   return Number.isFinite(width) && Number.isFinite(height) && height! > width! ? 'Portrait' : 'Landscape';
 }
 
-function findTab(state: AutomationState, expected: string): RectangleWithText | undefined {
+function findChoice(state: AutomationState, expected: string): RectangleWithText | undefined {
   const target = normalizedLabel(expected);
-  return state.tabs.find((tab) => normalizedLabel(tab.text).includes(target));
+  const choices = [...state.tabs, ...state.menuItems];
+  return choices.find((choice) => normalizedLabel(choice.text) === target)
+    ?? choices.find((choice) => normalizedLabel(choice.text).includes(target));
 }
 
-async function selectTab(webContents: WebContents, expected: string): Promise<void> {
-  const state = await readState(webContents);
+async function selectConfigurationChoice(
+  webContents: WebContents,
+  configButton: Rectangle,
+  expected: string
+): Promise<void> {
+  let state = await readState(webContents);
   throwForAction(state);
-  const tab = findTab(state, expected);
-  if (tab === undefined) throw new Error(`Google Flow configuration did not expose the ${expected} option.`);
-  if (!tab.selected) {
-    clickAt(webContents, tab.rectangle);
+  let choice = findChoice(state, expected);
+  if (choice === undefined) {
+    // Some Flow revisions close the popover after each selection. Reopen the
+    // same bottom configuration pill before declaring the option unavailable.
+    clickAt(webContents, configButton);
+    await delay(300);
+    state = await readState(webContents);
+    throwForAction(state);
+    choice = findChoice(state, expected);
+  }
+  if (choice === undefined) throw new Error(`Google Flow configuration did not expose the ${expected} option.`);
+  if (!choice.selected) {
+    clickAt(webContents, choice.rectangle);
     await delay(500);
   }
 }
@@ -470,11 +504,12 @@ async function configureGeneration(
   model: GoogleFlowImageModel,
   aspectRatio: string
 ): Promise<void> {
-  clickAt(webContents, ready.configButton!.rectangle);
+  const configButton = ready.configButton!.rectangle;
+  clickAt(webContents, configButton);
   await delay(800);
-  await selectTab(webContents, 'Image');
-  await selectTab(webContents, flowOrientationForAspectRatio(aspectRatio));
-  await selectTab(webContents, 'x1');
+  await selectConfigurationChoice(webContents, configButton, 'Image');
+  await selectConfigurationChoice(webContents, configButton, flowOrientationForAspectRatio(aspectRatio));
+  await selectConfigurationChoice(webContents, configButton, 'x1');
 
   let state = await readState(webContents);
   throwForAction(state);
@@ -488,7 +523,7 @@ async function configureGeneration(
     await delay(600);
     state = await readState(webContents);
     throwForAction(state);
-    const option = state.menuItems.find((entry) => normalizedLabel(entry.text).includes(normalizedLabel(expectedModel)));
+    const option = findChoice(state, expectedModel);
     if (option === undefined) {
       pressKey(webContents, 'ESCAPE');
       throw new Error(`This Google Flow account does not expose ${expectedModel}. Choose another Nano Banana model or check the account plan.`);

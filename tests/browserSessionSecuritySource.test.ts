@@ -54,7 +54,12 @@ describe('browser session security wiring', () => {
     expect(automation).toContain("button, [role=\"button\"], a, [tabindex=\"0\"]");
     expect(automation).toContain('projectCandidates');
     expect(automation).toContain('flowNewProject');
-    expect(automation).toContain("'[contenteditable=\"true\"], textarea'");
+    expect(automation).toContain("'[contenteditable]:not([contenteditable=\"false\"]), textarea, [role=\"textbox\"]'");
+    expect(automation).toContain("regular button (for example \"Video 720p 8s x2\")");
+    expect(automation).toContain("'[role=\"tab\"], [role=\"radio\"], button'");
+    expect(automation).toContain('inputFound: state.input !== undefined');
+    expect(automation).toContain('configFound: state.configButton !== undefined');
+    expect(automation).toContain('/generate|create|submit|send/i.test(aria)');
     expect(automation).toContain("'iframe[src*=\"recaptcha\"]'");
     expect(automation).toContain('const challengeElement = visible([');
     expect(automation).toContain("style.opacity !== '0'");
