@@ -118,7 +118,10 @@ export class BrowserSessionService {
 
   private async loadIntoPartition(providerId: BrowserSessionProviderId): Promise<Electron.Session> {
     const isolatedSession = session.fromPartition(partitionFor(providerId), { cache: false });
-    await isolatedSession.clearStorageData();
+    // Rehydrate authentication from the encrypted vault on every operation,
+    // while keeping the non-persistent partition's in-memory Flow project map
+    // alive for the rest of this app run. `clear()` still removes all storage.
+    await isolatedSession.clearStorageData({ storages: ['cookies'] });
     const existing = await this.vault.loadSecret(providerId);
     if (existing !== null) {
       for (const cookie of existing.cookies) {
