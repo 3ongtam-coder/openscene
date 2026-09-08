@@ -25,11 +25,14 @@ describe('browser session shared boundary', () => {
 
   it('uses exact HTTPS origins instead of wildcard navigation', () => {
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://labs.google/fx/tools/flow')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('gemini', 'https://flow.google.com/')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('gemini', 'https://flow.google.com.evil.example/')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://gemini.google.com/app')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://accounts.google.com/v3/signin')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('gemini', 'http://labs.google/fx/tools/flow')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://evil.google.com')).toBe(false);
     expect(isBrowserSessionCookieSourceAllowed('gemini', 'https://gemini.google.com/app')).toBe(true);
+    expect(isBrowserSessionCookieSourceAllowed('gemini', 'https://flow.google.com/')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com.evil.example')).toBe(false);
   });
@@ -37,6 +40,7 @@ describe('browser session shared boundary', () => {
   it('accepts only cookie domains applicable to an allowed origin', () => {
     expect(isBrowserSessionCookieDomainAllowed('gemini', '.google.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('gemini', 'gemini.google.com')).toBe(true);
+    expect(isBrowserSessionCookieDomainAllowed('gemini', 'flow.google.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('gemini', 'youtube.com')).toBe(false);
     expect(isBrowserSessionCookieDomainAllowed('grok', '.x.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('grok', 'ads.x.com')).toBe(false);
