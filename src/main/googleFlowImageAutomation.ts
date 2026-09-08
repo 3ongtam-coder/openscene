@@ -462,30 +462,37 @@ async function renameFlowProject(
   projectName: string,
   deadline: number
 ): Promise<boolean> {
+  let menuOpened = false;
+  let renameEditingRequested = false;
   while (Date.now() < deadline) {
     const state = await readState(webContents);
     throwForAction(state);
-    if (state.projectTitleInput !== undefined) {
+    if (renameEditingRequested && state.projectTitleInput !== undefined) {
       clickAt(webContents, state.projectTitleInput);
       await delay(100);
       pressKey(webContents, 'A', ['control']);
       await webContents.insertText(projectName);
       pressKey(webContents, 'ENTER');
-      await delay(400);
-      return true;
+      await delay(500);
+      const verified = await readState(webContents);
+      return verified.projectTitle !== undefined
+        && normalizedLabel(verified.projectTitle.text).includes(normalizedLabel(projectName));
     }
     if (state.renameProject !== undefined) {
       clickAt(webContents, state.renameProject);
+      renameEditingRequested = true;
       await delay(300);
       continue;
     }
-    if (state.projectTitleMenu !== undefined) {
+    if (!menuOpened && state.projectTitleMenu !== undefined) {
       clickAt(webContents, state.projectTitleMenu);
+      menuOpened = true;
       await delay(300);
       continue;
     }
     if (state.projectTitle !== undefined) {
       clickAt(webContents, state.projectTitle.rectangle);
+      renameEditingRequested = true;
       await delay(300);
       continue;
     }
@@ -498,8 +505,9 @@ function targetModelLabel(model: GoogleFlowImageModel): string {
   return model === 'nano-banana-pro' ? 'Nano Banana Pro' : 'Nano Banana 2';
 }
 
-export function flowOrientationForAspectRatio(aspectRatio: string): 'Landscape' | 'Portrait' {
+export function flowOrientationForAspectRatio(aspectRatio: string): 'Landscape' | 'Portrait' | 'Square' {
   const [width, height] = aspectRatio.split(':').map(Number);
+  if (Number.isFinite(width) && Number.isFinite(height) && width === height) return 'Square';
   return Number.isFinite(width) && Number.isFinite(height) && height! > width! ? 'Portrait' : 'Landscape';
 }
 
@@ -538,19 +546,33 @@ async function configureGeneration(
   webContents: WebContents,
   ready: AutomationState,
   model: GoogleFlowImageModel,
-  aspectRatio: string
+  aspectRatio: string,
+  onConfiguration: (details: Readonly<Record<string, unknown>>) => void
 ): Promise<void> {
   const configButton = ready.configButton!.rectangle;
   clickAt(webContents, configButton);
   await delay(800);
+  onConfiguration({ step: 'panel_opened' });
   await selectConfigurationChoice(webContents, configButton, 'Image');
+  onConfiguration({ step: 'media_type', selected: 'Image' });
   await selectConfigurationChoice(webContents, configButton, flowOrientationForAspectRatio(aspectRatio));
+  onConfiguration({ step: 'orientation', selected: flowOrientationForAspectRatio(aspectRatio) });
   await selectConfigurationChoice(webContents, configButton, 'x1');
+  onConfiguration({ step: 'count', selected: 'x1' });
 
   let state = await readState(webContents);
   throwForAction(state);
   const expectedModel = targetModelLabel(model);
-  const currentConfiguration = `${ready.configButton?.text ?? ''} ${state.modelDropdown?.text ?? ''}`;
+  // Each choice can close and replace Flow's configuration pill. Always read
+  // the current pill; the pre-configuration state still describes Video.
+  const currentConfiguration = `${state.configButton?.text ?? ''} ${state.modelDropdown?.text ?? ''}`;
+  onConfiguration({
+    step: 'model_check',
+    expectedModel,
+    currentConfigFound: state.configButton !== undefined,
+    modelControlFound: state.modelDropdown !== undefined,
+    expectedModelSelected: normalizedLabel(currentConfiguration).includes(normalizedLabel(expectedModel))
+  });
   if (!normalizedLabel(currentConfiguration).includes(normalizedLabel(expectedModel))) {
     if (state.modelDropdown === undefined) {
       throw new Error(`Google Flow loaded, but the image model selector was not found. OpenScene cannot guarantee ${expectedModel}.`);
@@ -566,9 +588,11 @@ async function configureGeneration(
     }
     clickAt(webContents, option.rectangle);
     await delay(500);
+    onConfiguration({ step: 'model', selected: expectedModel });
   }
   pressKey(webContents, 'ESCAPE');
   await delay(500);
+  onConfiguration({ step: 'complete' });
 }
 
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
@@ -621,9 +645,12 @@ export async function automateGoogleFlowImageGeneration(
   }
   input.onProgress?.('ready', Date.now() - startedAt);
   input.onProgress?.('configuring', Date.now() - startedAt);
-  await configureGeneration(webContents, ready, input.model, input.aspectRatio);
+  await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
+    input.onProgress?.('configuring', Date.now() - startedAt, details);
+  });
 
   ready = await fillPrompt(webContents, input.prompt, deadline);
+  input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });
   const existingImages = new Set(ready.images.map((image) => image.src));
   clickAt(webContents, ready.submit!);
   input.onProgress?.('submitted', Date.now() - startedAt);

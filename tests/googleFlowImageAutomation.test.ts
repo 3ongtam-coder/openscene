@@ -28,7 +28,7 @@ describe('Google Flow browser image automation', () => {
 
   it('maps exact ratios onto the coarse orientation available in Flow', () => {
     expect(flowOrientationForAspectRatio('16:9')).toBe('Landscape');
-    expect(flowOrientationForAspectRatio('1:1')).toBe('Landscape');
+    expect(flowOrientationForAspectRatio('1:1')).toBe('Square');
     expect(flowOrientationForAspectRatio('9:16')).toBe('Portrait');
     expect(flowOrientationForAspectRatio('3:4')).toBe('Portrait');
   });
@@ -47,10 +47,14 @@ describe('Google Flow browser image automation', () => {
     ];
     const editorState = {
       url: 'https://labs.google/fx/tools/flow/project/example', input,
-      configButton: { rectangle: config, text: 'Nano Banana 2 crop_16_9 x1' },
+      configButton: { rectangle: config, text: 'Video 720p 8s x2' },
       tabs: [], menuItems: [], submit, images: [oldImage]
     };
-    const panelState = { ...editorState, tabs: selectedTabs };
+    const panelState = {
+      ...editorState,
+      configButton: { rectangle: config, text: 'Nano Banana 2 Landscape x1' },
+      tabs: selectedTabs
+    };
     const executeJavaScript = vi.fn()
       .mockResolvedValueOnce(editorState)
       .mockResolvedValueOnce(panelState)
