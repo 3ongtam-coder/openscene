@@ -5,6 +5,7 @@ import {
   automateGoogleFlowImageGeneration,
   buildGoogleFlowStateProbeScript,
   detectDownloadedImageMime,
+  flowConfigurationHasExactModel,
   flowOrientationForAspectRatio
 } from '../src/main/googleFlowImageAutomation';
 
@@ -33,13 +34,19 @@ describe('Google Flow browser image automation', () => {
     expect(flowOrientationForAspectRatio('3:4')).toBe('Portrait');
   });
 
+  it('does not mistake Nano Banana 2 Lite for Nano Banana 2', () => {
+    expect(flowConfigurationHasExactModel('🍌 Nano Banana 2 crop_square x1', 'Nano Banana 2')).toBe(true);
+    expect(flowConfigurationHasExactModel('🍌 Nano Banana 2 Lite crop_square x1', 'Nano Banana 2')).toBe(false);
+    expect(flowConfigurationHasExactModel('🍌 Nano Banana Pro crop_square x1', 'Nano Banana Pro')).toBe(true);
+  });
+
   it('configures Image x1, fills the prompt, submits, and returns only a new result URL', async () => {
     vi.useFakeTimers();
     const input = { x: 10, y: 700, width: 300, height: 50 };
     const config = { x: 20, y: 800, width: 260, height: 40 };
     const submit = { x: 1100, y: 800, width: 40, height: 40 };
-    const oldImage = { rectangle: { x: 10, y: 10, width: 400, height: 300 }, src: 'https://labs.google/fx/api/old' };
-    const newImage = { rectangle: { x: 420, y: 10, width: 400, height: 300 }, src: 'https://labs.google/fx/api/new' };
+    const oldImage = { rectangle: { x: 10, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/old' };
+    const newImage = { rectangle: { x: 420, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/new' };
     const selectedTabs = [
       { rectangle: { x: 1, y: 1, width: 20, height: 20 }, text: 'Image', selected: true },
       { rectangle: { x: 2, y: 2, width: 20, height: 20 }, text: 'Landscape', selected: true },
@@ -48,7 +55,7 @@ describe('Google Flow browser image automation', () => {
     const editorState = {
       url: 'https://labs.google/fx/tools/flow/project/example', input,
       configButton: { rectangle: config, text: 'Video 720p 8s x2' },
-      tabs: [], menuItems: [], submit, images: [oldImage]
+      tabs: [], menuItems: [], images: [oldImage]
     };
     const panelState = {
       ...editorState,
@@ -61,8 +68,11 @@ describe('Google Flow browser image automation', () => {
       .mockResolvedValueOnce(panelState)
       .mockResolvedValueOnce(panelState)
       .mockResolvedValueOnce(panelState)
+      // The live Create button is disabled and intentionally absent from the
+      // probe until after text has been inserted into ProseMirror.
       .mockResolvedValueOnce(editorState)
-      .mockResolvedValueOnce({ ...editorState, images: [oldImage, newImage] });
+      .mockResolvedValueOnce({ ...editorState, submit })
+      .mockResolvedValueOnce({ ...editorState, submit, images: [oldImage, newImage] });
     const insertText = vi.fn(async () => undefined);
     const sendInputEvent = vi.fn();
     const operation = automateGoogleFlowImageGeneration({
