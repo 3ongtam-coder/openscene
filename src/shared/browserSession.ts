@@ -31,6 +31,23 @@ export type GoogleFlowImagePromptInput = {
   readonly negativePrompt?: string;
 };
 
+const MAX_GOOGLE_FLOW_PROJECT_NAME_LENGTH = 100;
+
+/**
+ * Keep the local folder/project label usable as a Flow project title without
+ * leaking paths or control characters into the provider UI.
+ */
+export function normalizeGoogleFlowProjectName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_GOOGLE_FLOW_PROJECT_NAME_LENGTH)
+    .trim();
+  return normalized.length === 0 ? undefined : normalized;
+}
+
 export type GoogleFlowImageModel = 'nano-banana-2' | 'nano-banana-pro';
 
 export const GOOGLE_FLOW_PREFERENCES_STORAGE_KEY = 'openvideo-google-flow-preferences-v1';

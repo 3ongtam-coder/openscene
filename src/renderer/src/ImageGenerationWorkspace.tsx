@@ -21,6 +21,8 @@ type ImageGenerationMode = 'api' | 'browser_session';
 type ImageGenerationWorkspaceProps = {
   /** Hands a finished still to the video studio and switches to it. */
   readonly onUseForVideo: (reference: ReferenceImageSelection) => void;
+  /** Local project folder/name mirrored to the signed-in Flow workspace. */
+  readonly projectName?: string | undefined;
 };
 
 function showGoogleFlowWindow(): boolean {
@@ -33,7 +35,7 @@ function showGoogleFlowWindow(): boolean {
   }
 }
 
-export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorkspaceProps): ReactElement {
+export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const imageModel = selectedModel('image-generation');
   const [prompt, setPrompt] = useState('');
@@ -96,7 +98,9 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
         stylePreset: selectedStyle,
         modelId: imageModel.id,
         mode: generationMode,
-        ...(generationMode === 'browser_session' ? { showBrowserWindow: flowWindowVisible } : {}),
+        ...(generationMode === 'browser_session'
+          ? { showBrowserWindow: flowWindowVisible, ...(projectName === undefined ? {} : { flowProjectName: projectName }) }
+          : {}),
         ...(negativePrompt.trim().length === 0 ? {} : { negativePrompt: negativePrompt.trim() })
       });
 

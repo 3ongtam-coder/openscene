@@ -50,6 +50,9 @@ describe('browser session security wiring', () => {
     expect(service).toContain("isolatedSession!.on('will-download'");
     expect(service).not.toMatch(/fetch\(|batchexecute|StreamGenerate/);
     expect(automation).toContain("a[href*=\"/fx/tools/flow/project/\"]");
+    expect(automation).toContain("button, [role=\"button\"], a, [tabindex=\"0\"]");
+    expect(automation).toContain('projectCandidates');
+    expect(automation).toContain('flowNewProject');
     expect(automation).toContain("'[contenteditable=\"true\"], textarea'");
     expect(automation).toContain("'iframe[src*=\"recaptcha\"]'");
     expect(automation).not.toContain("/captcha|verify it");
@@ -59,6 +62,7 @@ describe('browser session security wiring', () => {
     expect(studio).toContain("mode: generationMode");
     expect(studio).toContain('Opening the signed-in Google Flow window');
     expect(studio).toContain('showBrowserWindow: flowWindowVisible');
+    expect(studio).toContain('flowProjectName');
     expect(mobile).toContain('Signed-in Google Flow automation is desktop-only');
   });
 });

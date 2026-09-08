@@ -2,11 +2,16 @@ import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { GoogleFlowImageModel } from '../shared/browserSession';
 
 const POLL_INTERVAL_MS = 1_000;
+const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
 
 type RectangleWithText = {
   readonly rectangle: Rectangle;
   readonly text: string;
   readonly selected?: boolean;
+};
+
+type FlowProjectCandidate = RectangleWithText & {
+  readonly href?: string;
 };
 
 type FlowImage = {
@@ -18,7 +23,10 @@ type AutomationState = {
   readonly url: string;
   readonly input?: Rectangle;
   readonly existingProject?: Rectangle;
+  readonly projectCandidates?: readonly FlowProjectCandidate[];
   readonly newProject?: Rectangle;
+  readonly projectTitle?: RectangleWithText;
+  readonly projectTitleInput?: Rectangle;
   readonly dismiss?: Rectangle;
   readonly configButton?: RectangleWithText;
   readonly modelDropdown?: RectangleWithText;
@@ -43,7 +51,12 @@ export type GoogleFlowAutomationInput = {
   readonly model: GoogleFlowImageModel;
   readonly aspectRatio: string;
   readonly timeoutMs: number;
-  readonly onProgress?: (stage: GoogleFlowAutomationProgress, elapsedMs: number) => void;
+  readonly projectName?: string;
+  readonly onProgress?: (
+    stage: GoogleFlowAutomationProgress,
+    elapsedMs: number,
+    details?: Readonly<Record<string, unknown>>
+  ) => void;
 };
 
 function delay(milliseconds: number): Promise<void> {
@@ -84,9 +97,57 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
 
     const projectLink = visible('a[href*="/fx/tools/flow/project/"], a[href*="/project/"]')
       .find(({ rectangle }) => rectangle.width > 50 && rectangle.height > 50);
+    const normalized = (value) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const interactive = visible('button, [role="button"], a, [tabindex="0"]');
+    const projectCandidates = [];
+    const seenProjectElements = new Set();
+    const addProjectCandidate = (element, rectangle, href) => {
+      if (!rectangle || rectangle.width < 120 || rectangle.height < 80 || rectangle.y < 60) return;
+      if (seenProjectElements.has(element)) return;
+      const text = label(element);
+      if (/new project|du an moi/.test(normalized(text))) return;
+      seenProjectElements.add(element);
+      projectCandidates.push({ rectangle, text, ...(href ? { href } : {}) });
+    };
+    interactive.forEach(({ element, rectangle }) => {
+      const href = element instanceof HTMLAnchorElement ? element.href : undefined;
+      addProjectCandidate(element, rectangle, href);
+    });
+    // Flow renders project cards as clickable divs containing thumbnails in
+    // the listing. Include the thumbnail owner when it is not an anchor.
+    visible('img').forEach(({ element, rectangle }) => {
+      if (!(element instanceof HTMLImageElement) || element.naturalWidth < 100) return;
+      let owner = element.closest('a, button, [role="button"], [tabindex="0"]');
+      if (!owner) owner = element.parentElement;
+      const ownerRectangle = owner ? visibleRect(owner) : rectangle;
+      const href = owner instanceof HTMLAnchorElement ? owner.href : undefined;
+      addProjectCandidate(owner ?? element, ownerRectangle ?? rectangle, href);
+    });
+    projectCandidates.sort((left, right) => (right.rectangle.width * right.rectangle.height) - (left.rectangle.width * left.rectangle.height));
+    const flowExistingProject = projectCandidates[0];
+    const flowNewProject = interactive
+      .concat(visible('div, span'))
+      .filter(({ element, rectangle }) => {
+        if (rectangle.width < 60 || rectangle.height < 30 || rectangle.width > window.innerWidth * 0.8) return false;
+        const text = normalized(label(element));
+        return /new project|du an moi/.test(text) || /^\+\s*(new|du an)/.test(text);
+      })
+      .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
     const buttons = visible('button');
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
+
+    const topInputs = visible('input, [contenteditable="true"]')
+      .filter(({ rectangle }) => rectangle.y < viewH * 0.35 && rectangle.width > 100);
+    const titleInput = topInputs.find(({ element }) => {
+      const text = [element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name')]
+        .filter(Boolean).join(' ');
+      return /project|title|name|untitled/i.test(text);
+    });
+    const titleButton = interactive.find(({ element, rectangle }) => {
+      if (rectangle.y > viewH * 0.35 || rectangle.width < 80) return false;
+      return /untitled|project name|project title/i.test(label(element));
+    });
 
     const configCandidates = visible('button[aria-haspopup="menu"]')
       .filter(({ element, rectangle }) => {
@@ -164,8 +225,11 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
     return {
       url: location.href,
       ...(input ? { input } : {}),
-      ...(projectLink ? { existingProject: projectLink.rectangle } : {}),
-      ...(newProjectEntry ? { newProject: newProjectEntry.rectangle } : {}),
+      ...(flowExistingProject ? { existingProject: flowExistingProject.rectangle } : {}),
+      projectCandidates,
+      ...(flowNewProject ? { newProject: flowNewProject.rectangle } : {}),
+      ...(titleButton ? { projectTitle: { rectangle: titleButton.rectangle, text: label(titleButton.element) } } : {}),
+      ...(titleInput ? { projectTitleInput: titleInput.rectangle } : {}),
       ...(dismissEntry ? { dismiss: dismissEntry.rectangle } : {}),
       ...(configButton ? { configButton } : {}),
       ...(modelDropdown ? { modelDropdown } : {}),
@@ -209,9 +273,12 @@ function pressKey(webContents: WebContents, keyCode: string, modifiers?: Keyboar
 async function waitForProjectEditor(
   webContents: WebContents,
   deadline: number,
-  onProject: () => void
-): Promise<AutomationState> {
+  projectName: string | undefined,
+  onProject: (details?: Readonly<Record<string, unknown>>) => void
+): Promise<{ readonly state: AutomationState; readonly createdProject: boolean }> {
   let enteredProject = false;
+  let createdProject = false;
+  let rememberedProjectAttempted = false;
   let lastHeartbeat = Date.now();
   while (Date.now() < deadline) {
     let state: AutomationState;
@@ -228,26 +295,127 @@ async function waitForProjectEditor(
       continue;
     }
     throwForAction(state);
-    if (state.input !== undefined && state.configButton !== undefined) return state;
+    if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
+    if (!enteredProject && !rememberedProjectAttempted && projectName !== undefined) {
+      rememberedProjectAttempted = true;
+      const rememberedUrl = await readRememberedProjectUrl(webContents, projectName).catch(() => undefined);
+      if (rememberedUrl !== undefined) {
+        onProject({ rememberedProject: true, requestedProject: projectName });
+        enteredProject = true;
+        await webContents.loadURL(rememberedUrl);
+        lastHeartbeat = Date.now();
+        await delay(500);
+        continue;
+      }
+    }
     if (!enteredProject && state.dismiss !== undefined) {
       clickAt(webContents, state.dismiss);
       await delay(500);
       continue;
     }
-    const projectTarget = state.existingProject ?? state.newProject;
+    const target = projectName === undefined ? undefined : normalizedLabel(projectName);
+    const matchingProject = target === undefined || target.length === 0
+      ? undefined
+      : (state.projectCandidates ?? []).find((candidate) => normalizedLabel(candidate.text).includes(target));
+    // If the requested local project is not visible in Flow, create one rather
+    // than silently generating into another project. This is what prevents a
+    // project from drifting away from the local folder name.
+    const projectTarget = matchingProject?.rectangle
+      ?? (target === undefined || target.length === 0 ? state.existingProject ?? state.newProject : state.newProject);
     if (!enteredProject && projectTarget !== undefined) {
       enteredProject = true;
-      onProject();
+      createdProject = matchingProject === undefined && state.newProject !== undefined && projectTarget === state.newProject;
+      onProject({
+        projectCandidates: state.projectCandidates?.length ?? 0,
+        requestedProject: projectName ?? '',
+        matchingProject: matchingProject?.text ?? '',
+        creatingProject: createdProject
+      });
       lastHeartbeat = Date.now();
       clickAt(webContents, projectTarget);
     }
     if (Date.now() - lastHeartbeat >= 10_000) {
       lastHeartbeat = Date.now();
-      onProject();
+      onProject({
+        projectCandidates: state.projectCandidates?.length ?? 0,
+        requestedProject: projectName ?? '',
+        matchingProject: matchingProject?.text ?? '',
+        creatingProject: createdProject
+      });
     }
     await delay(POLL_INTERVAL_MS);
   }
   throw new Error('Google Flow loaded, but its project editor did not become ready before the timeout. Open the Flow session in Settings and check the page.');
+}
+
+function isFlowProjectUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.hostname === 'labs.google' && /\/project\//.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function readRememberedProjectUrl(webContents: WebContents, projectName: string): Promise<string | undefined> {
+  const encodedName = JSON.stringify(projectName);
+  const result = await webContents.executeJavaScript(`(() => {
+    try {
+      const map = JSON.parse(window.localStorage.getItem(${JSON.stringify(FLOW_PROJECT_MAP_STORAGE_KEY)}) || '{}');
+      return map[${encodedName}];
+    } catch {
+      return undefined;
+    }
+  })()`, true);
+  return typeof result === 'string' && isFlowProjectUrl(result) ? result : undefined;
+}
+
+async function rememberProjectUrl(webContents: WebContents, projectName: string, projectUrl: string): Promise<void> {
+  if (!isFlowProjectUrl(projectUrl)) return;
+  const encodedName = JSON.stringify(projectName);
+  const encodedUrl = JSON.stringify(projectUrl);
+  await webContents.executeJavaScript(`(() => {
+    try {
+      const key = ${JSON.stringify(FLOW_PROJECT_MAP_STORAGE_KEY)};
+      const current = JSON.parse(window.localStorage.getItem(key) || '{}');
+      current[${encodedName}] = ${encodedUrl};
+      window.localStorage.setItem(key, JSON.stringify(current));
+    } catch {
+      // A blocked localStorage only disables the reuse hint; Flow remains usable.
+    }
+  })()`, true);
+}
+
+/**
+ * New Flow projects can expose their title as a small top-bar button or an
+ * inline input. Rename only through that visible control; no private Flow
+ * endpoint or project metadata is touched.
+ */
+async function renameFlowProject(
+  webContents: WebContents,
+  projectName: string,
+  deadline: number
+): Promise<boolean> {
+  while (Date.now() < deadline) {
+    const state = await readState(webContents);
+    throwForAction(state);
+    if (state.projectTitleInput !== undefined) {
+      clickAt(webContents, state.projectTitleInput);
+      await delay(100);
+      pressKey(webContents, 'A', ['control']);
+      await webContents.insertText(projectName);
+      pressKey(webContents, 'ENTER');
+      await delay(400);
+      return true;
+    }
+    if (state.projectTitle !== undefined) {
+      clickAt(webContents, state.projectTitle.rectangle);
+      await delay(300);
+      continue;
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+  return false;
 }
 
 function targetModelLabel(model: GoogleFlowImageModel): string {
@@ -343,9 +511,21 @@ export async function automateGoogleFlowImageGeneration(
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
 
-  let ready = await waitForProjectEditor(webContents, deadline, () => {
-    input.onProgress?.('project', Date.now() - startedAt);
+  const projectResult = await waitForProjectEditor(webContents, deadline, input.projectName, (details) => {
+    input.onProgress?.('project', Date.now() - startedAt, details);
   });
+  let ready = projectResult.state;
+  if (input.projectName !== undefined) {
+    await rememberProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
+  }
+  if (projectResult.createdProject && input.projectName !== undefined) {
+    const renamed = await renameFlowProject(webContents, input.projectName, deadline);
+    input.onProgress?.('project', Date.now() - startedAt, {
+      projectName: input.projectName,
+      projectCreated: true,
+      projectRenamed: renamed
+    });
+  }
   input.onProgress?.('ready', Date.now() - startedAt);
   input.onProgress?.('configuring', Date.now() - startedAt);
   await configureGeneration(webContents, ready, input.model, input.aspectRatio);

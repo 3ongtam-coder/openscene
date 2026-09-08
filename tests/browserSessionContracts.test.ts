@@ -9,6 +9,7 @@ import {
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionCookieSourceAllowed,
   isBrowserSessionNavigationAllowed,
+  normalizeGoogleFlowProjectName,
   parseGoogleFlowPreferences,
   parseBrowserSessionProviderId,
   serializeGoogleFlowPreferences
@@ -75,5 +76,11 @@ describe('browser session shared boundary', () => {
     expect(parseGoogleFlowPreferences('{')).toEqual(DEFAULT_GOOGLE_FLOW_PREFERENCES);
     const hidden = { schemaVersion: 1 as const, showWindowDuringGeneration: false };
     expect(parseGoogleFlowPreferences(serializeGoogleFlowPreferences(hidden))).toEqual(hidden);
+  });
+
+  it('normalizes a local folder label before mirroring it into Flow', () => {
+    expect(normalizeGoogleFlowProjectName('  My   Film\u0000  ')).toBe('My Film');
+    expect(normalizeGoogleFlowProjectName('   ')).toBeUndefined();
+    expect(normalizeGoogleFlowProjectName(undefined)).toBeUndefined();
   });
 });

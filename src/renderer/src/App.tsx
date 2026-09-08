@@ -417,6 +417,7 @@ export function App(): ReactElement {
                 tabIndex={-1}
               >
                 <ImageGenerationWorkspace
+                  projectName={editor.projects.find((item) => item.id === editor.project?.id)?.folderName ?? editor.project?.name}
                   onUseForVideo={(reference) => {
                     setVideoReferenceImage(reference);
                     selectWorkspaceTab('video');
