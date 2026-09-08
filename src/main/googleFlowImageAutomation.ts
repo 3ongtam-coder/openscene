@@ -27,6 +27,8 @@ type AutomationState = {
   readonly projectCandidates?: readonly FlowProjectCandidate[];
   readonly newProject?: Rectangle;
   readonly projectTitle?: RectangleWithText;
+  readonly projectTitleMenu?: Rectangle;
+  readonly renameProject?: Rectangle;
   readonly projectTitleInput?: Rectangle;
   readonly dismiss?: Rectangle;
   readonly configButton?: RectangleWithText;
@@ -138,16 +140,38 @@ export function buildGoogleFlowStateProbeScript(): string {
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
 
-    const topInputs = visible('input, [contenteditable="true"]')
+    const projectInputs = visible('input, [contenteditable]:not([contenteditable="false"])');
+    const topInputs = projectInputs
       .filter(({ rectangle }) => rectangle.y < viewH * 0.35 && rectangle.width > 100);
-    const titleInput = topInputs.find(({ element }) => {
+    const explicitTitleInput = projectInputs.find(({ element }) => {
       const text = [element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name')]
         .filter(Boolean).join(' ');
       return /project|title|name|untitled/i.test(text);
     });
-    const titleButton = interactive.find(({ element, rectangle }) => {
+    const renameProjectEntry = visible('button, [role="menuitem"], [role="option"]')
+      .find(({ element }) => /^(rename|doi ten|Ä‘á»•i tÃªn)$/i.test(normalized(label(element))));
+    const titleInput = explicitTitleInput || projectInputs.find(({ element, rectangle }) => {
+      const value = element instanceof HTMLInputElement ? element.value : label(element);
+      const hint = [element.getAttribute('aria-label'), element.getAttribute('placeholder')].filter(Boolean).join(' ');
+      return rectangle.y < viewH * 0.65 && value.trim().length > 0 && !/search|prompt/i.test(hint);
+    });
+    const explicitTitleButton = interactive.find(({ element, rectangle }) => {
       if (rectangle.y > viewH * 0.35 || rectangle.width < 80) return false;
       return /untitled|project name|project title/i.test(label(element));
+    });
+    const titleButton = explicitTitleButton || interactive.find(({ element, rectangle }) => {
+      const text = label(element);
+      return rectangle.x > 50 && rectangle.x < window.innerWidth * 0.32
+        && rectangle.y < 140 && rectangle.width >= 80 && rectangle.height < 80
+        && text.length > 0 && text.length <= 100
+        && !/home|all media|character|scene|tool/i.test(normalized(text));
+    });
+    const titleMenuEntry = buttons.find(({ element, rectangle }) => {
+      const text = normalized(label(element));
+      const aria = normalized(element.getAttribute('aria-label') || '');
+      return rectangle.x > 50 && rectangle.x < window.innerWidth * 0.35
+        && rectangle.y < 140 && rectangle.width < 80 && rectangle.height < 80
+        && /more|option|menu|more_vert/.test(text + ' ' + aria);
     });
 
     // The current Flow editor renders the bottom configuration pill as a
@@ -256,6 +280,8 @@ export function buildGoogleFlowStateProbeScript(): string {
       projectCandidates,
       ...(flowNewProject ? { newProject: flowNewProject.rectangle } : {}),
       ...(titleButton ? { projectTitle: { rectangle: titleButton.rectangle, text: label(titleButton.element) } } : {}),
+      ...(titleMenuEntry ? { projectTitleMenu: titleMenuEntry.rectangle } : {}),
+      ...(renameProjectEntry ? { renameProject: renameProjectEntry.rectangle } : {}),
       ...(titleInput ? { projectTitleInput: titleInput.rectangle } : {}),
       ...(dismissEntry ? { dismiss: dismissEntry.rectangle } : {}),
       ...(configButton ? { configButton } : {}),
@@ -447,6 +473,16 @@ async function renameFlowProject(
       pressKey(webContents, 'ENTER');
       await delay(400);
       return true;
+    }
+    if (state.renameProject !== undefined) {
+      clickAt(webContents, state.renameProject);
+      await delay(300);
+      continue;
+    }
+    if (state.projectTitleMenu !== undefined) {
+      clickAt(webContents, state.projectTitleMenu);
+      await delay(300);
+      continue;
     }
     if (state.projectTitle !== undefined) {
       clickAt(webContents, state.projectTitle.rectangle);
