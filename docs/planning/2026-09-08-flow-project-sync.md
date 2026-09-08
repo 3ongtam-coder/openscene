@@ -21,7 +21,9 @@ the same generation flow:
 This remains DOM automation, so a Flow UI change must be handled by updating
 selectors and rerunning the focused suite plus a real signed-in smoke test.
 
-The Flow entry point currently redirects from `labs.google` to the exact
-`flow.google.com` origin. Both origins are explicitly allowlisted, and the
-session vault collects cookies from both; wildcard Google navigation remains
-blocked.
+The worker now opens the canonical `flow.google.com` application directly.
+`labs.google` remains exactly allowlisted for older sessions and provider-owned
+redirects; wildcard Google navigation remains blocked. Electron's
+`ERR_ABORTED (-3)` is accepted only when the replacement URL is still inside
+that exact allowlist. Hidden reCAPTCHA bootstrap elements are ignored; only a
+visible verification challenge stops the job for user action.

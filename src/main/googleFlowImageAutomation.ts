@@ -202,14 +202,26 @@ export function buildGoogleFlowStateProbeScript(): string {
     });
 
     const body = (document.body?.innerText || '').toLowerCase();
-    const challengeElement = document.querySelector([
+    // Google can keep invisible reCAPTCHA/bootstrap elements mounted on an
+    // already authenticated Flow page. Only stop for a challenge which is
+    // actually visible to the user; otherwise the project list is incorrectly
+    // classified as requiring account verification.
+    const challengeElement = visible([
       'iframe[src*="recaptcha"]',
       'iframe[src*="hcaptcha"]',
       'iframe[title*="captcha" i]',
-      '[data-sitekey]',
       'input[name*="captcha" i]',
       'input[autocomplete="one-time-code"]'
-    ].join(','));
+    ].join(',')).find(({ element, rectangle }) => {
+      const style = window.getComputedStyle(element);
+      return rectangle.width >= 80 && rectangle.height >= 30
+        && rectangle.x < window.innerWidth
+        && rectangle.y < window.innerHeight
+        && rectangle.x + rectangle.width > 0
+        && rectangle.y + rectangle.height > 0
+        && style.opacity !== '0'
+        && element.closest('[aria-hidden="true"]') === null;
+    });
     const accountChallengePath = location.hostname === 'accounts.google.com'
       && /\\/challenge(?:\\/|$)|\\/signin\\/v2\\/challenge(?:\\/|$)/i.test(location.pathname);
     let actionRequired;

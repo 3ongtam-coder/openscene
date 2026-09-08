@@ -113,14 +113,14 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
   gemini: {
     id: 'gemini',
     label: 'Google Labs Flow / Veo',
-    applicationOrigin: 'https://labs.google',
-    loginUrl: 'https://labs.google/fx/tools/flow',
+    applicationOrigin: 'https://flow.google.com',
+    loginUrl: 'https://flow.google.com/',
     // The persisted provider id remains `gemini` for compatibility, but this
     // media lane permits only Flow and Google's own sign-in origin.
     // Flow currently redirects its public labs entry point to the dedicated
     // flow.google.com application before rendering the project list/editor.
     // Keep the exact origin allowlist; do not widen this to *.google.com.
-    allowedNavigationOrigins: ['https://labs.google', 'https://flow.google.com', 'https://accounts.google.com'],
+    allowedNavigationOrigins: ['https://flow.google.com', 'https://labs.google', 'https://accounts.google.com'],
     compatibleCookieSourceOrigins: ['https://gemini.google.com']
   },
   grok: {
