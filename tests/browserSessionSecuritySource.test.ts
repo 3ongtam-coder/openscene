@@ -49,6 +49,8 @@ describe('browser session security wiring', () => {
     expect(service).not.toMatch(/fetch\(|batchexecute|StreamGenerate/);
     expect(automation).toContain("a[href*=\"/fx/tools/flow/project/\"]");
     expect(automation).toContain("'[contenteditable=\"true\"], textarea'");
+    expect(automation).toContain("'iframe[src*=\"recaptcha\"]'");
+    expect(automation).not.toContain("/captcha|verify it");
     expect(automation).toContain('webContents.insertText(prompt)');
     expect(automation).toContain("'Nano Banana 2'");
     expect(service).toContain('webContents.downloadURL(generatedImageUrl)');
