@@ -41,7 +41,8 @@ function validDocument(): AiProjectDocument {
     generations: [{
       id: 'generation-1', shotId: 'shot-1', providerId: 'gemini_veo', modelId: 'veo-3.1', capability: 'reference_to_video',
       status: 'completed', prompt: 'Host turns to camera.', referenceAssetIds: ['reference-character'], outputAssetIds: ['asset-output'],
-      createdAt: CREATED, updatedAt: CREATED, provenanceId: 'provenance-1', estimatedCostUsd: 1.25
+      createdAt: CREATED, updatedAt: CREATED, provenanceId: 'provenance-1', estimatedCostUsd: 1.25,
+      continuityControls: { characterConsistency: true, styleConsistency: true, sceneConsistency: true, motionContinuity: false }
     }],
     provenance: [{
       id: 'provenance-1', source: 'provider', createdAt: CREATED, inputAssetIds: ['asset-character'],
@@ -74,6 +75,10 @@ describe('AI project domain', () => {
     expect(parseAiProjectDocument({ ...document, shots: [{ ...document.shots[0]!, sceneId: 'missing-scene' }] })).toBeNull();
     expect(parseAiProjectDocument({ ...document, scenes: [{ ...document.scenes[0]!, shotIds: [] }] })).toBeNull();
     expect(parseAiProjectDocument({ ...document, scripts: [{ ...document.scripts[0]!, parentVersionId: 'script-1' }] })).toBeNull();
+    expect(parseAiProjectDocument({
+      ...document,
+      generations: [{ ...document.generations[0]!, continuityControls: { characterConsistency: true } }]
+    })).toBeNull();
     expect(parseAiProjectDocument({ ...document, unexpected: true })).toBeNull();
     expect(parseAiProjectDocument({
       ...document,

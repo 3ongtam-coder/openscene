@@ -11,6 +11,7 @@ import { VIDEO_OPERATIONS } from './mediaCapabilityRegistry';
 import { parseWriterPipelineState, type WriterPipelineState } from './writerStages';
 import { parseNarrationPlan, type NarrationPlan } from './narrationPlan';
 import { parseTranscriptionDraft, type TranscriptionDraft } from './transcription';
+import { parseVideoContinuityControls, type VideoContinuityControls } from './videoContinuitySettings';
 
 export const AI_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -135,6 +136,7 @@ export type GenerationRecord = {
   readonly provenanceId?: string;
   readonly error?: string;
   readonly estimatedCostUsd?: number;
+  readonly continuityControls?: VideoContinuityControls;
 };
 
 export type ProvenanceRecord = {
@@ -410,7 +412,7 @@ function parseGenerationReview(value: unknown): GenerationReview | null {
 }
 
 function parseGeneration(value: unknown): GenerationRecord | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['id', 'shotId', 'providerId', 'modelId', 'capability', 'status', 'prompt', 'referenceAssetIds', 'outputAssetIds', 'createdAt', 'updatedAt', 'parentGenerationId', 'review', 'provenanceId', 'error', 'estimatedCostUsd'])) return null;
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['id', 'shotId', 'providerId', 'modelId', 'capability', 'status', 'prompt', 'referenceAssetIds', 'outputAssetIds', 'createdAt', 'updatedAt', 'parentGenerationId', 'review', 'provenanceId', 'error', 'estimatedCostUsd', 'continuityControls'])) return null;
   const id = getOpaqueId(value, 'id');
   const shotId = getOpaqueId(value, 'shotId');
   const providerId = getText(value, 'providerId', LIMITS.shortText, false);
@@ -427,8 +429,9 @@ function parseGeneration(value: unknown): GenerationRecord | null {
   const provenanceId = value.provenanceId === undefined ? undefined : getOpaqueId(value, 'provenanceId');
   const error = getOptionalText(value, 'error', LIMITS.mediumText);
   const estimatedCostUsd = value.estimatedCostUsd === undefined ? undefined : getFiniteNonNegative(value, 'estimatedCostUsd');
-  if (id === null || shotId === null || providerId === null || modelId === null || capability === null || status === null || prompt === null || referenceAssetIds === null || outputAssetIds === null || createdAt === null || updatedAt === null || parentGenerationId === null || review === null || provenanceId === null || error === null || estimatedCostUsd === null || (estimatedCostUsd !== undefined && (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > 1_000_000))) return null;
-  return { id, shotId, providerId, modelId, capability, status, prompt, referenceAssetIds, outputAssetIds, createdAt, updatedAt, ...(parentGenerationId === undefined ? {} : { parentGenerationId }), ...(review === undefined ? {} : { review }), ...(provenanceId === undefined ? {} : { provenanceId }), ...(error === undefined ? {} : { error }), ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }) };
+  const continuityControls = value.continuityControls === undefined ? undefined : parseVideoContinuityControls(value.continuityControls);
+  if (id === null || shotId === null || providerId === null || modelId === null || capability === null || status === null || prompt === null || referenceAssetIds === null || outputAssetIds === null || createdAt === null || updatedAt === null || parentGenerationId === null || review === null || provenanceId === null || error === null || estimatedCostUsd === null || continuityControls === null || (estimatedCostUsd !== undefined && (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > 1_000_000))) return null;
+  return { id, shotId, providerId, modelId, capability, status, prompt, referenceAssetIds, outputAssetIds, createdAt, updatedAt, ...(parentGenerationId === undefined ? {} : { parentGenerationId }), ...(review === undefined ? {} : { review }), ...(provenanceId === undefined ? {} : { provenanceId }), ...(error === undefined ? {} : { error }), ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }), ...(continuityControls === undefined ? {} : { continuityControls }) };
 }
 
 function parseProvenance(value: unknown): ProvenanceRecord | null {
