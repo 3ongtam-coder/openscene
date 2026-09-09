@@ -1,4 +1,5 @@
 import type { AiProjectDocument, GenerationRecord, ReferenceAsset } from './aiProjectDomain';
+import type { ImageAspectRatio } from './providerSeams';
 import { approvedWriterShots } from './writerPipeline';
 import { DEFAULT_CLIP_EFFECTS, type TimelineDocument } from './timelineTypes';
 import { placeClip } from './timelineClipLogic';
@@ -44,6 +45,145 @@ export type ProductionAssemblyPlan =
 export type ProductionMutationResult =
   | { readonly ok: true; readonly document: AiProjectDocument }
   | { readonly ok: false; readonly reason: string };
+
+export type ProductionImageTarget =
+  | { readonly kind: 'character_reference'; readonly characterId: string }
+  | { readonly kind: 'storyboard'; readonly shotId: string };
+
+export type ProductionImageBrief = {
+  readonly target: ProductionImageTarget;
+  readonly targetLabel: string;
+  readonly prompt: string;
+  readonly negativePrompt: string;
+  readonly aspectRatio: ImageAspectRatio;
+  readonly stylePreset: 'Cinematic';
+};
+
+/** Transient navigation state; it is deliberately not stored in the project. */
+export type ProductionImageHandoff = ProductionImageBrief & {
+  readonly requestId: string;
+  readonly projectId: string;
+};
+
+export type ProductionImageBriefResult =
+  | { readonly ok: true; readonly brief: ProductionImageBrief }
+  | { readonly ok: false; readonly reason: string };
+
+function compactParts(parts: readonly (string | undefined)[]): readonly string[] {
+  return parts.map((part) => part?.trim() ?? '').filter((part) => part.length > 0);
+}
+
+function styleBiblePrompt(document: AiProjectDocument): string {
+  const style = document.styleBible;
+  return compactParts([
+    style.palette.length > 0 ? `Palette: ${style.palette.join(', ')}.` : undefined,
+    style.lighting.length > 0 ? `Lighting: ${style.lighting}.` : undefined,
+    style.cameraGrammar.length > 0 ? `Camera language: ${style.cameraGrammar}.` : undefined,
+    style.texture.length > 0 ? `Texture: ${style.texture}.` : undefined
+  ]).join(' ');
+}
+
+function productionNegativePrompt(document: AiProjectDocument, extra: readonly string[]): string {
+  return compactParts([
+    ...extra,
+    ...document.styleBible.forbiddenChanges,
+    'text, captions, labels, logos, watermark'
+  ]).join(', ');
+}
+
+/** Creates an editable still-image brief from the approved Character Bible. */
+export function buildCharacterReferenceImageBrief(
+  document: AiProjectDocument,
+  characterId: string
+): ProductionImageBriefResult {
+  const character = document.characters.find((entry) => entry.id === characterId);
+  if (character === undefined) return { ok: false, reason: 'The Writer character no longer exists.' };
+  if (character.referenceAssetIds.length >= 3) {
+    return { ok: false, reason: `${character.name} already has the maximum of three active reference images.` };
+  }
+  const style = styleBiblePrompt(document);
+  return {
+    ok: true,
+    brief: {
+      target: { kind: 'character_reference', characterId: character.id },
+      targetLabel: `Character reference for ${character.name}`,
+      prompt: compactParts([
+        `Create one clean production reference image for the character ${character.name}.`,
+        `Preserve these invariant identity and wardrobe traits exactly: ${character.invariantDescription}.`,
+        'Show one person only in a neutral full-body three-quarter pose, with the face unobstructed and the complete outfit clearly visible.',
+        'Use a simple uncluttered background and even reference lighting so this image can guide later storyboard and video generations.',
+        style
+      ]).join(' '),
+      negativePrompt: productionNegativePrompt(document, [
+        'extra people', 'duplicate person', 'multiple views', 'collage', 'cropped face', 'cropped body', 'occluded face'
+      ]),
+      aspectRatio: '3:4',
+      stylePreset: 'Cinematic'
+    }
+  };
+}
+
+/** Creates an editable first-frame brief from one approved Writer shot. */
+export function buildStoryboardImageBrief(
+  document: AiProjectDocument,
+  shotId: string,
+  aspectRatio: ImageAspectRatio = '16:9'
+): ProductionImageBriefResult {
+  const shot = document.shots.find((entry) => entry.id === shotId);
+  if (shot === undefined) return { ok: false, reason: 'The Writer shot no longer exists.' };
+  const scene = document.scenes.find((entry) => entry.id === shot.sceneId);
+  if (scene === undefined) return { ok: false, reason: 'The Writer scene no longer exists.' };
+  const writerShot = approvedWriterShots(document).find((entry) => entry.id === shot.id);
+  if (writerShot === undefined) return { ok: false, reason: 'Approve and save the Writer prompt stage before generating storyboard images.' };
+  const characters = scene.characterIds.flatMap((characterId) => {
+    const character = document.characters.find((entry) => entry.id === characterId);
+    return character === undefined ? [] : [`${character.name}: ${character.invariantDescription}`];
+  });
+  return {
+    ok: true,
+    brief: {
+      target: { kind: 'storyboard', shotId: shot.id },
+      targetLabel: `Storyboard for ${writerShot.label}`,
+      prompt: compactParts([
+        `Create a single production storyboard keyframe that can be used as the first frame for ${writerShot.label}.`,
+        `Scene: ${scene.title}. Setting: ${scene.setting}. Time of day: ${scene.timeOfDay}.`,
+        characters.length > 0 ? `Characters must preserve these approved identities: ${characters.join(' | ')}.` : undefined,
+        `Framing: ${shot.framing}. Camera: ${shot.cameraMotion}. Visible action at this first frame: ${shot.action}.`,
+        scene.continuityNotes.length > 0 ? `Continuity: ${scene.continuityNotes}.` : undefined,
+        styleBiblePrompt(document),
+        'Compose one finished frame only, without storyboard borders or annotations.'
+      ]).join(' '),
+      negativePrompt: productionNegativePrompt(document, compactParts([shot.negativePrompt])),
+      aspectRatio,
+      stylePreset: 'Cinematic'
+    }
+  };
+}
+
+/** Attaches an imported generated still to exactly the Character or Shot that requested it. */
+export function attachGeneratedProductionImage(document: AiProjectDocument, input: {
+  readonly target: ProductionImageTarget;
+  readonly assetId: string;
+  readonly referenceId: string;
+}): ProductionMutationResult {
+  const target = input.target;
+  if (target.kind === 'character_reference') {
+    const character = document.characters.find((entry) => entry.id === target.characterId);
+    return addCharacterReference(document, {
+      characterId: target.characterId,
+      assetId: input.assetId,
+      referenceId: input.referenceId,
+      label: character === undefined ? 'Generated character reference' : `${character.name} generated reference`
+    });
+  }
+  const writerShot = approvedWriterShots(document).find((entry) => entry.id === target.shotId);
+  return assignStoryboardReference(document, {
+    shotId: target.shotId,
+    assetId: input.assetId,
+    referenceId: input.referenceId,
+    label: writerShot === undefined ? 'Generated storyboard' : `Storyboard for ${writerShot.label}`
+  });
+}
 
 function stateFor(generations: readonly GenerationRecord[], approved: GenerationRecord | undefined): ProductionShotState {
   if (approved !== undefined) return 'approved';

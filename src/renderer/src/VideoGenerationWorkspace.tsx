@@ -28,7 +28,7 @@ import {
 } from '../../shared/videoContinuitySettings';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
-import type { ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
+import type { ImageAspectRatio, ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
 import {
   DEFAULT_GOOGLE_FLOW_PREFERENCES,
   GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
@@ -45,6 +45,7 @@ import { useProjectResultImport } from './ProjectResultImportContext';
 import { getVideoModelCapabilities, getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
 import { ProductionBoard } from './ProductionBoard';
+import type { ProductionImageTarget } from '../../shared/productionWorkflow';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
@@ -107,6 +108,8 @@ type VideoGenerationWorkspaceProps = {
    */
   readonly referenceImage: ReferenceImageSelection | null;
   readonly onReferenceImageChange: (reference: ReferenceImageSelection | null) => void;
+  /** Opens an editable Writer-derived image brief without submitting it. */
+  readonly onGenerateProductionImage: (target: ProductionImageTarget, aspectRatio?: ImageAspectRatio) => string | null;
   /** Local project folder/name mirrored to the signed-in Flow workspace. */
   readonly projectName?: string | undefined;
 };
@@ -128,6 +131,7 @@ export function VideoGenerationWorkspace({
   projectAssets = [],
   referenceImage,
   onReferenceImageChange,
+  onGenerateProductionImage,
   projectName
 }: VideoGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
@@ -765,6 +769,8 @@ export function VideoGenerationWorkspace({
             busy={isGenerating || isSavingCandidate || isChainingFrame}
             onSave={onSaveAi}
             onOpenShot={openProductionShot}
+            onGenerateCharacterImage={(characterId) => onGenerateProductionImage({ kind: 'character_reference', characterId })}
+            onGenerateStoryboardImage={(shotId) => onGenerateProductionImage({ kind: 'storyboard', shotId }, effectiveAspectRatio)}
             onAssemble={assembleApprovedWriterShots}
           />}
         {flowVideoModel !== null && (

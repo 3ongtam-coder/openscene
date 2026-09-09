@@ -6624,6 +6624,12 @@ button {
   gap: var(--space-2);
 }
 
+.production-board__shot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .production-board__reference {
   display: inline-flex;
   align-items: center;

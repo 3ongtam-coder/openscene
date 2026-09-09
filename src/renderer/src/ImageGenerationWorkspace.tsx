@@ -7,6 +7,7 @@ import {
   type BrowserSessionStatus
 } from '../../shared/browserSession';
 import type { ImageAspectRatio, ImageGenerationJob, ReferenceImageSelection } from '../../shared/providerSeams';
+import type { ProductionImageHandoff } from '../../shared/productionWorkflow';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { DomainModelPicker } from './DomainModelPicker';
 import { Button, StatusCard } from './ui';
@@ -23,6 +24,10 @@ type ImageGenerationWorkspaceProps = {
   readonly onUseForVideo: (reference: ReferenceImageSelection) => void;
   /** Local project folder/name mirrored to the signed-in Flow workspace. */
   readonly projectName?: string | undefined;
+  /** Writer/Production Board target whose generated still is being reviewed. */
+  readonly productionHandoff: ProductionImageHandoff | null;
+  /** Imports a reviewed job and persists its exact Character/Shot assignment. */
+  readonly onAttachToProduction: (jobId: string, handoff: ProductionImageHandoff) => Promise<StatusMessage>;
 };
 
 function showGoogleFlowWindow(): boolean {
@@ -35,7 +40,7 @@ function showGoogleFlowWindow(): boolean {
   }
 }
 
-export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGenerationWorkspaceProps): ReactElement {
+export function ImageGenerationWorkspace({ onUseForVideo, projectName, productionHandoff, onAttachToProduction }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const imageModel = selectedModel('image-generation');
   const [prompt, setPrompt] = useState('');
@@ -47,6 +52,9 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
   );
   const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
+  const [productionTargetByJob, setProductionTargetByJob] = useState<Readonly<Record<string, ProductionImageHandoff>>>({});
+  const [attachingJobId, setAttachingJobId] = useState<string | null>(null);
+  const [attachedJobIds, setAttachedJobIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StatusMessage | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -71,6 +79,18 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
     if (pollTimerRef.current !== null) clearInterval(pollTimerRef.current);
     pollInFlightRef.current = false;
   }, []);
+
+  useEffect(() => {
+    if (productionHandoff === null) return;
+    setPrompt(productionHandoff.prompt);
+    setNegativePrompt(productionHandoff.negativePrompt);
+    setAspectRatio(productionHandoff.aspectRatio);
+    setSelectedStyle(productionHandoff.stylePreset);
+    setStatusMsg({
+      tone: 'neutral',
+      text: `${productionHandoff.targetLabel} loaded from Writer. Review or edit the prompt, then generate; nothing is attached until you approve a completed image.`
+    });
+  }, [productionHandoff?.requestId]);
 
   const handleGenerate = async (): Promise<void> => {
     if (prompt.trim().length === 0) {
@@ -112,6 +132,11 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
 
       const job = response.value;
       setJobs((prev) => [job, ...prev]);
+      if (productionHandoff !== null) {
+        // Snapshot the target at submit time. Opening another Character/Shot
+        // while this job runs must not retarget a paid result.
+        setProductionTargetByJob((current) => ({ ...current, [job.id]: productionHandoff }));
+      }
       if (job.mode === 'browser_session') {
         setStatusMsg({
           text: flowWindowVisible
@@ -196,6 +221,29 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
     onUseForVideo(response.value);
   };
 
+  const handleAttachToProduction = async (job: ImageGenerationJob): Promise<void> => {
+    const handoff = productionTargetByJob[job.id];
+    if (handoff === undefined) {
+      setStatusMsg({ text: 'This image job has no Writer Character/Shot target.', tone: 'warning' });
+      return;
+    }
+    setAttachingJobId(job.id);
+    try {
+      const result = await onAttachToProduction(job.id, handoff);
+      setStatusMsg(result);
+      if (result.tone === 'success') {
+        setAttachedJobIds((current) => new Set([...current, job.id]));
+      }
+    } catch (error: unknown) {
+      setStatusMsg({
+        text: error instanceof Error ? error.message : 'The generated image could not be attached to production.',
+        tone: 'danger'
+      });
+    } finally {
+      setAttachingJobId(null);
+    }
+  };
+
   return (
     <section className="studio-surface" aria-labelledby="image-generation-title">
       <header className="studio-surface__header">
@@ -215,6 +263,12 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
       </header>
 
       <div className="studio-surface__body">
+        {productionHandoff !== null && (
+          <StatusCard tone="neutral">
+            <strong>{productionHandoff.targetLabel}</strong><br />
+            This is a reviewed production handoff. Generate an image, inspect it, then explicitly attach it to return to the production board.
+          </StatusCard>
+        )}
         {imageModel.providerId === 'google_gemini' && (
           <div className="studio-field">
             <span className="studio-field__label">Connection</span>
@@ -323,6 +377,19 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGe
                   )}
                   {job.status === 'completed' && (
                     <div className="studio-job__actions">
+                      {productionTargetByJob[job.id] !== undefined && (
+                        <Button
+                          variant="primary"
+                          disabled={attachingJobId !== null || attachedJobIds.has(job.id)}
+                          onClick={() => void handleAttachToProduction(job)}
+                        >
+                          {attachedJobIds.has(job.id)
+                            ? 'Attached to production'
+                            : attachingJobId === job.id
+                              ? 'Importing and attachingâ€¦'
+                              : `Attach to ${productionTargetByJob[job.id]!.targetLabel}`}
+                        </Button>
+                      )}
                       <Button variant="primary" onClick={() => void handleUseForVideo(job)}>
                         Use for video
                       </Button>

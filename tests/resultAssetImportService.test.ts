@@ -19,6 +19,38 @@ async function withTempDirectory<T>(run: (directory: string) => Promise<T>): Pro
 }
 
 describe('completed result asset import service', () => {
+  it('imports a completed generated image as a project image asset', async () => {
+    await withTempDirectory(async (directory) => {
+      const root = join(directory, 'projects');
+      const imagePath = join(directory, 'generated storyboard.png');
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      await writeFile(imagePath, png);
+      const projects = new ProjectStore(root);
+      const project = await projects.create({ name: 'Generated storyboard' });
+      const service = new ResultAssetImportService({
+        assets: new AssetLibraryStore(root, projects),
+        resolveRecordingSource: () => null,
+        resolveAiSource: () => ({
+          sourcePath: imagePath,
+          displayName: 'AI_Image_board.png',
+          kind: 'image',
+          mimeType: 'image/png'
+        })
+      });
+
+      const imported = await service.importAiResult({ projectId: project.id, jobId: 'image-job-1' });
+
+      expect(imported.ok).toBe(true);
+      if (!imported.ok) return;
+      expect(imported.value.assets).toMatchObject([{
+        displayName: 'AI_Image_board.png',
+        kind: 'image',
+        mimeType: 'image/png'
+      }]);
+      await expect(readFile(join(root, project.id, imported.value.assets[0]?.projectRelativePath ?? ''))).resolves.toEqual(png);
+    });
+  });
+
   it('imports generated speech into a registered external project folder whose path contains spaces', async () => {
     await withTempDirectory(async (directory) => {
       const projectsRoot = join(directory, 'internal projects');
