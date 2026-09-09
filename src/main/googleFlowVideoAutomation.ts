@@ -6,7 +6,13 @@ import {
 } from '../shared/browserSession';
 import type { ReferenceImageSelection } from '../shared/providerSeams';
 import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
-import { buildGoogleFlowStateProbeScript } from './googleFlowImageAutomation';
+import {
+  buildGoogleFlowStateProbeScript,
+  rememberGoogleFlowProjectUrl,
+  renameGoogleFlowProject,
+  waitForGoogleFlowProjectEditor,
+  type GoogleFlowAutomationState
+} from './googleFlowImageAutomation';
 
 const POLL_INTERVAL_MS = 1_000;
 
@@ -16,29 +22,7 @@ type RectangleWithText = {
   readonly selected?: boolean;
 };
 
-type FlowVideo = { readonly rectangle: Rectangle; readonly src: string };
-
-type AutomationState = {
-  readonly url: string;
-  readonly input?: Rectangle;
-  readonly existingProject?: Rectangle;
-  readonly projectCandidates?: readonly (RectangleWithText & { readonly href?: string })[];
-  readonly newProject?: Rectangle;
-  readonly projectTitleMenu?: Rectangle;
-  readonly renameProject?: Rectangle;
-  readonly projectTitleInput?: Rectangle;
-  readonly projectTitle?: RectangleWithText;
-  readonly agentSettingsOpen?: boolean;
-  readonly agentSettingsClose?: Rectangle;
-  readonly agentToggle?: RectangleWithText;
-  readonly configButton?: RectangleWithText;
-  readonly modelDropdown?: RectangleWithText;
-  readonly tabs: readonly RectangleWithText[];
-  readonly menuItems: readonly RectangleWithText[];
-  readonly submit?: Rectangle;
-  readonly videos?: readonly FlowVideo[];
-  readonly actionRequired?: 'sign_in' | 'verification' | 'rate_limit' | 'unavailable';
-};
+type AutomationState = GoogleFlowAutomationState;
 
 export type GoogleFlowVideoAutomationProgress =
   | 'loading'
@@ -110,83 +94,6 @@ function choice(state: AutomationState, expected: string): RectangleWithText | u
 
 function choiceAny(state: AutomationState, expected: readonly string[]): RectangleWithText | undefined {
   return expected.map((label) => choice(state, label)).find((entry) => entry !== undefined);
-}
-
-async function waitForEditor(webContents: WebContents, deadline: number, projectName?: string): Promise<{ state: AutomationState; createdProject: boolean }> {
-  let enteredProject = false;
-  let createdProject = false;
-  while (Date.now() < deadline) {
-    const state = await readState(webContents);
-    throwForAction(state);
-    if (state.agentSettingsOpen === true) {
-      if (state.agentSettingsClose !== undefined) clickAt(webContents, state.agentSettingsClose);
-      else pressKey(webContents, 'ESCAPE');
-      await delay(400);
-      continue;
-    }
-    if (state.agentToggle?.selected === true) {
-      clickAt(webContents, state.agentToggle.rectangle);
-      await delay(500);
-      continue;
-    }
-    if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
-    if (!enteredProject) {
-      const target = projectName === undefined ? undefined : normalized(projectName);
-      const project = target === undefined
-        ? state.projectCandidates?.[0]
-        : state.projectCandidates?.find((candidate) => normalized(candidate.text).includes(target));
-      const rectangle = project?.rectangle
-        ?? (target === undefined ? state.existingProject ?? state.newProject : state.newProject);
-      if (rectangle !== undefined) {
-        createdProject = project === undefined && state.newProject !== undefined && rectangle === state.newProject;
-        clickAt(webContents, rectangle);
-        enteredProject = true;
-        await delay(700);
-        continue;
-      }
-    }
-    await delay(POLL_INTERVAL_MS);
-  }
-  throw new Error('Google Flow loaded, but no project editor became ready before the timeout.');
-}
-
-async function renameFlowProject(webContents: WebContents, projectName: string, deadline: number): Promise<boolean> {
-  let menuOpened = false;
-  let renameEditingRequested = false;
-  while (Date.now() < deadline) {
-    const state = await readState(webContents);
-    throwForAction(state);
-    if (renameEditingRequested && state.projectTitleInput !== undefined) {
-      clickAt(webContents, state.projectTitleInput);
-      await delay(100);
-      pressKey(webContents, 'A', ['control']);
-      await webContents.insertText(projectName);
-      pressKey(webContents, 'ENTER');
-      await delay(500);
-      const verified = await readState(webContents);
-      return verified.projectTitle !== undefined && normalized(verified.projectTitle.text).includes(normalized(projectName));
-    }
-    if (state.renameProject !== undefined) {
-      clickAt(webContents, state.renameProject);
-      renameEditingRequested = true;
-      await delay(300);
-      continue;
-    }
-    if (!menuOpened && state.projectTitleMenu !== undefined) {
-      clickAt(webContents, state.projectTitleMenu);
-      menuOpened = true;
-      await delay(300);
-      continue;
-    }
-    if (state.projectTitle !== undefined) {
-      clickAt(webContents, state.projectTitle.rectangle);
-      renameEditingRequested = true;
-      await delay(300);
-      continue;
-    }
-    await delay(POLL_INTERVAL_MS);
-  }
-  return false;
 }
 
 async function selectChoice(webContents: WebContents, configButton: Rectangle, expected: string | readonly string[]): Promise<void> {
@@ -332,12 +239,21 @@ export async function automateGoogleFlowVideoGeneration(webContents: WebContents
   const startedAt = Date.now();
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
-  const project = await waitForEditor(webContents, deadline, input.projectName);
+  const project = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
+    input.onProgress?.('project', Date.now() - startedAt, details);
+  });
   let ready = project.state;
-  input.onProgress?.('project', Date.now() - startedAt, { projectName: input.projectName ?? '' });
+  if (input.projectName !== undefined) {
+    await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
+  }
   if (project.createdProject && input.projectName !== undefined) {
-    const renamed = await renameFlowProject(webContents, input.projectName, Math.min(deadline, Date.now() + 15_000));
-    if (!renamed) throw new Error('Google Flow created the video project but its visible rename control could not be confirmed. Rename it manually, then retry.');
+    const renamed = await renameGoogleFlowProject(webContents, input.projectName, Math.min(deadline, Date.now() + 15_000));
+    input.onProgress?.('project', Date.now() - startedAt, {
+      projectName: input.projectName,
+      projectCreated: true,
+      projectRenamed: renamed,
+      projectReuseStored: true
+    });
     ready = await readState(webContents);
   }
   input.onProgress?.('ready', Date.now() - startedAt);

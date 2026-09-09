@@ -6,6 +6,7 @@ import {
   detectDownloadedMp4,
   validateGoogleFlowVideoAutomationInput
 } from '../src/main/googleFlowVideoAutomation';
+import { waitForGoogleFlowProjectEditor } from '../src/main/googleFlowImageAutomation';
 
 const FIRST_FRAME = { displayName: 'first.png', mimeType: 'image/png', base64: 'FIRST' } as const;
 const LAST_FRAME = { displayName: 'last.png', mimeType: 'image/png', base64: 'LAST' } as const;
@@ -13,6 +14,80 @@ const LAST_FRAME = { displayName: 'last.png', mimeType: 'image/png', base64: 'LA
 afterEach(() => vi.useRealTimers());
 
 describe('Google Flow browser video automation', () => {
+  it('waits for delayed project cards and reuses the matching project instead of creating a duplicate', async () => {
+    vi.useFakeTimers();
+    const newProject = { x: 20, y: 200, width: 240, height: 120 };
+    const existingProject = { x: 300, y: 200, width: 240, height: 120 };
+    const home = { url: 'https://flow.google.com/', newProject, projectCandidates: [], tabs: [], menuItems: [] };
+    const matchingHome = {
+      ...home,
+      projectCandidates: [{
+        rectangle: existingProject,
+        text: 'nhanvat ai Chinh sua tieu de du an Xoa du an',
+        href: 'https://flow.google.com/project/existing'
+      }]
+    };
+    const editor = {
+      url: 'https://flow.google.com/project/existing',
+      input: { x: 20, y: 700, width: 300, height: 50 },
+      configButton: { rectangle: { x: 20, y: 800, width: 300, height: 40 }, text: 'Video 720p 8s x1' },
+      tabs: [], menuItems: []
+    };
+    const executeJavaScript = vi.fn()
+      .mockResolvedValueOnce(home)
+      // Lookup of the remembered project URL. This is empty on a first run.
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(home)
+      .mockResolvedValueOnce(matchingHome)
+      .mockResolvedValueOnce(editor);
+    const sendInputEvent = vi.fn();
+    const operation = waitForGoogleFlowProjectEditor(
+      { executeJavaScript, sendInputEvent } as unknown as WebContents,
+      Date.now() + 10_000,
+      'nhanvat ai'
+    );
+
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ createdProject: false, state: editor });
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 420, y: 260, button: 'left', clickCount: 1
+    });
+    expect(sendInputEvent).not.toHaveBeenCalledWith({
+      type: 'mouseDown', x: 140, y: 260, button: 'left', clickCount: 1
+    });
+  });
+
+  it('reopens a remembered Flow project URL without touching New project', async () => {
+    vi.useFakeTimers();
+    const home = {
+      url: 'https://flow.google.com/',
+      newProject: { x: 20, y: 200, width: 240, height: 120 },
+      projectCandidates: [], tabs: [], menuItems: []
+    };
+    const editor = {
+      url: 'https://flow.google.com/project/remembered',
+      input: { x: 20, y: 700, width: 300, height: 50 },
+      configButton: { rectangle: { x: 20, y: 800, width: 300, height: 40 }, text: 'Video 720p 8s x1' },
+      tabs: [], menuItems: []
+    };
+    const executeJavaScript = vi.fn()
+      .mockResolvedValueOnce(home)
+      .mockResolvedValueOnce('https://flow.google.com/project/remembered')
+      .mockResolvedValueOnce(editor);
+    const loadURL = vi.fn(async () => undefined);
+    const sendInputEvent = vi.fn();
+    const operation = waitForGoogleFlowProjectEditor(
+      { executeJavaScript, loadURL, sendInputEvent } as unknown as WebContents,
+      Date.now() + 10_000,
+      'nhanvat ai'
+    );
+
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toMatchObject({ createdProject: false, state: editor });
+    expect(loadURL).toHaveBeenCalledWith('https://flow.google.com/project/remembered');
+    expect(sendInputEvent).not.toHaveBeenCalled();
+  });
+
   it('recognizes MP4 family signatures instead of trusting a filename or MIME header', () => {
     expect(detectDownloadedMp4(Uint8Array.from([
       0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d
