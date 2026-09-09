@@ -40,16 +40,18 @@ describe('Google Flow browser image automation', () => {
     expect(flowConfigurationHasExactModel('🍌 Nano Banana Pro crop_square x1', 'Nano Banana Pro')).toBe(true);
   });
 
-  it('configures Image x1, fills the prompt, submits, and returns only a new result URL', async () => {
+  it('exits the Vietnamese Agent UI, configures Image x1, and returns only a new result URL', async () => {
     vi.useFakeTimers();
     const input = { x: 10, y: 700, width: 300, height: 50 };
     const config = { x: 20, y: 800, width: 260, height: 40 };
+    const agentClose = { x: 1220, y: 80, width: 32, height: 32 };
+    const agentToggle = { x: 860, y: 805, width: 90, height: 32 };
     const submit = { x: 1100, y: 800, width: 40, height: 40 };
     const oldImage = { rectangle: { x: 10, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/old' };
     const newImage = { rectangle: { x: 420, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/new' };
     const selectedTabs = [
-      { rectangle: { x: 1, y: 1, width: 20, height: 20 }, text: 'Image', selected: true },
-      { rectangle: { x: 2, y: 2, width: 20, height: 20 }, text: 'Landscape', selected: true },
+      { rectangle: { x: 1, y: 1, width: 20, height: 20 }, text: 'Hình ảnh', selected: true },
+      { rectangle: { x: 2, y: 2, width: 20, height: 20 }, text: 'crop_square 1:1', selected: true },
       { rectangle: { x: 3, y: 3, width: 20, height: 20 }, text: 'x1', selected: true }
     ];
     const editorState = {
@@ -62,7 +64,19 @@ describe('Google Flow browser image automation', () => {
       configButton: { rectangle: config, text: 'Nano Banana 2 Landscape x1' },
       tabs: selectedTabs
     };
+    const agentSettingsState = {
+      ...editorState,
+      agentSettingsOpen: true,
+      agentSettingsClose: agentClose,
+      agentToggle: { rectangle: agentToggle, text: 'Tác nhân', selected: true }
+    };
+    const agentComposerState = {
+      ...editorState,
+      agentToggle: { rectangle: agentToggle, text: 'Tác nhân', selected: true }
+    };
     const executeJavaScript = vi.fn()
+      .mockResolvedValueOnce(agentSettingsState)
+      .mockResolvedValueOnce(agentComposerState)
       .mockResolvedValueOnce(editorState)
       .mockResolvedValueOnce(panelState)
       .mockResolvedValueOnce(panelState)
@@ -80,12 +94,18 @@ describe('Google Flow browser image automation', () => {
       insertText,
       sendInputEvent
     } as unknown as WebContents, {
-      prompt: 'Create a fox', model: 'nano-banana-2', aspectRatio: '16:9', timeoutMs: 10_000
+      prompt: 'Create a fox', model: 'nano-banana-2', aspectRatio: '1:1', timeoutMs: 10_000
     });
 
     await vi.runAllTimersAsync();
     await expect(operation).resolves.toBe(newImage.src);
     expect(insertText).toHaveBeenCalledWith('Create a fox');
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 1236, y: 96, button: 'left', clickCount: 1
+    });
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 905, y: 821, button: 'left', clickCount: 1
+    });
     expect(sendInputEvent).toHaveBeenCalledWith({
       type: 'mouseDown', x: 1120, y: 820, button: 'left', clickCount: 1
     });
