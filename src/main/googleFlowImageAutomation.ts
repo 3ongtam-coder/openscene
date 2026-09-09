@@ -217,7 +217,7 @@ export function buildGoogleFlowStateProbeScript(): string {
     }));
     const modelEntries = buttons.filter(({ element, rectangle }) => {
       const text = label(element);
-      return rectangle.width > 100 && /nano banana|imagen/i.test(text)
+      return rectangle.width > 100 && /nano banana|imagen|omni\s*1\.1|veo\s*3\.1/i.test(text)
         && (!configEntry || element !== configEntry.element);
     });
     const modelEntry = modelEntries.find(({ element }) => {
@@ -245,6 +245,14 @@ export function buildGoogleFlowStateProbeScript(): string {
         || src.includes('gstatic.com')
         || src.includes('storage.googleapis.com');
       return providerMedia && rectangle.width > 100 && rectangle.height > 100 && element.naturalWidth > 100
+        ? [{ rectangle, src }]
+        : [];
+    });
+
+    const videos = visible('video').flatMap(({ element, rectangle }) => {
+      if (!(element instanceof HTMLVideoElement)) return [];
+      const src = element.currentSrc || element.src || element.querySelector('source')?.src || '';
+      return src && rectangle.width > 100 && rectangle.height > 80
         ? [{ rectangle, src }]
         : [];
     });
@@ -300,6 +308,7 @@ export function buildGoogleFlowStateProbeScript(): string {
       menuItems,
       ...(submitEntry ? { submit: submitEntry.rectangle } : {}),
       images,
+      videos,
       ...(actionRequired ? { actionRequired } : {})
     };
   })()`;

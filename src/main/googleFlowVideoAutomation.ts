@@ -1,0 +1,364 @@
+import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
+import {
+  googleFlowVideoModelLabel,
+  googleFlowVideoDurationOptions,
+  type GoogleFlowVideoModel
+} from '../shared/browserSession';
+import type { ReferenceImageSelection } from '../shared/providerSeams';
+import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
+import { buildGoogleFlowStateProbeScript } from './googleFlowImageAutomation';
+
+const POLL_INTERVAL_MS = 1_000;
+
+type RectangleWithText = {
+  readonly rectangle: Rectangle;
+  readonly text: string;
+  readonly selected?: boolean;
+};
+
+type FlowVideo = { readonly rectangle: Rectangle; readonly src: string };
+
+type AutomationState = {
+  readonly url: string;
+  readonly input?: Rectangle;
+  readonly existingProject?: Rectangle;
+  readonly projectCandidates?: readonly (RectangleWithText & { readonly href?: string })[];
+  readonly newProject?: Rectangle;
+  readonly projectTitleMenu?: Rectangle;
+  readonly renameProject?: Rectangle;
+  readonly projectTitleInput?: Rectangle;
+  readonly projectTitle?: RectangleWithText;
+  readonly configButton?: RectangleWithText;
+  readonly modelDropdown?: RectangleWithText;
+  readonly tabs: readonly RectangleWithText[];
+  readonly menuItems: readonly RectangleWithText[];
+  readonly submit?: Rectangle;
+  readonly videos?: readonly FlowVideo[];
+  readonly actionRequired?: 'sign_in' | 'verification' | 'rate_limit' | 'unavailable';
+};
+
+export type GoogleFlowVideoAutomationProgress =
+  | 'loading'
+  | 'project'
+  | 'ready'
+  | 'configuring'
+  | 'uploading'
+  | 'submitted'
+  | 'generating'
+  | 'downloading';
+
+export type GoogleFlowVideoAutomationInput = {
+  readonly prompt: string;
+  readonly model: GoogleFlowVideoModel;
+  readonly operation: VideoOperation;
+  readonly aspectRatio: string;
+  readonly durationSeconds: number;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly lastFrame?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
+  readonly timeoutMs: number;
+  readonly projectName?: string;
+  readonly onProgress?: (
+    stage: GoogleFlowVideoAutomationProgress,
+    elapsedMs: number,
+    details?: Readonly<Record<string, unknown>>
+  ) => void;
+};
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function normalized(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function clickAt(webContents: WebContents, rectangle: Rectangle): void {
+  const x = Math.round(rectangle.x + rectangle.width / 2);
+  const y = Math.round(rectangle.y + rectangle.height / 2);
+  webContents.sendInputEvent({ type: 'mouseMove', x, y });
+  webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+  webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+}
+
+function pressKey(webContents: WebContents, keyCode: string, modifiers?: KeyboardInputEvent['modifiers']): void {
+  webContents.sendInputEvent({ type: 'keyDown', keyCode, ...(modifiers === undefined ? {} : { modifiers }) });
+  webContents.sendInputEvent({ type: 'keyUp', keyCode, ...(modifiers === undefined ? {} : { modifiers }) });
+}
+
+async function readState(webContents: WebContents): Promise<AutomationState> {
+  return webContents.executeJavaScript(buildGoogleFlowStateProbeScript(), true) as Promise<AutomationState>;
+}
+
+function throwForAction(state: AutomationState): void {
+  if (state.actionRequired === 'sign_in') throw new Error('The Google Flow session has expired. Sign in again in Settings, then retry.');
+  if (state.actionRequired === 'verification') throw new Error('Google requires CAPTCHA or account verification. Complete it manually in the Flow session, then retry.');
+  if (state.actionRequired === 'rate_limit') throw new Error('Google Flow has reached the account usage or credit limit. Check the Google plan, then retry.');
+  if (state.actionRequired === 'unavailable') throw new Error('Google Flow video is unavailable for this account or region.');
+}
+
+function choice(state: AutomationState, expected: string): RectangleWithText | undefined {
+  const target = normalized(expected);
+  const choices = [...state.tabs, ...state.menuItems];
+  return choices.find((entry) => normalized(entry.text) === target)
+    ?? choices.find((entry) => normalized(entry.text).includes(target));
+}
+
+function choiceAny(state: AutomationState, expected: readonly string[]): RectangleWithText | undefined {
+  return expected.map((label) => choice(state, label)).find((entry) => entry !== undefined);
+}
+
+async function waitForEditor(webContents: WebContents, deadline: number, projectName?: string): Promise<{ state: AutomationState; createdProject: boolean }> {
+  let enteredProject = false;
+  let createdProject = false;
+  while (Date.now() < deadline) {
+    const state = await readState(webContents);
+    throwForAction(state);
+    if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
+    if (!enteredProject) {
+      const target = projectName === undefined ? undefined : normalized(projectName);
+      const project = target === undefined
+        ? state.projectCandidates?.[0]
+        : state.projectCandidates?.find((candidate) => normalized(candidate.text).includes(target));
+      const rectangle = project?.rectangle
+        ?? (target === undefined ? state.existingProject ?? state.newProject : state.newProject);
+      if (rectangle !== undefined) {
+        createdProject = project === undefined && state.newProject !== undefined && rectangle === state.newProject;
+        clickAt(webContents, rectangle);
+        enteredProject = true;
+        await delay(700);
+        continue;
+      }
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+  throw new Error('Google Flow loaded, but no project editor became ready before the timeout.');
+}
+
+async function renameFlowProject(webContents: WebContents, projectName: string, deadline: number): Promise<boolean> {
+  let menuOpened = false;
+  let renameEditingRequested = false;
+  while (Date.now() < deadline) {
+    const state = await readState(webContents);
+    throwForAction(state);
+    if (renameEditingRequested && state.projectTitleInput !== undefined) {
+      clickAt(webContents, state.projectTitleInput);
+      await delay(100);
+      pressKey(webContents, 'A', ['control']);
+      await webContents.insertText(projectName);
+      pressKey(webContents, 'ENTER');
+      await delay(500);
+      const verified = await readState(webContents);
+      return verified.projectTitle !== undefined && normalized(verified.projectTitle.text).includes(normalized(projectName));
+    }
+    if (state.renameProject !== undefined) {
+      clickAt(webContents, state.renameProject);
+      renameEditingRequested = true;
+      await delay(300);
+      continue;
+    }
+    if (!menuOpened && state.projectTitleMenu !== undefined) {
+      clickAt(webContents, state.projectTitleMenu);
+      menuOpened = true;
+      await delay(300);
+      continue;
+    }
+    if (state.projectTitle !== undefined) {
+      clickAt(webContents, state.projectTitle.rectangle);
+      renameEditingRequested = true;
+      await delay(300);
+      continue;
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function selectChoice(webContents: WebContents, configButton: Rectangle, expected: string | readonly string[]): Promise<void> {
+  const labels = typeof expected === 'string' ? [expected] : expected;
+  let state = await readState(webContents);
+  throwForAction(state);
+  let target = choiceAny(state, labels);
+  if (target === undefined) {
+    clickAt(webContents, configButton);
+    await delay(350);
+    state = await readState(webContents);
+    throwForAction(state);
+    target = choiceAny(state, labels);
+  }
+  if (target === undefined) throw new Error(`Google Flow configuration did not expose ${labels[0]}.`);
+  if (!target.selected) {
+    clickAt(webContents, target.rectangle);
+    await delay(450);
+  }
+}
+
+export function validateGoogleFlowVideoAutomationInput(input: Pick<GoogleFlowVideoAutomationInput, 'model' | 'operation' | 'aspectRatio' | 'durationSeconds' | 'referenceImage' | 'lastFrame' | 'referenceImages'>): void {
+  if (!['16:9', '9:16'].includes(input.aspectRatio)) throw new Error('Google Flow video supports only 16:9 or 9:16.');
+  if (!googleFlowVideoDurationOptions(input.model).includes(input.durationSeconds)) {
+    throw new Error(`${googleFlowVideoModelLabel(input.model)} exposes ${googleFlowVideoDurationOptions(input.model).join(', ')} second video generation in Flow.`);
+  }
+  if (input.operation === 'video_edit' || input.operation === 'video_extend' || input.operation === 'motion_control') {
+    throw new Error(`Google Flow browser session does not support ${input.operation}. Use the matching API or local worker.`);
+  }
+  if ((input.operation === 'image_to_video' || input.operation === 'start_end') && input.referenceImage === undefined) {
+    throw new Error('Google Flow image-to-video requires a first frame.');
+  }
+  if (input.operation === 'start_end' && input.lastFrame === undefined) throw new Error('Google Flow Start-End requires a last frame.');
+  if (input.operation === 'reference_to_video' && (input.referenceImages?.length ?? 0) === 0) {
+    throw new Error('Google Flow reference-to-video requires at least one component image.');
+  }
+}
+
+async function configure(webContents: WebContents, ready: AutomationState, input: GoogleFlowVideoAutomationInput): Promise<void> {
+  const configButton = ready.configButton!.rectangle;
+  clickAt(webContents, configButton);
+  await delay(650);
+  await selectChoice(webContents, configButton, 'Video');
+  await selectChoice(webContents, configButton, input.operation === 'reference_to_video'
+    ? ['Components', 'Component', 'Thanh phan']
+    : ['Frames', 'Frame', 'Khung hinh']);
+
+  let state = await readState(webContents);
+  throwForAction(state);
+  const expectedModel = googleFlowVideoModelLabel(input.model);
+  const currentModel = `${state.modelDropdown?.text ?? ''} ${state.configButton?.text ?? ''}`;
+  if (!normalized(currentModel).includes(normalized(expectedModel))) {
+    if (state.modelDropdown === undefined) throw new Error('Google Flow loaded, but its video model selector was not found.');
+    clickAt(webContents, state.modelDropdown.rectangle);
+    await delay(450);
+    state = await readState(webContents);
+    const modelChoice = choice(state, expectedModel);
+    if (modelChoice === undefined) throw new Error(`This Google Flow account does not expose ${expectedModel}.`);
+    clickAt(webContents, modelChoice.rectangle);
+    await delay(500);
+  }
+
+  // Selecting a model can reset the controls below it, so apply shape/count
+  // afterwards. Omni exposes explicit quality and duration controls; the Veo
+  // groups currently lock both to 720p / 8 seconds and remove those controls.
+  await selectChoice(webContents, configButton, input.aspectRatio);
+  await selectChoice(webContents, configButton, 'x1');
+  if (input.model === 'omni-1.1-flash') {
+    await selectChoice(webContents, configButton, '720p');
+    await selectChoice(webContents, configButton, [
+      `${input.durationSeconds} seconds`,
+      `${input.durationSeconds}s`,
+      `${input.durationSeconds} giay`
+    ]);
+  }
+  pressKey(webContents, 'ESCAPE');
+}
+
+function safeReferenceName(reference: ReferenceImageSelection, index: number): string {
+  const extension = reference.mimeType === 'image/png' ? 'png' : reference.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const base = reference.displayName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 70).replace(/\.+$/, '');
+  return `${base || `reference-${index + 1}`}.${extension}`;
+}
+
+async function injectImageFile(webContents: WebContents, reference: ReferenceImageSelection, index: number): Promise<void> {
+  const script = `(() => {
+    const input = [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !candidate.disabled && (!candidate.accept || candidate.accept.includes('image')));
+    if (!(input instanceof HTMLInputElement)) return false;
+    const binary = atob(${JSON.stringify(reference.base64)});
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], ${JSON.stringify(safeReferenceName(reference, index))}, { type: ${JSON.stringify(reference.mimeType)} }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`;
+  const injected = await webContents.executeJavaScript(script, true) as boolean;
+  if (!injected) throw new Error('Google Flow opened its media picker, but no image upload control was available. Import the image into Flow manually and retry.');
+  await delay(800);
+}
+
+async function attachReferences(webContents: WebContents, input: GoogleFlowVideoAutomationInput): Promise<void> {
+  const references = input.operation === 'reference_to_video'
+    ? input.referenceImages ?? []
+    : [input.referenceImage, input.lastFrame].filter((entry): entry is ReferenceImageSelection => entry !== undefined);
+  for (let index = 0; index < references.length; index += 1) {
+    const state = await readState(webContents);
+    const targetLabels = input.operation === 'reference_to_video'
+      ? ['Component', 'Components', 'Thanh phan']
+      : index === 0 ? ['Start', 'Bat dau'] : ['End', 'Ket thuc'];
+    const target = choiceAny(state, targetLabels);
+    if (target === undefined) throw new Error(`Google Flow did not expose the ${targetLabels[0]} reference control.`);
+    clickAt(webContents, target.rectangle);
+    await delay(500);
+    await injectImageFile(webContents, references[index]!, index);
+  }
+}
+
+async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
+  let inserted = false;
+  while (Date.now() < deadline) {
+    const state = await readState(webContents);
+    throwForAction(state);
+    if (!inserted && state.input !== undefined) {
+      clickAt(webContents, state.input);
+      await delay(120);
+      pressKey(webContents, 'A', ['control']);
+      await webContents.insertText(prompt);
+      inserted = true;
+      await delay(300);
+      continue;
+    }
+    if (inserted && state.submit !== undefined) return state;
+    await delay(POLL_INTERVAL_MS);
+  }
+  throw new Error('Google Flow loaded, but its video prompt/Create controls could not be found.');
+}
+
+export async function automateGoogleFlowVideoGeneration(webContents: WebContents, input: GoogleFlowVideoAutomationInput): Promise<string> {
+  validateGoogleFlowVideoAutomationInput(input);
+  const startedAt = Date.now();
+  const deadline = startedAt + input.timeoutMs;
+  input.onProgress?.('loading', 0);
+  const project = await waitForEditor(webContents, deadline, input.projectName);
+  let ready = project.state;
+  input.onProgress?.('project', Date.now() - startedAt, { projectName: input.projectName ?? '' });
+  if (project.createdProject && input.projectName !== undefined) {
+    const renamed = await renameFlowProject(webContents, input.projectName, Math.min(deadline, Date.now() + 15_000));
+    if (!renamed) throw new Error('Google Flow created the video project but its visible rename control could not be confirmed. Rename it manually, then retry.');
+    ready = await readState(webContents);
+  }
+  input.onProgress?.('ready', Date.now() - startedAt);
+  await configure(webContents, ready, input);
+  input.onProgress?.('configuring', Date.now() - startedAt, { model: googleFlowVideoModelLabel(input.model) });
+  if (input.operation !== 'text_to_video') {
+    input.onProgress?.('uploading', Date.now() - startedAt, { referenceCount: input.operation === 'reference_to_video' ? input.referenceImages?.length ?? 0 : input.operation === 'start_end' ? 2 : 1 });
+    await attachReferences(webContents, input);
+  }
+  ready = await fillPrompt(webContents, input.prompt, deadline);
+  const existingVideos = new Set((ready.videos ?? []).map((video) => video.src));
+  clickAt(webContents, ready.submit!);
+  input.onProgress?.('submitted', Date.now() - startedAt);
+
+  let lastHeartbeat = 0;
+  while (Date.now() < deadline) {
+    await delay(POLL_INTERVAL_MS);
+    const state = await readState(webContents);
+    throwForAction(state);
+    const elapsed = Date.now() - startedAt;
+    if (elapsed - lastHeartbeat >= 10_000) {
+      lastHeartbeat = elapsed;
+      input.onProgress?.('generating', elapsed);
+    }
+    const generated = (state.videos ?? []).find((video) => !existingVideos.has(video.src));
+    if (generated !== undefined) {
+      input.onProgress?.('downloading', elapsed);
+      return generated.src;
+    }
+  }
+  throw new Error('Google Flow did not produce a video before the timeout. Check credits, model access, and the prompt, then retry.');
+}
+
+export function detectDownloadedMp4(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  const box = String.fromCharCode(bytes[4]!, bytes[5]!, bytes[6]!, bytes[7]!);
+  const brand = String.fromCharCode(bytes[8]!, bytes[9]!, bytes[10]!, bytes[11]!);
+  return box === 'ftyp' && /^(isom|iso\d|mp4\d|M4V |MSNV|avc1|dash)$/.test(brand);
+}

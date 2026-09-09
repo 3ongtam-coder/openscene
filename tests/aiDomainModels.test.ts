@@ -23,7 +23,9 @@ describe('AI domain model catalog', () => {
     expect(wan).toMatchObject({ executionPath: 'local', availableOn: ['desktop'] });
     expect(isDomainModelAvailableOnRuntime(wan!, 'desktop')).toBe(true);
     expect(isDomainModelAvailableOnRuntime(wan!, 'mobile')).toBe(false);
-    expect(videoModels.map((model) => model.id)).toContain('veo-3.0-generate-001');
+    expect(videoModels.map((model) => model.id)).toContain('veo-3.1-fast-generate-preview');
+    expect(videoModels.map((model) => model.id)).toContain('veo-3.1-lite-generate-preview');
+    expect(videoModels.map((model) => model.id)).not.toContain('veo-3.0-generate-001');
     expect(videoModels.map((model) => model.id)).toContain('gemini-omni-1.1-flash');
     expect(videoModels.map((model) => model.id)).toContain('sora-2');
     const imageModelIds = getAvailableDomainModels('image-generation').map((model) => model.id);

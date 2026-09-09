@@ -31,7 +31,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerBrowserImageGenerator, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerBrowserImageGenerator, setAiJobManagerBrowserVideoGenerator, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
 import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
@@ -98,6 +98,7 @@ const llmPromptRouter = new LlmPromptRouter({
 });
 setAiJobManagerCredentialStore(credentialStore);
 setAiJobManagerBrowserImageGenerator((input) => browserSessionService.generateGoogleFlowImage(input));
+setAiJobManagerBrowserVideoGenerator((input) => browserSessionService.generateGoogleFlowVideo(input));
 const managedVieNeuRuntime = new ManagedVieNeuRuntime({ workingDirectory: process.cwd() });
 setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 /*

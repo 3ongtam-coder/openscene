@@ -45,6 +45,7 @@ import { isInsideDirectory } from './projectStoreSupport';
 import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from '../shared/voiceDelivery';
 import { generateComfyUiMotionVideo } from './comfyUiMotionAdapter';
 import type { VieNeuRuntimeController } from './managedVieNeuRuntime';
+import { googleFlowVideoDurationOptions, googleFlowVideoModelFor } from '../shared/browserSession';
 
 const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
@@ -62,6 +63,20 @@ type BrowserImageGenerator = (input: {
   readonly projectName?: string;
 }) => Promise<GeneratedImage>;
 let activeBrowserImageGenerator: BrowserImageGenerator | undefined;
+type BrowserVideoGenerator = (input: {
+  readonly modelId: string;
+  readonly prompt: string;
+  readonly operation: import('../shared/mediaCapabilityRegistry').VideoOperation;
+  readonly aspectRatio: string;
+  readonly durationSeconds: number;
+  readonly stylePreset?: string;
+  readonly referenceImage?: import('../shared/providerSeams').ReferenceImageSelection;
+  readonly lastFrame?: import('../shared/providerSeams').ReferenceImageSelection;
+  readonly referenceImages?: readonly import('../shared/providerSeams').ReferenceImageSelection[];
+  readonly showBrowserWindow?: boolean;
+  readonly projectName?: string;
+}) => Promise<{ readonly bytes: Buffer; readonly providerJobId: string }>;
+let activeBrowserVideoGenerator: BrowserVideoGenerator | undefined;
 type MotionAssetSource = OpenedAssetPlaybackSource & { readonly durationMs?: number };
 let activeAssetSourceResolver: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined;
 
@@ -140,6 +155,10 @@ export function setAiJobManagerVieNeuRuntime(runtime?: VieNeuRuntimeController |
 
 export function setAiJobManagerBrowserImageGenerator(generator?: BrowserImageGenerator | undefined): void {
   activeBrowserImageGenerator = generator;
+}
+
+export function setAiJobManagerBrowserVideoGenerator(generator?: BrowserVideoGenerator | undefined): void {
+  activeBrowserVideoGenerator = generator;
 }
 
 export function setAiJobManagerAssetSourceResolver(
@@ -351,6 +370,28 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   const constraints = getVideoOperationConstraints(modelId, operation);
   const durationSeconds = request.durationSeconds ?? constraints?.durationSeconds[0] ?? 4;
   const aspectRatio = request.aspectRatio ?? constraints?.aspectRatios[0] ?? '16:9';
+  const mode = request.mode ?? model.executionPath;
+  if (mode === 'browser_session') {
+    if (model.providerId !== 'google_gemini') {
+      throw new Error('Browser-session video generation is available only for Google models routed through Flow.');
+    }
+    const flowModel = googleFlowVideoModelFor(modelId);
+    if (flowModel === null) {
+      throw new Error(`${model.label} has no exact counterpart in the current Google Flow video menu. Use the API lane instead.`);
+    }
+    if (!['text_to_video', 'image_to_video', 'reference_to_video', 'start_end'].includes(operation)) {
+      throw new Error(`Google Flow browser-session video does not support ${operation}. Use the matching API or local worker.`);
+    }
+    if (!['16:9', '9:16'].includes(aspectRatio)) {
+      throw new Error('Google Flow browser-session video supports only 16:9 or 9:16.');
+    }
+    if (!googleFlowVideoDurationOptions(flowModel).includes(durationSeconds)) {
+      throw new Error(`${model.label} accepts ${googleFlowVideoDurationOptions(flowModel).join(', ')} second clips through Google Flow.`);
+    }
+  }
+  if (mode === 'local' && providerMapping.adapterId !== 'comfyui_wan') {
+    throw new Error('No local video generation adapter is configured for this model.');
+  }
   const validation = validateVideoRequest({
     modelId,
     operation,
@@ -360,7 +401,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   });
   if (!validation.ok) throw new Error(validation.message);
   const estimate = estimateVideoCost({ modelId, durationSeconds });
-  const reservationId = model.executionPath === 'api' ? await reserveSpend(estimate, request.acceptUnknownCost) : null;
+  const reservationId = mode === 'api' ? await reserveSpend(estimate, request.acceptUnknownCost) : null;
   const { videoDir } = await ensureAiDirectories();
   const id = `video-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -369,7 +410,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   const job: VideoGenerationJob = {
     id,
     provider,
-    mode: model.executionPath,
+    mode,
     status: 'queued',
     prompt: request.prompt,
     operation,
@@ -393,7 +434,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
     durationSeconds,
     aspectRatio,
     referenceImageCount: resolvedInputs.referenceImageCount,
-    executionPath: model.executionPath
+    executionPath: mode
   });
 
   setTimeout(async () => {
@@ -404,19 +445,37 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       videoJobs.set(id, job);
       logVideoJob(id, 'process.started');
 
-      let apiKey = request.apiKey?.trim();
-      if ((!apiKey || apiKey.length === 0) && activeCredentialStore && providerMapping.credentialKey !== undefined) {
+      let apiKey = mode === 'api' ? request.apiKey?.trim() : undefined;
+      if (mode === 'api' && (!apiKey || apiKey.length === 0) && activeCredentialStore && providerMapping.credentialKey !== undefined) {
         apiKey = await activeCredentialStore.getCredentialValue(providerMapping.credentialKey);
       }
 
-      if (model.executionPath === 'api' && (!apiKey || apiKey.length === 0)) {
+      if (mode === 'api' && (!apiKey || apiKey.length === 0)) {
         throw new Error(`API key is required for ${VIDEO_PROVIDER_LABELS[provider]} cloud generation. Connect the provider in Settings first.`);
       }
 
-      if (model.executionPath === 'api') await settleSpend(reservationId, 'charged');
+      if (mode === 'api') await settleSpend(reservationId, 'charged');
       logVideoJob(id, 'provider.request.started', { provider: VIDEO_PROVIDER_LABELS[provider] });
       let cloudResult: CloudProviderResult;
-      if (providerMapping.adapterId === 'comfyui_wan') {
+      if (mode === 'browser_session') {
+        if (activeBrowserVideoGenerator === undefined) throw new Error('Google Flow browser-session video generation is unavailable in this runtime.');
+        const generated = await activeBrowserVideoGenerator({
+          modelId,
+          prompt: request.prompt,
+          operation,
+          aspectRatio,
+          durationSeconds,
+          ...(request.stylePreset === undefined ? {} : { stylePreset: request.stylePreset }),
+          ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage }),
+          ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame }),
+          ...(request.referenceImages === undefined ? {} : { referenceImages: request.referenceImages }),
+          showBrowserWindow: request.showBrowserWindow !== false,
+          ...(request.flowProjectName === undefined ? {} : { projectName: request.flowProjectName })
+        });
+        const outputFilePath = join(videoDir, `${id}.mp4`);
+        await writeFile(outputFilePath, generated.bytes);
+        cloudResult = { ok: true, outputFilePath, providerJobId: generated.providerJobId };
+      } else if (providerMapping.adapterId === 'comfyui_wan') {
         if (!activeAssetSourceResolver || !request.projectId || !request.drivingVideoAssetId || !request.referenceImage || !request.motionMode) {
           throw new Error('Motion Control requires a project, character image, driving video, and Move/Mix mode.');
         }

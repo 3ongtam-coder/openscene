@@ -180,7 +180,7 @@ describe('media generation adapters', () => {
 
     const generated = await generateVeoVideo({
       apiKey: 'AIza-test',
-      modelId: 'veo-3.0-generate-001',
+      modelId: 'veo-3.1-generate-preview',
       prompt: 'A sunrise over Seoul',
       aspectRatio: '16:9',
       durationSeconds: 8,
@@ -188,7 +188,7 @@ describe('media generation adapters', () => {
       fetchImpl: fetchMock as unknown as typeof fetch
     });
 
-    expect(calls[0]).toBe('https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-001:predictLongRunning');
+    expect(calls[0]).toBe('https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-generate-preview:predictLongRunning');
     expect([...generated.bytes]).toEqual([9, 8, 7, 6]);
     expect(generated.providerJobId).toBe('operations/op-1');
   });

@@ -58,7 +58,7 @@ describe('shared video generation', () => {
 
     const ready = await requestVeoVideo({
       apiKey: 'gemini-key',
-      modelId: 'veo-3.0-generate-001',
+      modelId: 'veo-3.1-generate-preview',
       prompt: 'a lighthouse',
       aspectRatio: '16:9',
       durationSeconds: 8,
@@ -75,7 +75,7 @@ describe('shared video generation', () => {
     const fetchMock = vi.fn();
     await expect(requestVeoVideo({
       apiKey: 'k',
-      modelId: 'veo-3.0-generate-001',
+      modelId: 'veo-3.1-generate-preview',
       prompt: 'p',
       aspectRatio: '1:1',
       durationSeconds: 8,
@@ -311,7 +311,7 @@ describe('shared video generation', () => {
     await expect(
       requestVeoVideo({
         apiKey: 'secret-key-value',
-        modelId: 'veo-3.0-generate-001',
+        modelId: 'veo-3.1-generate-preview',
         prompt: 'p',
         aspectRatio: '16:9',
         durationSeconds: 8,
@@ -323,7 +323,7 @@ describe('shared video generation', () => {
     await expect(
       requestVeoVideo({
         apiKey: 'secret-key-value',
-        modelId: 'veo-3.0-generate-001',
+        modelId: 'veo-3.1-generate-preview',
         prompt: 'p',
         aspectRatio: '16:9',
         durationSeconds: 8,

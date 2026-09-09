@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildGoogleFlowImagePrompt,
+  buildGoogleFlowVideoPrompt,
   DEFAULT_GOOGLE_FLOW_PREFERENCES,
   GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
   googleFlowImageModelFor,
+  googleFlowVideoDurationOptions,
+  googleFlowVideoModelFor,
+  googleFlowVideoModelLabel,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionCookieSourceAllowed,
@@ -73,6 +77,32 @@ describe('browser session shared boundary', () => {
     expect(googleFlowImageModelFor('gemini-3.1-flash-lite-image')).toBe('nano-banana-2');
     expect(googleFlowImageModelFor('gemini-3-pro-image')).toBe('nano-banana-pro');
     expect(googleFlowImageModelFor('gemini-2.5-flash-image')).toBe('nano-banana-2');
+  });
+
+  it('maps only exact video catalog counterparts onto the current Flow menu', () => {
+    expect(googleFlowVideoModelFor('gemini-omni-1.1-flash')).toBe('omni-1.1-flash');
+    expect(googleFlowVideoModelFor('veo-3.1-generate-preview')).toBe('veo-3.1-quality');
+    expect(googleFlowVideoModelFor('veo-3.1-fast-generate-preview')).toBe('veo-3.1-fast');
+    expect(googleFlowVideoModelFor('veo-3.1-lite-generate-preview')).toBe('veo-3.1-lite');
+    expect(googleFlowVideoModelFor('veo-3.0-fast-generate-001')).toBeNull();
+    expect(googleFlowVideoModelFor('veo-3.0-generate-001')).toBeNull();
+    expect(googleFlowVideoModelLabel('veo-3.1-quality')).toBe('Veo 3.1 - Quality');
+    expect(googleFlowVideoDurationOptions('omni-1.1-flash')).toEqual([4, 6, 8, 10]);
+    expect(googleFlowVideoDurationOptions('veo-3.1-fast')).toEqual([8]);
+  });
+
+  it('builds a complete Flow video prompt without dropping duration or style', () => {
+    expect(buildGoogleFlowVideoPrompt({
+      prompt: 'A tracking shot through a rainy market',
+      aspectRatio: '9:16',
+      durationSeconds: 8,
+      stylePreset: 'Film Noir'
+    })).toBe([
+      'Create one video (do not answer with only text).',
+      'A tracking shot through a rainy market',
+      'Use a 9:16 aspect ratio and 8 second duration.',
+      'Visual style: Film Noir.'
+    ].join('\n'));
   });
 
   it('keeps the visible Flow worker default safe when its renderer preference is missing or malformed', () => {
