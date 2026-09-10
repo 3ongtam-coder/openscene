@@ -1,5 +1,5 @@
 import { PROJECT_SCHEMA_VERSION } from '../shared/timelineTypes';
-import type { BrowserAssetMetadata, LocalProjectSnapshot, MediaAsset, MediaKind, TimelineDocument } from '../shared/timelineTypes';
+import { RESULT_ASSET_ORIGIN_KINDS, resultAssetOriginKey, type BrowserAssetMetadata, type LocalProjectSnapshot, type MediaAsset, type MediaKind, type ResultAssetOrigin, type TimelineDocument } from '../shared/timelineTypes';
 import { createEmptyAiProjectDocument, parseAiProjectDocument } from '../shared/aiProjectDomain';
 import { migrateTimelineDocumentV1, migrateTimelineDocumentV2, parseTimelineDocument } from '../shared/timelineValidators';
 import {
@@ -39,6 +39,15 @@ function parseMetadata(value: unknown): BrowserAssetMetadata | null {
   return { durationMs, ...(width === undefined ? {} : { width }), ...(height === undefined ? {} : { height }) };
 }
 
+function parseResultOrigin(value: unknown): ResultAssetOrigin | null {
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['kind', 'resultId'])) return null;
+  const resultId = getOpaqueId(value, 'resultId');
+  const kind = typeof value.kind === 'string' && (RESULT_ASSET_ORIGIN_KINDS as readonly string[]).includes(value.kind)
+    ? value.kind as ResultAssetOrigin['kind']
+    : null;
+  return kind === null || resultId === null ? null : { kind, resultId };
+}
+
 function parseAsset(value: unknown): MediaAsset | null {
   if (
     !isPlainRecord(value) ||
@@ -50,6 +59,7 @@ function parseAsset(value: unknown): MediaAsset | null {
       'mimeType',
       'byteLength',
       'metadata',
+      'resultOrigin',
       'createdAt',
       'updatedAt'
     ])
@@ -66,6 +76,7 @@ function parseAsset(value: unknown): MediaAsset | null {
   const mimeType = getMimeType(value, 'mimeType');
   const byteLength = getFiniteNonNegative(value, 'byteLength');
   const metadata = value.metadata === null ? null : parseMetadata(value.metadata);
+  const resultOrigin = value.resultOrigin === undefined ? undefined : parseResultOrigin(value.resultOrigin);
   const createdAt = getIsoTimestamp(value, 'createdAt');
   const updatedAt = getIsoTimestamp(value, 'updatedAt');
   if (
@@ -77,12 +88,16 @@ function parseAsset(value: unknown): MediaAsset | null {
     byteLength === null ||
     !Number.isSafeInteger(byteLength) ||
     (metadata === null && value.metadata !== null) ||
+    resultOrigin === null ||
     createdAt === null ||
     updatedAt === null
   ) {
     return null;
   }
-  const asset = { id, displayName, projectRelativePath, kind, mimeType, byteLength, metadata, createdAt, updatedAt };
+  const asset = {
+    id, displayName, projectRelativePath, kind, mimeType, byteLength, metadata,
+    ...(resultOrigin === undefined ? {} : { resultOrigin }), createdAt, updatedAt
+  };
   return hasDeterministicAssetPath(asset) ? asset : null;
 }
 
@@ -139,12 +154,15 @@ function parseProjectRecord(
   }
   const assets: MediaAsset[] = [];
   const assetIds = new Set<string>();
+  const resultOrigins = new Set<string>();
   for (const rawAsset of value.assets) {
     const asset = parseAsset(rawAsset);
-    if (asset === null || assetIds.has(asset.id)) {
+    const originKey = asset?.resultOrigin === undefined ? undefined : resultAssetOriginKey(asset.resultOrigin);
+    if (asset === null || assetIds.has(asset.id) || (originKey !== undefined && resultOrigins.has(originKey))) {
       return null;
     }
     assetIds.add(asset.id);
+    if (originKey !== undefined) resultOrigins.add(originKey);
     assets.push(asset);
   }
   const ai = aiValue === undefined
