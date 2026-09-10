@@ -63,7 +63,7 @@ describe('AI Job Manager and cloud provider seams', () => {
     const failedVideo = getVideoGenerationJob(soraJob.id);
     expect(failedVideo?.status).toBe('failed');
     expect(failedVideo?.error).toContain('API key is required for OpenAI Sora');
-    expect(failedVideo?.outputFilePath).toBeUndefined();
+    expect(failedVideo).not.toHaveProperty('outputFilePath');
     const failedSpeech = getSpeechGenerationJob(elevenJob.id);
     expect(failedSpeech?.status).toBe('failed');
     expect(failedSpeech?.error).toContain('API key is required for ElevenLabs');
@@ -199,7 +199,8 @@ describe('AI Job Manager and cloud provider seams', () => {
         mode: 'browser_session',
         providerJobId: 'google-flow-browser-video-test'
       });
-      expect(getVideoGenerationJob(job.id)?.outputFilePath).toMatch(/\.mp4$/);
+      expect(getVideoGenerationJob(job.id)).not.toHaveProperty('outputFilePath');
+      expect(getCompletedAiSource(job.id)?.sourcePath).toMatch(/\.mp4$/);
     } finally {
       setAiJobManagerBrowserVideoGenerator(undefined);
     }

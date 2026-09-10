@@ -18,10 +18,12 @@ describe('the desktop', () => {
     const jobs = await readRepo('src/main/aiJobManager.ts');
     const seams = [/createVideoGenerationJob/, /createImageGenerationJob/, /createSpeechGenerationJob/];
     for (const seam of seams) expect(jobs).toMatch(seam);
-    // Three creators, three reservations, three settlements each way.
+    // Three creators and provider settlements. Video has one additional release
+    // before submission: if its durable queued record cannot be written, the
+    // reserved amount must be returned and the provider must never be called.
     expect(jobs.match(/await reserveSpend\(/g)).toHaveLength(3);
     expect(jobs.match(/await settleSpend\(reservationId, 'charged'\)/g)).toHaveLength(3);
-    expect(jobs.match(/await settleSpend\(reservationId, 'released'\)/g)).toHaveLength(3);
+    expect(jobs.match(/await settleSpend\(reservationId, 'released'\)/g)).toHaveLength(4);
   });
 
   it('records the charge where the request goes out, not where the job is queued', async () => {

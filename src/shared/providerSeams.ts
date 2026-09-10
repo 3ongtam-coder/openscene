@@ -92,7 +92,6 @@ export interface VideoGenerationJob {
   providerJobId?: string;
   modelId?: string;
   outputAssetId?: string;
-  outputFilePath?: string;
   previewUrl?: string;
   error?: string;
   createdAt: string;
@@ -135,7 +134,6 @@ export interface TextToSpeechJob {
   voiceId: string;
   modelId?: string;
   outputAssetId?: string;
-  outputFilePath?: string;
   previewUrl?: string;
   error?: string;
   createdAt: string;
@@ -186,7 +184,6 @@ export interface ImageGenerationJob {
   negativePrompt?: string;
   providerJobId?: string;
   modelId?: string;
-  outputFilePath?: string;
   /** Inline preview so the renderer can show the result without a file path. */
   previewMimeType?: string;
   previewBase64?: string;

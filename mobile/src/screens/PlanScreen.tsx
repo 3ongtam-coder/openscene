@@ -722,6 +722,7 @@ export function PlanScreen({
             Finished candidates are saved in the project library. Review each one above; only an approved take changes the timeline.
           </Text>
         )}
+        <Text style={styles.footnote}>If the phone closes during a provider request, it is never submitted again automatically. Only a returned result saved into the project is treated as completed.</Text>
       </View>
 
       <SpendPrompt

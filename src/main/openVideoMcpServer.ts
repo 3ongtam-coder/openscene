@@ -537,7 +537,6 @@ export class OpenVideoMcpServer {
       success: true,
       jobId: job.id,
       status: job.status,
-      outputFilePath: job.outputFilePath,
       error: job.error
     };
   }
