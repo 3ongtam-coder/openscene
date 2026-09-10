@@ -20,15 +20,108 @@ export interface BrowserSessionProviderPolicy {
   readonly applicationOrigin: string;
   readonly loginUrl: string;
   readonly allowedNavigationOrigins: readonly string[];
+  /** Origins accepted only for decrypting sessions saved by older builds. */
+  readonly compatibleCookieSourceOrigins?: readonly string[];
+}
+
+export type GoogleFlowImagePromptInput = {
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly stylePreset?: string;
+  readonly negativePrompt?: string;
+};
+
+const MAX_GOOGLE_FLOW_PROJECT_NAME_LENGTH = 100;
+
+/**
+ * Keep the local folder/project label usable as a Flow project title without
+ * leaking paths or control characters into the provider UI.
+ */
+export function normalizeGoogleFlowProjectName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_GOOGLE_FLOW_PROJECT_NAME_LENGTH)
+    .trim();
+  return normalized.length === 0 ? undefined : normalized;
+}
+
+export type GoogleFlowImageModel = 'nano-banana-2' | 'nano-banana-pro';
+
+export const GOOGLE_FLOW_PREFERENCES_STORAGE_KEY = 'openvideo-google-flow-preferences-v1';
+
+export type GoogleFlowPreferences = {
+  readonly schemaVersion: 1;
+  readonly showWindowDuringGeneration: boolean;
+};
+
+export const DEFAULT_GOOGLE_FLOW_PREFERENCES: GoogleFlowPreferences = {
+  schemaVersion: 1,
+  // Visible by default while the Flow integration is experimental, so UI
+  // changes, account prompts, and generation progress remain observable.
+  showWindowDuringGeneration: true
+};
+
+export function parseGoogleFlowPreferences(raw: string | null): GoogleFlowPreferences {
+  if (raw === null) return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+  try {
+    const value = JSON.parse(raw) as { schemaVersion?: unknown; showWindowDuringGeneration?: unknown };
+    if (value.schemaVersion !== 1 || typeof value.showWindowDuringGeneration !== 'boolean') {
+      return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+    }
+    return { schemaVersion: 1, showWindowDuringGeneration: value.showWindowDuringGeneration };
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+  }
+}
+
+export function serializeGoogleFlowPreferences(preferences: GoogleFlowPreferences): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    showWindowDuringGeneration: preferences.showWindowDuringGeneration
+  });
+}
+
+/** Map API catalog choices onto the image models exposed by Google Flow. */
+export function googleFlowImageModelFor(modelId: string): GoogleFlowImageModel {
+  if (modelId.includes('pro')) return 'nano-banana-pro';
+  // Flow does not expose a separate Flash-Lite image tier. Both Flash catalog
+  // entries use the current Nano Banana 2 option in the signed-in Flow UI.
+  return 'nano-banana-2';
+}
+
+/**
+ * Flow exposes only coarse orientation controls. Preserve the exact requested
+ * ratio as prompt text so square and non-16:9 requests are not silently lost.
+ */
+export function buildGoogleFlowImagePrompt(input: GoogleFlowImagePromptInput): string {
+  const lines = [
+    'Create one image (do not answer with only text).',
+    input.prompt.trim(),
+    `Use a ${input.aspectRatio} aspect ratio.`
+  ];
+  const style = input.stylePreset?.trim();
+  if (style) lines.push(`Visual style: ${style}.`);
+  const avoid = input.negativePrompt?.trim();
+  if (avoid) lines.push(`Do not include: ${avoid}.`);
+  return lines.join('\n');
 }
 
 const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProviderPolicy>> = {
   gemini: {
     id: 'gemini',
-    label: 'Google Gemini / Veo',
-    applicationOrigin: 'https://gemini.google.com',
-    loginUrl: 'https://gemini.google.com/app',
-    allowedNavigationOrigins: ['https://gemini.google.com', 'https://accounts.google.com']
+    label: 'Google Labs Flow / Veo',
+    applicationOrigin: 'https://flow.google.com',
+    loginUrl: 'https://flow.google.com/',
+    // The persisted provider id remains `gemini` for compatibility, but this
+    // media lane permits only Flow and Google's own sign-in origin.
+    // Flow currently redirects its public labs entry point to the dedicated
+    // flow.google.com application before rendering the project list/editor.
+    // Keep the exact origin allowlist; do not widen this to *.google.com.
+    allowedNavigationOrigins: ['https://flow.google.com', 'https://labs.google', 'https://accounts.google.com'],
+    compatibleCookieSourceOrigins: ['https://gemini.google.com']
   },
   grok: {
     id: 'grok',
@@ -58,6 +151,17 @@ export function isBrowserSessionNavigationAllowed(providerId: BrowserSessionProv
   }
 }
 
+export function isBrowserSessionCookieSourceAllowed(providerId: BrowserSessionProviderId, candidateUrl: string): boolean {
+  try {
+    const origin = new URL(candidateUrl).origin;
+    const policy = POLICIES[providerId];
+    return policy.allowedNavigationOrigins.includes(origin)
+      || policy.compatibleCookieSourceOrigins?.includes(origin) === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A cookie is accepted only when its domain can be sent to one of the exact
  * HTTPS origins in the provider policy. This intentionally rejects unrelated
@@ -66,7 +170,9 @@ export function isBrowserSessionNavigationAllowed(providerId: BrowserSessionProv
 export function isBrowserSessionCookieDomainAllowed(providerId: BrowserSessionProviderId, cookieDomain: string): boolean {
   const normalized = cookieDomain.trim().toLowerCase().replace(/^\./, '');
   if (normalized.length === 0) return false;
-  return POLICIES[providerId].allowedNavigationOrigins.some((allowedOrigin) => {
+  const policy = POLICIES[providerId];
+  const cookieOrigins = [...policy.allowedNavigationOrigins, ...(policy.compatibleCookieSourceOrigins ?? [])];
+  return cookieOrigins.some((allowedOrigin) => {
     const hostname = new URL(allowedOrigin).hostname.toLowerCase();
     return hostname === normalized || hostname.endsWith(`.${normalized}`);
   });

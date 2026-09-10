@@ -12,8 +12,8 @@ export type ImageGenerationProviderId =
   | 'flux_image'
   | 'alibaba_wan_image';
 export type ProviderJobStatus = 'queued' | 'running' | 'completed' | 'failed';
-/** Media generation can use a cloud API or an explicitly user-managed local runtime. */
-export type ProviderExecutionMode = 'api' | 'local';
+/** Media generation can use a cloud API, an isolated signed-in browser, or a user-managed local runtime. */
+export type ProviderExecutionMode = 'api' | 'browser_session' | 'local';
 
 export interface ProviderApiConfig {
   geminiApiKey?: string;
@@ -154,6 +154,10 @@ export interface ImageGenerationRequest {
   stylePreset?: string;
   negativePrompt?: string;
   mode?: ProviderExecutionMode;
+  /** Desktop-only observability control for signed-in Google Flow jobs. */
+  showBrowserWindow?: boolean;
+  /** Desktop-only project/folder label mirrored into Google Flow. */
+  flowProjectName?: string;
   provider?: ImageGenerationProviderId;
   modelId?: string;
   apiKey?: string;

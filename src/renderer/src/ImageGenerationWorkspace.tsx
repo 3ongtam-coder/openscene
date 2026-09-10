@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 
+import {
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
+  parseGoogleFlowPreferences,
+  type BrowserSessionStatus
+} from '../../shared/browserSession';
 import type { ImageAspectRatio, ImageGenerationJob, ReferenceImageSelection } from '../../shared/providerSeams';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { DomainModelPicker } from './DomainModelPicker';
@@ -10,25 +16,55 @@ const ASPECT_RATIOS: readonly ImageAspectRatio[] = ['1:1', '16:9', '9:16', '4:3'
 const IMAGE_JOB_UI_TIMEOUT_MS = 12 * 60_000;
 
 type StatusMessage = { readonly text: string; readonly tone: 'neutral' | 'success' | 'warning' | 'danger' };
+type ImageGenerationMode = 'api' | 'browser_session';
 
 type ImageGenerationWorkspaceProps = {
   /** Hands a finished still to the video studio and switches to it. */
   readonly onUseForVideo: (reference: ReferenceImageSelection) => void;
+  /** Local project folder/name mirrored to the signed-in Flow workspace. */
+  readonly projectName?: string | undefined;
 };
 
-export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorkspaceProps): ReactElement {
+function showGoogleFlowWindow(): boolean {
+  try {
+    return parseGoogleFlowPreferences(
+      window.localStorage.getItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY)
+    ).showWindowDuringGeneration;
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES.showWindowDuringGeneration;
+  }
+}
+
+export function ImageGenerationWorkspace({ onUseForVideo, projectName }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const imageModel = selectedModel('image-generation');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [selectedStyle, setSelectedStyle] = useState<string>('Photographic');
+  const [generationMode, setGenerationMode] = useState<ImageGenerationMode>(
+    imageModel.providerId === 'google_gemini' ? 'browser_session' : 'api'
+  );
+  const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StatusMessage | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollInFlightRef = useRef(false);
   const pollGenerationRef = useRef(0);
+  const previousProviderRef = useRef(imageModel.providerId);
+
+  useEffect(() => {
+    if (previousProviderRef.current === imageModel.providerId) return;
+    previousProviderRef.current = imageModel.providerId;
+    setGenerationMode(imageModel.providerId === 'google_gemini' ? 'browser_session' : 'api');
+  }, [imageModel.providerId]);
+
+  useEffect(() => {
+    void window.videoTool.getBrowserSessionStatuses().then((response) => {
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
+    });
+  }, []);
 
   useEffect(() => () => {
     pollGenerationRef.current += 1;
@@ -42,8 +78,16 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       return;
     }
 
+    const flowWindowVisible = generationMode === 'browser_session' && showGoogleFlowWindow();
     setIsGenerating(true);
-    setStatusMsg({ text: `Submitting ${imageModel.providerLabel} image job…`, tone: 'neutral' });
+    setStatusMsg({
+      text: generationMode === 'browser_session'
+        ? flowWindowVisible
+          ? 'Opening the signed-in Google Flow window…'
+          : 'Starting the hidden signed-in Google Flow image worker…'
+        : `Submitting ${imageModel.providerLabel} image job…`,
+      tone: 'neutral'
+    });
 
     try {
       const response = await window.videoTool.aiGenerateImage({
@@ -53,6 +97,10 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
         aspectRatio,
         stylePreset: selectedStyle,
         modelId: imageModel.id,
+        mode: generationMode,
+        ...(generationMode === 'browser_session'
+          ? { showBrowserWindow: flowWindowVisible, ...(projectName === undefined ? {} : { flowProjectName: projectName }) }
+          : {}),
         ...(negativePrompt.trim().length === 0 ? {} : { negativePrompt: negativePrompt.trim() })
       });
 
@@ -64,6 +112,14 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
 
       const job = response.value;
       setJobs((prev) => [job, ...prev]);
+      if (job.mode === 'browser_session') {
+        setStatusMsg({
+          text: flowWindowVisible
+            ? 'Google Flow is generating in the visible window. OpenScene will import the result automatically.'
+            : 'Google Flow is generating in the background. OpenScene will download and verify the result automatically.',
+          tone: 'neutral'
+        });
+      }
 
       const pollingDeadline = Date.now() + IMAGE_JOB_UI_TIMEOUT_MS;
       const pollGeneration = ++pollGenerationRef.current;
@@ -147,12 +203,49 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <h2 className="studio-surface__title-label" id="image-generation-title">
             Image Generation
           </h2>
-          <span className="studio-surface__title-meta">Cloud image generation</span>
+          <span className="studio-surface__title-meta">
+            {generationMode === 'browser_session' ? 'Signed-in Google Flow worker' : 'Cloud image generation'}
+          </span>
         </div>
-        <DomainModelPicker domain="image-generation" ariaLabel="Image model" />
+        <DomainModelPicker
+          domain="image-generation"
+          ariaLabel="Image model"
+          linkedProviderIds={flowSession?.kind === 'stored' ? ['google_gemini'] : []}
+        />
       </header>
 
       <div className="studio-surface__body">
+        {imageModel.providerId === 'google_gemini' && (
+          <div className="studio-field">
+            <span className="studio-field__label">Connection</span>
+            <div className="studio-chips" role="group" aria-label="Google Flow connection mode">
+              <button
+                type="button"
+                aria-pressed={generationMode === 'browser_session'}
+                className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('browser_session')}
+              >
+                Google Flow session
+              </button>
+              <button
+                type="button"
+                aria-pressed={generationMode === 'api'}
+                className={`studio-chip${generationMode === 'api' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('api')}
+              >
+                API key
+              </button>
+            </div>
+            {generationMode === 'browser_session' && (
+              <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
+                {flowSession?.kind === 'stored'
+                  ? 'Google Flow session ready. Generate runs in a hidden Flow project and imports the result automatically.'
+                  : 'No ready Google Flow session detected. Sign in under Settings → Providers before generating.'}
+              </StatusCard>
+            )}
+          </div>
+        )}
+
         <div className="studio-field">
           <span className="studio-field__label">Style</span>
           <div className="studio-chips" role="group" aria-label="Style preset">
@@ -213,7 +306,9 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
                 <li key={job.id} className="studio-job">
                   <div className="studio-job__row">
                     <span className={`studio-job__status studio-job__status--${job.status}`}>{job.status}</span>
-                    <span className="studio-job__provider">{job.provider}</span>
+                    <span className="studio-job__provider">
+                      {job.provider}{job.mode === 'browser_session' ? ' · signed-in session' : ''}
+                    </span>
                   </div>
                   {job.previewBase64 !== undefined && (
                     <img
@@ -256,6 +351,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <span className="studio-composer__hint">
             {aspectRatio} · {selectedStyle}
             {negativePrompt.trim().length === 0 ? '' : ' · avoid set'}
+            {generationMode === 'browser_session' ? ' · Google Flow session' : ''}
           </span>
           <Button
             variant="primary"

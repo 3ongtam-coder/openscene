@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
+  isBrowserSessionCookieSourceAllowed,
   type BrowserSessionProviderId,
   type BrowserSessionStatus
 } from '../shared/browserSession';
@@ -48,8 +49,7 @@ function assertRecordPolicy(record: BrowserSessionSecretRecord): void {
     if (!isBrowserSessionCookieDomainAllowed(record.providerId, cookie.domain)) {
       throw new BrowserSessionVaultError(`Cookie domain is not allowed for ${record.providerId}.`);
     }
-    const policy = getBrowserSessionProviderPolicy(record.providerId);
-    if (!policy.allowedNavigationOrigins.includes(new URL(cookie.sourceUrl).origin)) {
+    if (!isBrowserSessionCookieSourceAllowed(record.providerId, cookie.sourceUrl)) {
       throw new BrowserSessionVaultError(`Cookie source origin is not allowed for ${record.providerId}.`);
     }
   }

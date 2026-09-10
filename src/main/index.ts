@@ -31,7 +31,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerBrowserImageGenerator, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
 import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
@@ -79,7 +79,10 @@ const audioDetachService = new AudioDetachService({ projects: projectStore, asse
 const continuityFrameService = new ContinuityFrameService({ projects: projectStore, assets: assetLibraryStore });
 const exportJobStore = new ExportJobStore();
 const credentialStore = new CredentialStore(app.getPath('userData'));
-const browserSessionService = new BrowserSessionService(new BrowserSessionVault(app.getPath('userData')));
+const browserSessionService = new BrowserSessionService(
+  new BrowserSessionVault(app.getPath('userData')),
+  app.getPath('temp')
+);
 const updaterController = setupUpdater();
 const updaterPromptIo = {
   showMessageBox: (input: Parameters<typeof dialog.showMessageBox>[0]) => dialog.showMessageBox(input),
@@ -94,6 +97,7 @@ const llmPromptRouter = new LlmPromptRouter({
   chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
 });
 setAiJobManagerCredentialStore(credentialStore);
+setAiJobManagerBrowserImageGenerator((input) => browserSessionService.generateGoogleFlowImage(input));
 const managedVieNeuRuntime = new ManagedVieNeuRuntime({ workingDirectory: process.cwd() });
 setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 /*

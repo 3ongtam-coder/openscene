@@ -52,6 +52,16 @@ const imageJobs = new Map<string, ImageGenerationJob>();
 let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
 let activeVieNeuRuntime: VieNeuRuntimeController | undefined;
+type BrowserImageGenerator = (input: {
+  readonly modelId: string;
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly stylePreset?: string;
+  readonly negativePrompt?: string;
+  readonly showBrowserWindow?: boolean;
+  readonly projectName?: string;
+}) => Promise<GeneratedImage>;
+let activeBrowserImageGenerator: BrowserImageGenerator | undefined;
 type MotionAssetSource = OpenedAssetPlaybackSource & { readonly durationMs?: number };
 let activeAssetSourceResolver: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined;
 
@@ -63,6 +73,11 @@ function logSpeechJob(jobId: string, event: string, details: Readonly<Record<str
 function logVideoJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
   const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
   console[level](`[OpenScene][Video][${jobId}] ${event}${suffix}`);
+}
+
+function logImageJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
+  const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console[level](`[OpenScene][Image][${jobId}] ${event}${suffix}`);
 }
 
 /**
@@ -121,6 +136,10 @@ export function setAiJobManagerCredentialStore(store?: CredentialStore | undefin
 
 export function setAiJobManagerVieNeuRuntime(runtime?: VieNeuRuntimeController | undefined): void {
   activeVieNeuRuntime = runtime;
+}
+
+export function setAiJobManagerBrowserImageGenerator(generator?: BrowserImageGenerator | undefined): void {
+  activeBrowserImageGenerator = generator;
 }
 
 export function setAiJobManagerAssetSourceResolver(
@@ -471,9 +490,18 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   const model = resolveGenerationModel('image-generation', request.modelId);
   const providerMapping = IMAGE_MODEL_PROVIDERS[model.providerId];
   const provider: ImageGenerationProviderId = providerMapping?.seam ?? 'openai_images';
+  const mode = request.mode ?? 'api';
+  if (mode === 'local') {
+    throw new Error('No local image generation adapter is configured for this model.');
+  }
+  if (mode === 'browser_session' && model.providerId !== 'google_gemini') {
+    throw new Error('Browser-session image generation is available only for Google models routed through Flow.');
+  }
   // One image per job, which is what this seam creates.
   const estimate = estimateImageCost({ modelId: model.id, imageCount: 1 });
-  const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
+  // A Google Flow subscription/session is not a metered API request in this
+  // ledger, so it must not reserve or charge API spend.
+  const reservationId = mode === 'api' ? await reserveSpend(estimate, request.acceptUnknownCost) : null;
   const { imageDir } = await ensureAiDirectories();
   const id = `image-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const now = new Date().toISOString();
@@ -481,7 +509,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   const job: ImageGenerationJob = {
     id,
     provider,
-    mode: 'api',
+    mode,
     status: 'queued',
     prompt: request.prompt,
     aspectRatio: request.aspectRatio ?? '1:1',
@@ -493,40 +521,70 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   };
 
   imageJobs.set(id, job);
+  logImageJob(id, 'request.queued', {
+    modelId: model.id,
+    provider: IMAGE_PROVIDER_LABELS[provider],
+    mode,
+    aspectRatio: job.aspectRatio,
+    promptCharacters: request.prompt.length
+  });
 
   setTimeout(async () => {
+    const startedAt = Date.now();
     const running: ImageGenerationJob = { ...job, status: 'running', updatedAt: new Date().toISOString() };
     imageJobs.set(id, running);
+    logImageJob(id, 'process.started', { mode });
     try {
-      let apiKey = request.apiKey?.trim();
-      if ((apiKey === undefined || apiKey.length === 0) && activeCredentialStore) {
-        apiKey = await activeCredentialStore.getCredentialValue(providerMapping?.credentialKey ?? 'openaiApiKey');
-      }
-      if (apiKey === undefined || apiKey.length === 0) {
-        throw new Error(
-          `API key is required for ${IMAGE_PROVIDER_LABELS[provider]} image generation. Connect the provider in Settings first.`
-        );
+      let image: GeneratedImage;
+      if (mode === 'browser_session') {
+        if (activeBrowserImageGenerator === undefined) {
+          throw new Error('Google Flow browser-session image generation is unavailable in this runtime.');
+        }
+        logImageJob(id, 'browser.request.started');
+        image = await activeBrowserImageGenerator({
+          modelId: model.id,
+          prompt: request.prompt,
+          aspectRatio: request.aspectRatio,
+          showBrowserWindow: request.showBrowserWindow !== false,
+          ...(request.flowProjectName === undefined ? {} : { projectName: request.flowProjectName }),
+          ...(request.stylePreset === undefined ? {} : { stylePreset: request.stylePreset }),
+          ...(request.negativePrompt === undefined ? {} : { negativePrompt: request.negativePrompt })
+        });
+      } else {
+        let apiKey = request.apiKey?.trim();
+        if ((apiKey === undefined || apiKey.length === 0) && activeCredentialStore) {
+          apiKey = await activeCredentialStore.getCredentialValue(providerMapping?.credentialKey ?? 'openaiApiKey');
+        }
+        if (apiKey === undefined || apiKey.length === 0) {
+          throw new Error(
+            `API key is required for ${IMAGE_PROVIDER_LABELS[provider]} image generation. Connect the provider in Settings first.`
+          );
+        }
+
+        await settleSpend(reservationId, 'charged');
+        const result = await invokeCloudImageProvider(model, apiKey, request);
+        if (!result.ok) throw new Error(result.error);
+        image = result.image;
       }
 
-      await settleSpend(reservationId, 'charged');
-      const result = await invokeCloudImageProvider(model, apiKey, request);
-      if (!result.ok) {
-        throw new Error(result.error);
-      }
-
-      const outputFilePath = join(imageDir, `${id}.${imageExtensionFor(result.image.mimeType)}`);
-      await writeFile(outputFilePath, result.image.bytes);
+      const outputFilePath = join(imageDir, `${id}.${imageExtensionFor(image.mimeType)}`);
+      await writeFile(outputFilePath, image.bytes);
 
       imageJobs.set(id, {
         ...running,
         status: 'completed',
         outputFilePath,
-        providerJobId: result.image.providerJobId,
+        providerJobId: image.providerJobId,
         // Carried inline so the studio can show the result without ever
         // learning a filesystem path.
-        previewMimeType: result.image.mimeType,
-        previewBase64: result.image.bytes.toString('base64'),
+        previewMimeType: image.mimeType,
+        previewBase64: image.bytes.toString('base64'),
         updatedAt: new Date().toISOString()
+      });
+      logImageJob(id, 'request.completed', {
+        elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+        bytes: image.bytes.length,
+        mimeType: image.mimeType
       });
     } catch (err) {
       // Handing the room back is safe whether or not it was already kept:
@@ -539,6 +597,10 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
         error: err instanceof Error ? err.message : 'Image generation failed',
         updatedAt: new Date().toISOString()
       });
+      logImageJob(id, 'request.failed', {
+        elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+        error: err instanceof Error ? err.message : 'Image generation failed'
+      }, 'error');
     }
   }, 0);
 
