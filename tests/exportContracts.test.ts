@@ -12,6 +12,10 @@ describe('export contracts', () => {
       frameRate: 30
     });
     expect(parseStartExportJobInput({ projectId: 'project_01' })).toEqual({ projectId: 'project_01' });
+    expect(parseStartExportJobInput({ projectId: 'project_01', metadataPrivacyMode: 'privacy_clean' })).toEqual({
+      projectId: 'project_01', metadataPrivacyMode: 'privacy_clean'
+    });
+    expect(parseStartExportJobInput({ projectId: 'project_01', metadataPrivacyMode: 'remove_everything' })).toBeNull();
     expect(parseStartExportJobInput({
       projectId: 'project_01',
       subtitleDelivery: { burnAutomaticCaptions: false, sidecarFormat: 'vtt' }

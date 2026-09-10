@@ -5,7 +5,9 @@ import { audioProbeArgs, probeSaysAudible } from '../shared/audibleAssets';
 import { FILTER_LIST_ARGS, escapeFontPath, fontCandidates, supportsDrawtext } from '../shared/titleFont';
 import type { ApiResponse } from '../shared/models';
 import { EXPORT_DEFAULTS, type LocalExportJob, type LocalFfmpegRuntimeStatus, type StartExportJobInput } from '../shared/exportTypes';
-import { createSubtitleSidecar, DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleSidecar } from '../shared/subtitleDelivery';
+import { createDeliveryProvenance } from '../shared/exportProvenance';
+import { DEFAULT_METADATA_PRIVACY_MODE, type MetadataPrivacyMode } from '../shared/metadataPrivacy';
+import { createSubtitleSidecar, DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleDelivery, type SubtitleSidecar } from '../shared/subtitleDelivery';
 import { resolvedTitleStyle } from '../shared/captionStyle';
 import { parseExportJobActionInput, parseStartExportJobInput } from '../shared/exportValidators';
 import type { LocalProjectSnapshot } from '../shared/timelineTypes';
@@ -18,7 +20,7 @@ import { discoverFfmpeg, type FfmpegDiscoveryResult } from './ffmpegDiscovery';
 import { startFfmpegExportProcess, type FfmpegExecution, type StartFfmpegExportProcessInput } from './ffmpegExportProcess';
 import { compileFfmpegTimeline, FfmpegTimelineError } from './ffmpegTimelineCompiler';
 import { ExportJobStore } from './exportJobStore';
-import { ExportOutputError, prepareExportOutputPath, removeExportOutput, validateExportOutput, writeExportSubtitleSidecar } from './exportOutputFiles';
+import { ExportOutputError, hashExportOutput, prepareExportOutputPath, removeExportOutput, validateExportOutput, writeExportProvenanceSidecar, writeExportSubtitleSidecar } from './exportOutputFiles';
 import { fail, ok } from './ipcResponses';
 
 type ProjectReader = {
@@ -39,6 +41,7 @@ type ExportIpcServiceDependencies = {
   readonly runInBackground?: (task: () => Promise<void>) => void;
   readonly openPath?: (path: string) => Promise<string>;
   readonly revealPath?: (path: string) => void;
+  readonly now?: () => Date;
 };
 
 type PreparedExport = {
@@ -50,6 +53,9 @@ type PreparedExport = {
   /** What this run promises the file will be, to be checked against it after. */
   readonly promise: ExportPromise;
   readonly sidecar?: SubtitleSidecar;
+  readonly project: LocalProjectSnapshot;
+  readonly subtitleDelivery: SubtitleDelivery;
+  readonly metadataPrivacyMode: MetadataPrivacyMode;
 };
 
 type PrepareExportInput = {
@@ -80,6 +86,7 @@ export class ExportIpcService {
   private readonly runInBackground: (task: () => Promise<void>) => void;
   private readonly openPath: (path: string) => Promise<string>;
   private readonly revealPath: (path: string) => void;
+  private readonly now: () => Date;
 
   constructor(private readonly dependencies: ExportIpcServiceDependencies) {
     this.discover = dependencies.discoverFfmpeg ?? discoverFfmpeg;
@@ -87,6 +94,7 @@ export class ExportIpcService {
     this.runInBackground = dependencies.runInBackground ?? ((task) => void task());
     this.openPath = dependencies.openPath ?? (async () => '');
     this.revealPath = dependencies.revealPath ?? (() => undefined);
+    this.now = dependencies.now ?? (() => new Date());
   }
 
   async startExportJob(payload: unknown): Promise<ApiResponse<LocalExportJob>> {
@@ -272,6 +280,7 @@ export class ExportIpcService {
     let staged: StagedExportAssets | null = null;
     try {
       const delivery = input.request.subtitleDelivery ?? DEFAULT_SUBTITLE_DELIVERY;
+      const metadataPrivacyMode = input.request.metadataPrivacyMode ?? DEFAULT_METADATA_PRIVACY_MODE;
       const exportTimeline = timelineForSubtitleDelivery(input.project.timeline, delivery);
       const sidecar = delivery.sidecarFormat === 'none'
         ? undefined
@@ -311,7 +320,8 @@ export class ExportIpcService {
           : {}),
         outputPath,
         ...dimensions,
-        frameRate
+        frameRate,
+        metadataPrivacyMode
       });
       return {
         executablePath: input.executablePath,
@@ -319,6 +329,9 @@ export class ExportIpcService {
         stagingDirectory: staged.directory,
         args: compiled.args,
         durationMs: compiled.durationMs,
+        project: input.project,
+        subtitleDelivery: delivery,
+        metadataPrivacyMode,
         promise: {
           widthPx: dimensions.width,
           heightPx: dimensions.height,
@@ -364,6 +377,7 @@ export class ExportIpcService {
     }
     this.dependencies.jobs.markRunning(jobId, prepared.durationMs);
     let subtitleOutputPath: string | undefined;
+    let provenanceOutputPath: string | undefined;
     try {
       const execution = this.startProcess({
         executablePath: prepared.executablePath,
@@ -397,7 +411,27 @@ export class ExportIpcService {
         prepared.promise,
         await measureExportedFile({ ffmpegPath: prepared.executablePath, filePath: prepared.outputPath })
       );
-      this.dependencies.jobs.markCompleted(jobId, output.fileName, output.fileSizeBytes, review, subtitleOutput?.fileName);
+      const checksum = await hashExportOutput(prepared.outputPath);
+      if (checksum.fileSizeBytes !== output.fileSizeBytes) {
+        throw new ExportOutputError('The MP4 changed before its provenance sidecar was created.');
+      }
+      const provenanceOutput = await writeExportProvenanceSidecar(
+        this.dependencies.exportsRoot,
+        jobId,
+        createDeliveryProvenance({
+          project: prepared.project,
+          exportedAt: this.now().toISOString(),
+          width: prepared.promise.widthPx,
+          height: prepared.promise.heightPx,
+          frameRate: prepared.promise.frameRate,
+          durationMs: prepared.promise.durationMs,
+          subtitleDelivery: prepared.subtitleDelivery,
+          metadataPrivacyMode: prepared.metadataPrivacyMode,
+          output: { fileName: output.fileName, fileSizeBytes: output.fileSizeBytes, sha256: checksum.sha256 }
+        })
+      );
+      provenanceOutputPath = provenanceOutput.outputPath;
+      this.dependencies.jobs.markCompleted(jobId, output.fileName, output.fileSizeBytes, review, subtitleOutput?.fileName, provenanceOutput.fileName);
       this.completedOutputs.set(jobId, prepared.outputPath);
     } catch (error: unknown) {
       if (this.dependencies.jobs.get(jobId)?.state.kind === 'running') {
@@ -412,7 +446,10 @@ export class ExportIpcService {
       const removePartialSubtitle = this.dependencies.jobs.get(jobId)?.state.kind === 'completed' || subtitleOutputPath === undefined
         ? Promise.resolve()
         : removeExportOutput(subtitleOutputPath);
-      await Promise.all([removeExportStaging(prepared.stagingDirectory), removePartialOutput, removePartialSubtitle]);
+      const removePartialProvenance = this.dependencies.jobs.get(jobId)?.state.kind === 'completed' || provenanceOutputPath === undefined
+        ? Promise.resolve()
+        : removeExportOutput(provenanceOutputPath);
+      await Promise.all([removeExportStaging(prepared.stagingDirectory), removePartialOutput, removePartialSubtitle, removePartialProvenance]);
     }
   }
 

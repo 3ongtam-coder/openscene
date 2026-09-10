@@ -99,10 +99,20 @@ describe('renderer export UI state', () => {
         completedAt: '2026-07-22T00:00:03.000Z',
         fileName: 'safe-name.mp4',
         fileSizeBytes: 5_242_880,
-        subtitleFileName: 'safe-name.vtt'
+        subtitleFileName: 'safe-name.vtt',
+        provenanceFileName: 'safe-name.provenance.json'
       }),
       isStarting: false
     }).detail).toContain('Subtitle: safe-name.vtt.');
+    expect(getExportStatusView({
+      hasProject: true,
+      hasUnsavedTimeline: false,
+      job: jobWithState({
+        kind: 'completed', completedAt: '2026-07-22T00:00:03.000Z', fileName: 'safe-name.mp4',
+        fileSizeBytes: 5_242_880, provenanceFileName: 'safe-name.provenance.json'
+      }),
+      isStarting: false
+    }).detail).toContain('Provenance: safe-name.provenance.json.');
     expect(getExportStatusView({ hasProject: true, hasUnsavedTimeline: false, job: failedJob, isStarting: false })).toMatchObject({
       detail: 'FFmpeg was not configured and was not found on the system PATH.',
       progressValue: 0,

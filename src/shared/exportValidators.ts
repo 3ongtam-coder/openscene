@@ -1,10 +1,11 @@
 import type { ExportJobActionInput, StartExportJobInput } from './exportTypes';
+import { parseMetadataPrivacyMode } from './metadataPrivacy';
 import { parseSubtitleDelivery } from './subtitleDelivery';
 
 type PlainRecord = Record<string, unknown>;
 
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-const START_KEYS = new Set(['projectId', 'width', 'height', 'frameRate', 'subtitleDelivery']);
+const START_KEYS = new Set(['projectId', 'width', 'height', 'frameRate', 'subtitleDelivery', 'metadataPrivacyMode']);
 
 function isPlainRecord(value: unknown): value is PlainRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -40,7 +41,8 @@ export function parseStartExportJobInput(value: unknown): StartExportJobInput | 
   const height = hasHeight ? boundedInteger(value.height, 16, 4_320) : undefined;
   const frameRate = value.frameRate === undefined ? undefined : boundedInteger(value.frameRate, 1, 120);
   const subtitleDelivery = value.subtitleDelivery === undefined ? undefined : parseSubtitleDelivery(value.subtitleDelivery);
-  if (width === null || height === null || frameRate === null || subtitleDelivery === null || (width !== undefined && width % 2 !== 0) || (height !== undefined && height % 2 !== 0)) {
+  const metadataPrivacyMode = value.metadataPrivacyMode === undefined ? undefined : parseMetadataPrivacyMode(value.metadataPrivacyMode);
+  if (width === null || height === null || frameRate === null || subtitleDelivery === null || metadataPrivacyMode === null || (width !== undefined && width % 2 !== 0) || (height !== undefined && height % 2 !== 0)) {
     return null;
   }
   return {
@@ -48,7 +50,8 @@ export function parseStartExportJobInput(value: unknown): StartExportJobInput | 
     ...(width === undefined ? {} : { width }),
     ...(height === undefined ? {} : { height }),
     ...(frameRate === undefined ? {} : { frameRate }),
-    ...(subtitleDelivery === undefined ? {} : { subtitleDelivery })
+    ...(subtitleDelivery === undefined ? {} : { subtitleDelivery }),
+    ...(metadataPrivacyMode === undefined ? {} : { metadataPrivacyMode })
   };
 }
 

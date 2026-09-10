@@ -7,6 +7,7 @@ import { nextVisualBoundaryMs } from '@openvideo/shared/timelinePlayback';
 import { clipDurationMs, clipTimelineEndMs } from '@openvideo/shared/timelineClipGeometry';
 import { titlesAt } from '@openvideo/shared/titlePreviewLayout';
 import { DEFAULT_SUBTITLE_DELIVERY } from '@openvideo/shared/subtitleDelivery';
+import { metadataPrivacyPlan } from '@openvideo/shared/metadataPrivacy';
 import { applyCaptionPreset, CAPTION_PLACEMENTS, CAPTION_STYLE_PRESETS, isAutomaticCaptionId, resolvedTitleStyle, type CaptionPresetId } from '@openvideo/shared/captionStyle';
 import { track } from '../lib/analyticsClient';
 import { theme } from '../lib/theme';
@@ -48,6 +49,8 @@ const FRAME_LABELS: Readonly<Record<FramePreference, string>> = {
   landscape: 'Landscape',
   square: 'Square'
 };
+
+const DESKTOP_PRIVACY_CLEAN_SUMMARY = metadataPrivacyPlan('privacy_clean').summary;
 
 /**
  * Whether this phone's renderer applies a grade.
@@ -809,6 +812,10 @@ export function EditScreen({
             <Text style={styles.sheetRowText}>Automatic captions: {burnAutomaticCaptions ? 'burn into video' : 'do not burn'}</Text>
           </Pressable>
           <Text style={styles.panelNote}>SRT, VTT and ASS sidecar files are currently desktop-only.</Text>
+          <Pressable accessibilityRole="button" disabled style={press(styles.sheetRow)}>
+            <Text style={[styles.sheetRowText, styles.sheetDisabled]}>Metadata privacy and provenance: desktop-only</Text>
+          </Pressable>
+          <Text style={styles.panelNote}>Mobile does not claim to sanitize metadata or write provenance.json. Finish this delivery in the desktop app. {DESKTOP_PRIVACY_CLEAN_SUMMARY}</Text>
           <Pressable accessibilityRole="button" onPress={() => setMoreOpen(false)} style={press(styles.sheetRow)}>
             <Text style={styles.sheetRowText}>Close</Text>
           </Pressable>

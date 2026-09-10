@@ -63,7 +63,7 @@ export class ExportJobStore {
     return this.replace(job, { ...job.state, progress });
   }
 
-  markCompleted(jobId: string, fileName: string, fileSizeBytes: number, review?: ExportReview, subtitleFileName?: string): LocalExportJob {
+  markCompleted(jobId: string, fileName: string, fileSizeBytes: number, review?: ExportReview, subtitleFileName?: string, provenanceFileName?: string): LocalExportJob {
     const job = this.requireState(jobId, ['running']);
     return this.replace(job, {
       kind: 'completed',
@@ -71,6 +71,7 @@ export class ExportJobStore {
       fileName,
       fileSizeBytes,
       ...(subtitleFileName === undefined ? {} : { subtitleFileName }),
+      ...(provenanceFileName === undefined ? {} : { provenanceFileName }),
       // Carried only when there is one: a caller with nothing to report should
       // not have to invent an "unchecked" review to say so.
       ...(review === undefined ? {} : { review })

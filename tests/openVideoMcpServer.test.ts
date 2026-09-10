@@ -411,6 +411,7 @@ describe('OpenScene TypeMCP Server and Tool declarations', () => {
 
   it('validates exportProjectVideo error propagation when export service fails or succeeds', async () => {
     const server = new OpenVideoMcpServer();
+    const receivedInputs: unknown[] = [];
 
     // 1. Missing ExportIpcService
     const noExportServiceResult = await server.exportProjectVideo({
@@ -433,23 +434,27 @@ describe('OpenScene TypeMCP Server and Tool declarations', () => {
 
     // 3. Mock succeeding ExportIpcService
     const mockSuccessExportService = {
-      startExportJob: async () =>
-        ok({
+      startExportJob: async (input: unknown) => {
+        receivedInputs.push(input);
+        return ok({
           id: 'export-job-999',
           projectId: 'proj-123',
           status: 'queued',
           progressRatio: 0,
           outputFilePath: '/tmp/output.mp4',
           error: null
-        })
+        });
+      }
     } as any;
 
     server.setServices(projectStore, mockSuccessExportService);
     const successResult = await server.exportProjectVideo({
-      projectId: 'proj-123'
+      projectId: 'proj-123',
+      metadataPrivacyMode: 'privacy_clean'
     });
     expect(successResult.success).toBe(true);
     expect(successResult.exportJobId).toBe('export-job-999');
+    expect(receivedInputs).toEqual([{ projectId: 'proj-123', metadataPrivacyMode: 'privacy_clean' }]);
   });
 
   it('handles job creation, status polling, and timeline clip placement end-to-end workflow', async () => {

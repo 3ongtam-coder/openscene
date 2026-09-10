@@ -3537,6 +3537,8 @@ button {
 }
 
 .export-popover {
+  max-height: min(680px, calc(100vh - 24px));
+  overflow-y: auto;
   position: absolute;
   right: 0;
   bottom: calc(100% + 6px);
@@ -4295,7 +4297,8 @@ button {
   gap: var(--space-2);
 }
 
-.export-panel__captions {
+.export-panel__captions,
+.export-panel__privacy {
   display: grid;
   gap: var(--space-2);
   margin: 0;
@@ -4305,18 +4308,27 @@ button {
 }
 
 .export-panel__captions legend,
-.export-panel__captions > span {
+.export-panel__captions > span,
+.export-panel__privacy legend,
+.export-panel__privacy > span,
+.export-panel__privacy details {
   color: var(--color-faint);
   font-size: var(--text-caption);
 }
 
-.export-panel__captions label {
+.export-panel__captions label,
+.export-panel__privacy label {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
   color: var(--color-muted);
   font-size: var(--text-caption);
+}
+
+.export-panel__privacy details p {
+  margin: var(--space-1) 0 0;
+  line-height: 1.45;
 }
 
 .studio-job__preview {
