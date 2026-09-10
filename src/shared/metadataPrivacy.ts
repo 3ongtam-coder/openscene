@@ -58,6 +58,81 @@ export type MetadataPrivacyPlan = {
   readonly untargetedSignals: readonly string[];
 };
 
+export type MetadataTagInventory = {
+  /** False means FFprobe could not return a complete inventory. */
+  readonly checked: boolean;
+  /** Allowlisted field definitions only; raw tag values never enter this contract. */
+  readonly fields: readonly PersonalContainerMetadataField[];
+};
+
+export type MetadataPrivacyVerification =
+  | {
+      readonly mode: MetadataPrivacyMode;
+      readonly checked: false;
+      readonly beforeFields: readonly PersonalContainerMetadataField[];
+      readonly afterFields: readonly PersonalContainerMetadataField[];
+      readonly why: string;
+    }
+  | {
+      readonly mode: MetadataPrivacyMode;
+      readonly checked: true;
+      readonly ok: boolean;
+      readonly beforeFields: readonly PersonalContainerMetadataField[];
+      readonly afterFields: readonly PersonalContainerMetadataField[];
+    };
+
+/** Reduces arbitrary probe keys to the closed, stable field catalog. */
+export function personalMetadataFieldsForKeys(keys: readonly string[]): readonly PersonalContainerMetadataField[] {
+  const found = new Set(keys.map((key) => key.toLowerCase()));
+  return PERSONAL_CONTAINER_METADATA_FIELDS.filter((field) => found.has(field.key.toLowerCase()));
+}
+
+export function mergeMetadataTagInventories(inventories: readonly MetadataTagInventory[]): MetadataTagInventory {
+  return {
+    checked: inventories.every((inventory) => inventory.checked),
+    fields: personalMetadataFieldsForKeys(inventories.flatMap((inventory) => inventory.fields.map((field) => field.key)))
+  };
+}
+
+export function verifyMetadataPrivacy(
+  mode: MetadataPrivacyMode,
+  before: MetadataTagInventory,
+  after: MetadataTagInventory
+): MetadataPrivacyVerification {
+  if (!before.checked || !after.checked) {
+    return {
+      mode,
+      checked: false,
+      beforeFields: before.fields,
+      afterFields: after.fields,
+      why: 'The before/after container metadata inventory could not be completed with FFprobe.'
+    };
+  }
+  return {
+    mode,
+    checked: true,
+    ok: mode === 'preserve_provenance' || after.fields.length === 0,
+    beforeFields: before.fields,
+    afterFields: after.fields
+  };
+}
+
+export function metadataPrivacyVerificationSummary(verification: MetadataPrivacyVerification): string {
+  if (!verification.checked) return verification.why;
+  const before = verification.beforeFields.length === 0
+    ? 'none'
+    : verification.beforeFields.map((field) => field.label).join(', ');
+  const after = verification.afterFields.length === 0
+    ? 'none'
+    : verification.afterFields.map((field) => field.label).join(', ');
+  if (verification.mode === 'preserve_provenance') {
+    return `Observed allowlisted personal tags — before: ${before}; after: ${after}. No removal was requested.`;
+  }
+  return verification.ok
+    ? `Privacy Clean verified — before: ${before}; after: none.`
+    : `Privacy Clean did not pass — before: ${before}; remaining after export: ${after}.`;
+}
+
 export function parseMetadataPrivacyMode(value: unknown): MetadataPrivacyMode | null {
   return typeof value === 'string' && (METADATA_PRIVACY_MODES as readonly string[]).includes(value)
     ? value as MetadataPrivacyMode
@@ -69,7 +144,7 @@ export function metadataPrivacyPlan(mode: MetadataPrivacyMode): MetadataPrivacyP
     ? {
         mode,
         label: 'Privacy Clean',
-        summary: 'Blank the allowlisted personal container fields on the new MP4 only. Source assets remain unchanged.',
+        summary: 'Blank allowlisted personal container fields on the new MP4 and verify the result with FFprobe. Source assets remain unchanged.',
         removedFields: PERSONAL_CONTAINER_METADATA_FIELDS,
         untargetedSignals: UNTARGETED_PROVENANCE_SIGNAL_CLASSES
       }
@@ -85,5 +160,8 @@ export function metadataPrivacyPlan(mode: MetadataPrivacyMode): MetadataPrivacyP
 /** Output-only FFmpeg options; absent in Preserve Provenance mode. */
 export function ffmpegMetadataPrivacyArgs(mode: MetadataPrivacyMode): readonly string[] {
   if (mode !== 'privacy_clean') return [];
-  return PERSONAL_CONTAINER_METADATA_FIELDS.flatMap((field) => ['-metadata', `${field.key}=`]);
+  return PERSONAL_CONTAINER_METADATA_FIELDS.flatMap((field) => [
+    '-metadata', `${field.key}=`,
+    '-metadata:s', `${field.key}=`
+  ]);
 }

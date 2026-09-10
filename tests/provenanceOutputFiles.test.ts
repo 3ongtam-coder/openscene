@@ -8,7 +8,7 @@ import { hashExportOutput, writeExportProvenanceSidecar } from '../src/main/expo
 import type { DeliveryProvenance } from '../src/shared/exportProvenance';
 
 const provenance: DeliveryProvenance = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   projectRevision: {
     projectId: 'project_01', projectUpdatedAt: '2026-09-10T00:00:00.000Z', projectSchemaVersion: 4,
     timelineSchemaVersion: 3, aiSchemaVersion: 1, timelineFingerprint: 'fnv1a32:12345678'
@@ -16,7 +16,11 @@ const provenance: DeliveryProvenance = {
   delivery: {
     exportedAt: '2026-09-10T01:00:00.000Z', width: 1920, height: 1080, frameRate: 30, durationMs: 1_000,
     subtitleDelivery: { burnAutomaticCaptions: true, sidecarFormat: 'none' },
-    metadataPrivacyMode: 'privacy_clean', removedContainerMetadataKeys: ['location'],
+    metadataPrivacyMode: 'privacy_clean', requestedContainerMetadataKeys: ['location'],
+    metadataPrivacyVerification: {
+      mode: 'privacy_clean', checked: true, ok: true,
+      beforeFields: [{ key: 'location', label: 'GPS/location', category: 'location' }], afterFields: []
+    },
     untargetedSignalClasses: ['Content Credentials/C2PA'],
     output: { fileName: 'export_01.mp4', fileSizeBytes: 4, sha256: 'a'.repeat(64) }
   },

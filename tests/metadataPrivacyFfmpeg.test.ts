@@ -6,8 +6,10 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { discoverFfmpeg } from '../src/main/ffmpegDiscovery';
+import { inspectContainerMetadata } from '../src/main/containerMetadataInspection';
 import { ffprobePathFor } from '../src/main/exportMeasurement';
 import { compileFfmpegTimeline } from '../src/shared/ffmpegTimelineCompiler';
+import { verifyMetadataPrivacy } from '../src/shared/metadataPrivacy';
 import { DEFAULT_CLIP_EFFECTS, TIMELINE_SCHEMA_VERSION, type TimelineDocument } from '../src/shared/timelineTypes';
 
 const execFile = promisify(execFileCallback);
@@ -65,6 +67,11 @@ describe('Privacy Clean FFmpeg delivery', () => {
       expect(cleaned.artist).toBeUndefined();
       expect(cleaned.comment).toBeUndefined();
       expect(cleaned.copyright).toBe('Keep Rights');
+      const before = await inspectContainerMetadata({ ffmpegPath: discovered.executablePath, filePath: sourcePath });
+      const after = await inspectContainerMetadata({ ffmpegPath: discovered.executablePath, filePath: cleanPath });
+      expect(before.fields.map((field) => field.key)).toEqual(['artist', 'comment', 'title']);
+      expect(after).toEqual({ checked: true, fields: [] });
+      expect(verifyMetadataPrivacy('privacy_clean', before, after)).toMatchObject({ checked: true, ok: true });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

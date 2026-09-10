@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 
 import type { LocalExportJob } from '../../../shared/exportTypes';
-import { DEFAULT_METADATA_PRIVACY_MODE, METADATA_PRIVACY_MODES, metadataPrivacyPlan, type MetadataPrivacyMode } from '../../../shared/metadataPrivacy';
+import { DEFAULT_METADATA_PRIVACY_MODE, METADATA_PRIVACY_MODES, metadataPrivacyPlan, metadataPrivacyVerificationSummary, type MetadataPrivacyMode } from '../../../shared/metadataPrivacy';
 import { automaticCaptionTitles, DEFAULT_SUBTITLE_DELIVERY, SUBTITLE_SIDECAR_FORMATS, type SubtitleDelivery, type SubtitleSidecarFormat } from '../../../shared/subtitleDelivery';
 import { outputFrameFor, type FramePreference } from '../../../shared/outputFrame';
 import {
@@ -83,6 +83,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
     [editor.hasUnsavedTimeline, hasProject, isStarting, job]
   );
   const privacyPlan = useMemo(() => metadataPrivacyPlan(metadataPrivacyMode), [metadataPrivacyMode]);
+  const completedPrivacyVerification = job?.state.kind === 'completed' ? job.state.metadataPrivacyVerification : undefined;
   const statusView = useMemo(
     () => getExportStatusView({
       hasProject,
@@ -237,8 +238,12 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
             </label>
             <span>{privacyPlan.summary}</span>
             {privacyPlan.removedFields.length > 0 && <details>
-              <summary>Before/after plan: clear {privacyPlan.removedFields.length} allowlisted personal tags</summary>
+              <summary>Planned removal: clear {privacyPlan.removedFields.length} allowlisted personal tags</summary>
               <p>{privacyPlan.removedFields.map((field) => field.label).join(', ')}.</p>
+            </details>}
+            {completedPrivacyVerification !== undefined && <details open>
+              <summary>Verified metadata before/after</summary>
+              <p>{metadataPrivacyVerificationSummary(completedPrivacyVerification)}</p>
             </details>}
             <span>Always writes an export-ID.provenance.json manifest with the MP4 checksum and project revision. It contains no prompts, credentials, rights-note text or local paths.</span>
             <span>Never targets Content Credentials/C2PA, SynthID, required provider labels or visible watermarks.</span>
