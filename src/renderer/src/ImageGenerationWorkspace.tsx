@@ -105,10 +105,8 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
     setStatusMsg({
       text: generationMode === 'browser_session'
         ? flowWindowVisible
-          // Keep the Google wording visible for the browser-session contract
-          // while the label is provider-specific for Grok.
-          ? `Opening the signed-in ${browserLabel} window…` // Opening the signed-in Google Flow window…
-          : 'Starting the hidden signed-in Google Flow image worker…'
+          ? `Opening the signed-in ${browserLabel} window…`
+          : `Starting the hidden signed-in ${browserLabel} image worker…`
         : `Submitting ${imageModel.providerLabel} image job…`,
       tone: 'neutral'
     });
@@ -423,7 +421,7 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
           <span className="studio-composer__hint">
             {aspectRatio} · {selectedStyle}
             {negativePrompt.trim().length === 0 ? '' : ' · avoid set'}
-            {generationMode === 'browser_session' ? ' · Google Flow session' : ''}
+            {generationMode === 'browser_session' ? ` · ${browserLabel} session` : ''}
           </span>
           <Button
             variant="primary"

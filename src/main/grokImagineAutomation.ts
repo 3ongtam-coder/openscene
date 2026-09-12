@@ -33,6 +33,20 @@ export type GrokImagineAutomationInput = {
   readonly onProgress?: (stage: GrokImagineAutomationProgress, elapsedMs: number, details?: Readonly<Record<string, unknown>>) => void;
 };
 
+export function buildGrokImaginePrompt(
+  prompt: string,
+  options: { readonly stylePreset?: string | undefined; readonly negativePrompt?: string | undefined } = {}
+): string {
+  const parts = [prompt.trim()];
+  const stylePreset = options.stylePreset?.trim();
+  if (stylePreset !== undefined && stylePreset.length > 0 && stylePreset !== 'Writer Style Bible' && stylePreset !== 'Workflow controlled') {
+    parts.push(`Visual style: ${stylePreset}.`);
+  }
+  const negativePrompt = options.negativePrompt?.trim();
+  if (negativePrompt !== undefined && negativePrompt.length > 0) parts.push(`Avoid: ${negativePrompt}.`);
+  return parts.join('\n');
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -125,14 +139,14 @@ function throwForAction(state: GrokImagineAutomationState): void {
 }
 
 async function selectMenuText(webContents: WebContents, button: Rectangle | undefined, expected: string): Promise<void> {
-  if (button === undefined) return;
+  if (button === undefined) throw new Error(`Grok Imagine did not expose the control required to select ${expected}.`);
   clickAt(webContents, button);
   await delay(250);
   const selected = await webContents.executeJavaScript(`(() => {
     const target = ${JSON.stringify(normalized(expected))};
     const visible = (element) => { const r = element.getBoundingClientRect(); const s = getComputedStyle(element); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
     const candidates = [...document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], [role="option"], button')]
-      .filter(visible).map((element) => ({ element, text: (element.textContent || element.getAttribute('aria-label') || '').trim().toLowerCase().replace(/\\s+/g, ' ') }));
+      .filter(visible).map((element) => ({ element, text: (element.textContent || element.getAttribute('aria-label') || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim().toLowerCase().replace(/\\s+/g, ' ') }));
     const entry = candidates.find(({ text }) => text === target) || candidates.find(({ text }) => text.includes(target));
     if (!entry) return false;
     entry.element.click();
@@ -169,7 +183,7 @@ async function fillPrompt(webContents: WebContents, prompt: string, deadline: nu
     if (state.input !== undefined) {
       clickAt(webContents, state.input);
       await delay(100);
-      pressKey(webContents, 'A', ['control']);
+      pressKey(webContents, 'A', [process.platform === 'darwin' ? 'meta' : 'control']);
       await webContents.insertText(prompt);
       await delay(250);
       const withSubmit = await readState(webContents);
@@ -193,8 +207,6 @@ export async function automateGrokImagineGeneration(webContents: WebContents, in
   throwForAction(state);
   input.onProgress?.('ready', Date.now() - startedAt);
 
-  const existingImages = new Set(state.images.map((entry) => entry.src));
-  const existingVideos = new Set(state.videos.map((entry) => entry.src));
   const mode = input.operation === 'image' ? state.imageMode : state.videoMode;
   if (mode === undefined) throw new Error(`Grok Imagine did not expose the ${input.operation === 'image' ? 'image' : 'video'} mode.`);
   if (!mode.selected) {
@@ -207,9 +219,7 @@ export async function automateGrokImagineGeneration(webContents: WebContents, in
   if (input.operation !== 'image') {
     if (input.durationSeconds !== undefined) await selectMenuText(webContents, state.durationButton?.rectangle, `${input.durationSeconds}s`);
     await selectMenuText(webContents, (await readState(webContents)).aspectButton?.rectangle, input.aspectRatio);
-    // The live UI currently defaults to 480p. Do not silently select another
-    // tier; a future UI can expose it explicitly and the probe will need a
-    // corresponding capability update before this worker uses it.
+    await selectMenuText(webContents, (await readState(webContents)).resolutionButton?.rectangle, '480p');
   } else {
     await selectMenuText(webContents, state.aspectButton?.rectangle, input.aspectRatio);
   }
@@ -222,6 +232,8 @@ export async function automateGrokImagineGeneration(webContents: WebContents, in
   }
 
   state = await fillPrompt(webContents, input.prompt, deadline);
+  const existingImages = new Set(state.images.map((entry) => entry.src));
+  const existingVideos = new Set(state.videos.map((entry) => entry.src));
   clickAt(webContents, state.submit!);
   input.onProgress?.('submitted', Date.now() - startedAt);
   let lastHeartbeat = 0;

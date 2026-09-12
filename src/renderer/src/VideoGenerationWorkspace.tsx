@@ -836,7 +836,9 @@ export function VideoGenerationWorkspace({
           domain="video-generation"
           ariaLabel="Video model"
           linkedModelIds={flowSession?.kind === 'stored'
-            ? ['gemini-omni-1.1-flash', 'veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview', 'grok-imagine-video-1.5']
+            ? grokImagineBrowser
+              ? ['grok-imagine-video-1.5']
+              : ['gemini-omni-1.1-flash', 'veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview']
             : []}
         />
       </header>
@@ -878,8 +880,10 @@ export function VideoGenerationWorkspace({
             {generationMode === 'browser_session' && (
               <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
                 {flowSession?.kind === 'stored'
-                  ? 'Google Flow session ready. OpenScene selects the exact Flow model, downloads the MP4, then returns it to candidate review.'
-                  : 'No ready Google Flow session detected. Sign in under Settings â†’ Providers before generating.'}
+                  ? grokImagineBrowser
+                    ? 'Grok Imagine session ready. OpenScene downloads the generated MP4, then returns it to candidate review.'
+                    : 'Google Flow session ready. OpenScene selects the exact Flow model, downloads the MP4, then returns it to candidate review.'
+                  : `No ready ${grokImagineBrowser ? 'Grok Imagine' : 'Google Flow'} session detected. Sign in under Settings → Providers before generating.`}
               </StatusCard>
             )}
           </div>

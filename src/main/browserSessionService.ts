@@ -32,7 +32,7 @@ import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
 import { automateGoogleFlowImageGeneration, detectDownloadedImageMime } from './googleFlowImageAutomation';
 import { automateGoogleFlowVideoGeneration, detectDownloadedMp4 } from './googleFlowVideoAutomation';
-import { automateGrokImagineGeneration } from './grokImagineAutomation';
+import { automateGrokImagineGeneration, buildGrokImaginePrompt } from './grokImagineAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
 const BROWSER_SIGN_IN_PAGE_LOAD_TIMEOUT_MS = 60_000;
@@ -106,6 +106,7 @@ export type BrowserSessionGeneratedVideo = {
 export type GrokImagineImageGenerationInput = {
   readonly prompt: string;
   readonly aspectRatio: string;
+  readonly negativePrompt?: string;
   readonly referenceImage?: ReferenceImageSelection;
   readonly showBrowserWindow?: boolean;
 };
@@ -115,6 +116,7 @@ export type GrokImagineVideoGenerationInput = {
   readonly operation: VideoOperation;
   readonly aspectRatio: string;
   readonly durationSeconds: number;
+  readonly stylePreset?: string;
   readonly referenceImage?: ReferenceImageSelection;
   readonly showBrowserWindow?: boolean;
 };
@@ -490,16 +492,24 @@ export class BrowserSessionService {
       const guard = (event: Electron.Event, url: string): void => { if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault(); };
       automationWindow.webContents.on('will-navigate', guard);
       automationWindow.webContents.on('will-redirect', guard);
-      automationWindow.webContents.setWindowOpenHandler(({ url }) => isBrowserSessionNavigationAllowed(providerId, url) ? { action: 'allow' } : { action: 'deny' });
+      automationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       const download = new Promise<BrowserSessionGeneratedImage | BrowserSessionGeneratedVideo>((resolve, reject) => {
         downloadListener = (event, item, sourceWebContents) => {
           if (sourceWebContents.id !== automationWindow!.webContents.id) return;
           if (!downloadArmed) { event.preventDefault(); reject(new Error(`Grok Imagine attempted an unexpected ${kind} download before generation completed.`)); return; }
           downloadArmed = false;
           activeDownloadItem = item;
-          if (kind === 'video' && item.getTotalBytes() > MAX_BROWSER_VIDEO_BYTES) { event.preventDefault(); reject(new Error('Grok Imagine declared a video larger than the 500 MB browser-session limit.')); return; }
+          const maximumBytes = kind === 'image' ? MAX_BROWSER_IMAGE_BYTES : MAX_BROWSER_VIDEO_BYTES;
+          if (item.getTotalBytes() > maximumBytes) { event.preventDefault(); reject(new Error(`Grok Imagine declared a ${kind} larger than the browser-session limit.`)); return; }
           item.setSavePath(temporaryPath);
+          let exceededLimit = false;
+          item.on('updated', () => {
+            if (item.getReceivedBytes() <= maximumBytes) return;
+            exceededLimit = true;
+            item.cancel();
+          });
           item.once('done', (_event, state) => void (async () => {
+            if (exceededLimit) throw new Error(`Grok Imagine ${kind} exceeded the browser-session download limit.`);
             if (state !== 'completed') throw new Error(`Grok Imagine ${kind} download ${state}.`);
             const bytes = await readFile(temporaryPath);
             if (kind === 'image') {
@@ -520,10 +530,13 @@ export class BrowserSessionService {
         withTimeout(loadAllowedProviderPage(automationWindow.webContents, providerId, 'https://grok.com/imagine'), GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS, 'Grok Imagine did not finish loading within 60 seconds.'),
         windowClosed
       ]);
+      const automationPrompt = kind === 'image'
+        ? buildGrokImaginePrompt(input.prompt, { negativePrompt: (input as GrokImagineImageGenerationInput).negativePrompt })
+        : buildGrokImaginePrompt(input.prompt, { stylePreset: (input as GrokImagineVideoGenerationInput).stylePreset });
       const operation = kind === 'image' ? 'image' : (input as GrokImagineVideoGenerationInput).operation;
       const generatedUrl = await Promise.race([
         automateGrokImagineGeneration(automationWindow.webContents, {
-          prompt: input.prompt,
+          prompt: automationPrompt,
           operation: operation as 'image' | 'text_to_video' | 'image_to_video',
           aspectRatio: input.aspectRatio,
           ...('durationSeconds' in input ? { durationSeconds: input.durationSeconds } : {}),

@@ -22,6 +22,8 @@ describe('browser session security wiring', () => {
     expect(service).toContain('sandbox: true');
     expect(service).toContain('nodeIntegration: false');
     expect(service).toContain('devTools: false');
+    expect(service).toContain("automationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))");
+    expect(service).toContain('item.getReceivedBytes() <= maximumBytes');
     expect(service).toContain("clearStorageData({ storages: ['cookies'] })");
     expect(service).toContain("providerId === 'grok'");
     expect(service).toContain("'request.failed'");
@@ -79,7 +81,7 @@ describe('browser session security wiring', () => {
     expect(automation).toContain("'Nano Banana 2'");
     expect(service).toContain('webContents.downloadURL(generatedImageUrl)');
     expect(studio).toContain("mode: generationMode");
-    expect(studio).toContain('Opening the signed-in Google Flow window');
+    expect(studio).toContain('Opening the signed-in ${browserLabel} window');
     expect(studio).toContain('showBrowserWindow: flowWindowVisible');
     expect(studio).toContain('flowProjectName');
     expect(mobile).toContain('Signed-in Google Flow automation is desktop-only');
