@@ -14,7 +14,7 @@
  */
 
 /** The day the rates below were recorded. Surfaced in every estimate. */
-export const PRICING_AS_OF = '2026-07-31';
+export const PRICING_AS_OF = '2026-09-07';
 
 export type GenerationRate =
   | { readonly kind: 'per-second'; readonly usd: number }
@@ -37,6 +37,7 @@ const VIDEO_RATES: Readonly<Record<string, GenerationRate>> = {
   'veo-3.0-generate-001': { kind: 'per-second', usd: 0.4 },
   'veo-3.0-fast-generate-001': { kind: 'per-second', usd: 0.15 },
   'veo-2.0-generate-001': { kind: 'per-second', usd: 0.35 },
+  'gemini-omni-1.1-flash': { kind: 'per-second', usd: 0.1 },
   'sora-2': { kind: 'per-second', usd: 0.1 },
   'sora-2-pro': { kind: 'per-second', usd: 0.3 },
   // Runway bills in credits at $0.01 each, so these are the published
@@ -59,9 +60,13 @@ const VIDEO_RATES: Readonly<Record<string, GenerationRate>> = {
 const IMAGE_RATES: Readonly<Record<string, GenerationRate>> = {
   'gpt-image-1': { kind: 'per-image', usd: 0.04 },
   'dall-e-3': { kind: 'per-image', usd: 0.04 },
-  'imagen-4.0-generate-001': { kind: 'per-image', usd: 0.04 },
-  'imagen-4.0-ultra-generate-001': { kind: 'per-image', usd: 0.06 },
-  'imagen-3.0-generate-002': { kind: 'per-image', usd: 0.03 }
+  // The adapter requests 1K output, so these are the published Standard 1K
+  // output rates. Prompt/input-token charges are small but account-dependent
+  // and remain covered by the estimate caveat.
+  'gemini-3.1-flash-image': { kind: 'per-image', usd: 0.067 },
+  'gemini-3.1-flash-lite-image': { kind: 'per-image', usd: 0.0336 },
+  'gemini-3-pro-image': { kind: 'per-image', usd: 0.134 },
+  'gemini-2.5-flash-image': { kind: 'per-image', usd: 0.039 }
 };
 
 /**

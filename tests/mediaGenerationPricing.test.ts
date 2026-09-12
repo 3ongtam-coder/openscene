@@ -57,7 +57,8 @@ describe('video cost estimates', () => {
 
 describe('image and speech cost estimates', () => {
   it('prices images per image', () => {
-    expect(estimateImageCost({ modelId: 'imagen-4.0-ultra-generate-001', imageCount: 3 }).amountUsd).toBe(0.18);
+    expect(estimateImageCost({ modelId: 'gemini-3-pro-image', imageCount: 3 }).amountUsd).toBe(0.4);
+    expect(estimateImageCost({ modelId: 'gemini-3.1-flash-image', imageCount: 1 }).amountUsd).toBe(0.07);
     expect(estimateImageCost({ modelId: 'gpt-image-1', imageCount: 1 }).basis).toBe('1 × $0.04/image');
   });
 

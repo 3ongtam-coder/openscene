@@ -4,7 +4,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View 
 import { estimateImageCost } from '@openvideo/shared/mediaGenerationPricing';
 import {
   requestBytePlusImage,
-  requestImagenImage,
+  requestNanoBananaImage,
   requestOpenAiImage,
   type GeneratedImageData
 } from '@openvideo/shared/imageGeneration';
@@ -27,7 +27,7 @@ const RATIOS: readonly ImageAspectRatio[] = ['1:1', '16:9', '9:16', '4:3', '3:4'
 /** Which adapter and credential slot each provider id resolves to. */
 const PROVIDER_BINDINGS: Readonly<Record<string, { slot: ProviderSlot; request: (input: never) => Promise<GeneratedImageData> }>> = {
   openai: { slot: 'openaiApiKey', request: requestOpenAiImage as never },
-  google_gemini: { slot: 'geminiApiKey', request: requestImagenImage as never },
+  google_gemini: { slot: 'geminiApiKey', request: requestNanoBananaImage as never },
   byteplus: { slot: 'bytePlusApiKey', request: requestBytePlusImage as never }
 };
 

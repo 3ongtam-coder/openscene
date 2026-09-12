@@ -53,7 +53,7 @@ export async function generateShot(input: GenerateShotInput): Promise<GenerateSh
   const model = getDomainModel('video-generation', input.modelId);
   if (model === undefined) return { ok: false, message: `${input.modelId} is not in the model catalog.` };
 
-  const adapter = videoAdapterFor(model.providerId);
+  const adapter = videoAdapterFor(model.providerId, model.id);
   const binding = getVideoProviderBinding(model.id);
   if (adapter === undefined || binding === undefined || binding.credentialKey === undefined) {
     return { ok: false, message: `${model.providerLabel} has no adapter on this device yet.` };

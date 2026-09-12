@@ -194,7 +194,7 @@ The provider and model registry is generated from a snapshot of the [models.dev]
 - **Local**: [Ollama](https://ollama.com) runs models on your machine with no key and no account.
 - **Cloud chat**: connect a provider in *Settings → Providers* with an API key. Only connected providers' models appear in the pickers.
 - **OpenAI**: two login methods on one provider — an API key, or a ChatGPT sign-in (PKCE OAuth) for the model set that backend serves. Tokens stay in main-process safe storage; the renderer only learns whether you are connected.
-- **Generation**: 18 runnable video models across Google Veo, OpenAI Sora, Runway, Luma and a user-managed ComfyUI Wan Animate worker — Runway alone fronts Seedance, Veo 3.1, HappyHorse and Gemini Omni Flash on one key. Eight image models and seven voices. Providers without a real adapter stay listed but honestly unavailable rather than pretending to work, and every model says which it is.
+- **Generation**: runnable video models across Google Gemini Omni/Veo, OpenAI Sora, Runway, Luma and a user-managed ComfyUI Wan Animate worker — Runway also fronts Seedance, Veo 3.1, HappyHorse and a separate Gemini Omni route on one key. Google image generation uses the current Nano Banana family through Gemini Interactions. Providers without a real adapter stay listed but honestly unavailable rather than pretending to work, and every model says which it is.
 
 A provider API key is entered in Settings and sent once through the typed bridge to Electron `safeStorage`; stored provider credentials are never returned to the renderer.
 

@@ -6,6 +6,7 @@
  */
 
 import {
+  requestGeminiOmniVideo,
   requestLumaVideo,
   requestRunwayVideo,
   requestSoraVideo,
@@ -294,6 +295,10 @@ async function download(ready: VideoDownload, providerLabel: string, fetchImpl: 
 
 export async function generateVeoVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
   return download(await requestVeoVideo(input), 'Google Veo', input.fetchImpl ?? fetch);
+}
+
+export async function generateGeminiOmniVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {
+  return download(await requestGeminiOmniVideo(input), 'Google Gemini Omni', input.fetchImpl ?? fetch);
 }
 
 export async function generateSoraVideo(input: VideoSynthesisInput): Promise<GeneratedVideo> {

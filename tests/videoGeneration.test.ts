@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  requestGeminiOmniVideo,
   requestLumaVideo,
   requestRunwayVideo,
   requestSoraVideo,
@@ -81,6 +82,93 @@ describe('shared video generation', () => {
       fetchImpl: fetchMock as unknown as typeof fetch
     })).rejects.toThrow(/accepts 16:9/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('creates Gemini Omni through Interactions, polls its File and returns an authenticated download', async () => {
+    const seenUrls: string[] = [];
+    let requestBody: any;
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      seenUrls.push(url);
+      expect(url).not.toContain('gemini-key');
+      expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('gemini-key');
+      if (url.endsWith('/interactions')) {
+        requestBody = JSON.parse(init.body as string);
+        return new Response(JSON.stringify({
+          id: 'interaction-video-1',
+          steps: [{
+            type: 'model_output',
+            content: [{
+              type: 'video', mime_type: 'video/mp4',
+              uri: 'https://generativelanguage.googleapis.com/v1beta/files/file-abc:download?alt=media'
+            }]
+          }]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ state: 'ACTIVE' }), { status: 200 });
+    });
+
+    const ready = await requestGeminiOmniVideo({
+      apiKey: 'gemini-key', modelId: 'gemini-omni-1.1-flash', prompt: 'a paper boat',
+      aspectRatio: '9:16', durationSeconds: 7, pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(requestBody).toEqual({
+      model: 'gemini-omni-1.1-flash',
+      input: [{ type: 'text', text: 'a paper boat' }],
+      response_format: {
+        type: 'video', delivery: 'uri', aspect_ratio: '9:16', duration: '7s', resolution: '720p'
+      },
+      generation_config: { video_config: { task: 'text_to_video' } },
+      background: false, store: false, stream: false
+    });
+    expect(seenUrls[1]).toBe('https://generativelanguage.googleapis.com/v1beta/files/file-abc');
+    expect(ready).toEqual({
+      url: 'https://generativelanguage.googleapis.com/v1beta/files/file-abc:download?alt=media',
+      headers: { 'x-goog-api-key': 'gemini-key' },
+      providerJobId: 'interaction-video-1',
+      mimeType: 'video/mp4'
+    });
+  });
+
+  it('binds first/last frames and reference images to their Gemini Omni roles', async () => {
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/interactions')) {
+        bodies.push(JSON.parse(init.body as string));
+        return new Response(JSON.stringify({
+          output_video: { uri: 'files/omni-file', mime_type: 'video/mp4' }
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ state: 'ACTIVE' }), { status: 200 });
+    });
+    const run = (extra: Record<string, unknown>) => requestGeminiOmniVideo({
+      apiKey: 'k', modelId: 'gemini-omni-1.1-flash', prompt: 'keep identity',
+      aspectRatio: '16:9', durationSeconds: 5, pollIntervalMs: 0,
+      fetchImpl: fetchMock as unknown as typeof fetch, ...extra
+    });
+
+    await run({
+      operation: 'start_end',
+      referenceImage: { mimeType: 'image/png', base64: 'FIRST' },
+      lastFrame: { mimeType: 'image/jpeg', base64: 'LAST' }
+    });
+    await run({
+      operation: 'reference_to_video',
+      referenceImages: [
+        { mimeType: 'image/png', base64: 'ONE' },
+        { mimeType: 'image/png', base64: 'TWO' }
+      ]
+    });
+
+    expect(bodies[0].input).toEqual([
+      { type: 'image', data: 'FIRST', mime_type: 'image/png' },
+      { type: 'image', data: 'LAST', mime_type: 'image/jpeg' },
+      { type: 'text', text: '<FIRST_FRAME> <LAST_FRAME> keep identity' }
+    ]);
+    expect(bodies[0].generation_config.video_config.task).toBe('image_to_video');
+    expect(bodies[1].input[2]).toEqual({ type: 'text', text: '<IMAGE_REF_0> <IMAGE_REF_1> keep identity' });
+    expect(bodies[1].generation_config.video_config.task).toBe('reference_to_video');
   });
 
   it('sends Veo Start-End frames with the documented inlineData payload', async () => {
@@ -267,6 +355,7 @@ describe('shared video generation', () => {
   it('resolves an adapter only for providers that actually have one', () => {
     expect(videoAdapterFor('openai')).toBe(requestSoraVideo);
     expect(videoAdapterFor('google_gemini')).toBe(requestVeoVideo);
+    expect(videoAdapterFor('google_gemini', 'gemini-omni-1.1-flash')).toBe(requestGeminiOmniVideo);
     expect(videoAdapterFor('runway')).toBe(requestRunwayVideo);
     expect(videoAdapterFor('luma')).toBe(requestLumaVideo);
     // Listed in the catalog but unported: callers must get undefined and say so

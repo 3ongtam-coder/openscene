@@ -1,10 +1,12 @@
 import type { MotionControlMode } from './comfyUiMotion';
 
-export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'comfyui_wan';
+export type VideoGenerationProviderId = 'gemini_veo' | 'gemini_omni' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'comfyui_wan';
 export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts' | 'vieneu_local';
 export type ImageGenerationProviderId =
   | 'openai_images'
+  /** Kept so image jobs saved by older builds still deserialize. */
   | 'google_imagen'
+  | 'google_nano_banana'
   | 'byteplus_seedream'
   | 'stability_image'
   | 'flux_image'
@@ -26,7 +28,7 @@ export interface ProviderApiConfig {
 /**
  * Image sizes are expressed as an aspect ratio rather than pixels, because the
  * providers disagree on what they accept: OpenAI takes a WxH string from a
- * fixed set, Imagen takes a ratio, and BytePlus takes a "2K"-style bucket.
+ * fixed set, Nano Banana takes a ratio, and BytePlus takes a "2K"-style bucket.
  * Each adapter maps the ratio onto its own vocabulary.
  */
 export type ImageAspectRatio = '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
