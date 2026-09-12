@@ -31,6 +31,9 @@ type AutomationState = {
   readonly renameProject?: Rectangle;
   readonly projectTitleInput?: Rectangle;
   readonly dismiss?: Rectangle;
+  readonly agentSettingsOpen?: boolean;
+  readonly agentSettingsClose?: Rectangle;
+  readonly agentToggle?: RectangleWithText;
   readonly configButton?: RectangleWithText;
   readonly modelDropdown?: RectangleWithText;
   readonly tabs: readonly RectangleWithText[];
@@ -109,7 +112,8 @@ export function buildGoogleFlowStateProbeScript(): string {
 
     const projectLink = visible('a[href*="/fx/tools/flow/project/"], a[href*="/project/"]')
       .find(({ rectangle }) => rectangle.width > 50 && rectangle.height > 50);
-    const normalized = (value) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const normalized = (value) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[đĐ]/g, 'd').toLowerCase();
     const interactive = visible('button, [role="button"], a, [tabindex="0"]');
     const projectCandidates = [];
     const seenProjectElements = new Set();
@@ -148,6 +152,38 @@ export function buildGoogleFlowStateProbeScript(): string {
     const buttons = visible('button');
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
+
+    // Flow may open its Agent composer by default. Its Settings button and
+    // media defaults resemble the classic generation configuration, but they
+    // cannot configure a single queued request. Detect this mode explicitly
+    // so the driver can close Agent settings and turn Agent off first.
+    const pageText = normalized(document.body?.innerText || '');
+    const agentSettingsOpen = /agent settings|cai dat tac nhan/.test(pageText);
+    const agentToggleEntry = visible('[role="checkbox"], input[type="checkbox"], button')
+      .find(({ element }) => {
+        const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+        return /(^|\\s)(agent|tac nhan)(\\s|$)/.test(text)
+          && !/agent instructions|chi dan cho tac nhan/.test(text);
+      });
+    const agentToggle = agentToggleEntry
+      ? {
+          rectangle: agentToggleEntry.rectangle,
+          text: label(agentToggleEntry.element),
+          selected: agentToggleEntry.element.getAttribute('aria-checked') === 'true'
+            || agentToggleEntry.element.getAttribute('aria-pressed') === 'true'
+            || (agentToggleEntry.element instanceof HTMLInputElement && agentToggleEntry.element.checked)
+        }
+      : undefined;
+    const agentSettingsCloseEntry = agentSettingsOpen
+      ? interactive
+          .filter(({ element, rectangle }) => {
+            const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+            return rectangle.y < Math.min(220, viewH * 0.35)
+              && rectangle.x > window.innerWidth * 0.55
+              && /^(close|dong)$|(^|\\s)(close|dong)(\\s|$)/.test(text);
+          })
+          .sort((left, right) => right.rectangle.x - left.rectangle.x)[0]
+      : undefined;
 
     const projectInputs = visible('input, [contenteditable]:not([contenteditable="false"])');
     const topInputs = projectInputs
@@ -190,7 +226,9 @@ export function buildGoogleFlowStateProbeScript(): string {
     const configCandidates = interactive
       .filter(({ element, rectangle }) => {
         const text = label(element);
-        return rectangle.y > viewH * 0.55 && rectangle.width > 100
+        return agentToggle?.selected !== true
+          && !agentSettingsOpen
+          && rectangle.y > viewH * 0.55 && rectangle.width > 100
           && /crop_|image|video|banana|imagen|veo|(?:^|\\s)x[1-4](?:\\s|$)|\\b\\d{3,4}p\\b|\\b\\d{1,3}s\\b/i.test(text);
       });
     const configEntry = configCandidates.find(({ element }) => /crop_|(?:^|\\s)x[1-4](?:\\s|$)|landscape|portrait/i.test(label(element)))
@@ -302,6 +340,9 @@ export function buildGoogleFlowStateProbeScript(): string {
       ...(renameProjectEntry ? { renameProject: renameProjectEntry.rectangle } : {}),
       ...(titleInput ? { projectTitleInput: titleInput.rectangle } : {}),
       ...(dismissEntry ? { dismiss: dismissEntry.rectangle } : {}),
+      ...(agentSettingsOpen ? { agentSettingsOpen: true } : {}),
+      ...(agentSettingsCloseEntry ? { agentSettingsClose: agentSettingsCloseEntry.rectangle } : {}),
+      ...(agentToggle ? { agentToggle } : {}),
       ...(configButton ? { configButton } : {}),
       ...(modelDropdown ? { modelDropdown } : {}),
       tabs,
@@ -319,7 +360,7 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
 }
 
 function normalizedLabel(value: string): string {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase();
 }
 
 function actionRequiredError(kind: NonNullable<AutomationState['actionRequired']>): Error {
@@ -380,6 +421,19 @@ async function waitForProjectEditor(
       continue;
     }
     throwForAction(state);
+    if (state.agentSettingsOpen === true) {
+      if (state.agentSettingsClose !== undefined) clickAt(webContents, state.agentSettingsClose);
+      else pressKey(webContents, 'ESCAPE');
+      onProject({ ...readinessDetails(state), agentUiDetected: true, agentAction: 'close_settings' });
+      await delay(400);
+      continue;
+    }
+    if (state.agentToggle?.selected === true) {
+      clickAt(webContents, state.agentToggle.rectangle);
+      onProject({ ...readinessDetails(state), agentUiDetected: true, agentAction: 'disable_agent' });
+      await delay(500);
+      continue;
+    }
     if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
     if (!enteredProject && !rememberedProjectAttempted && projectName !== undefined) {
       rememberedProjectAttempted = true;
@@ -539,18 +593,21 @@ export function flowOrientationForAspectRatio(aspectRatio: string): 'Landscape' 
   return Number.isFinite(width) && Number.isFinite(height) && height! > width! ? 'Portrait' : 'Landscape';
 }
 
-function findChoice(state: AutomationState, expected: string): RectangleWithText | undefined {
-  const target = normalizedLabel(expected);
+function findChoice(state: AutomationState, expected: string | readonly string[]): RectangleWithText | undefined {
+  const targets = (typeof expected === 'string' ? [expected] : expected).map(normalizedLabel);
   const choices = [...state.tabs, ...state.menuItems];
-  return choices.find((choice) => normalizedLabel(choice.text) === target)
-    ?? choices.find((choice) => normalizedLabel(choice.text).includes(target));
+  return targets.map((target) => choices.find((choice) => normalizedLabel(choice.text) === target))
+    .find((choice) => choice !== undefined)
+    ?? targets.map((target) => choices.find((choice) => normalizedLabel(choice.text).includes(target)))
+      .find((choice) => choice !== undefined);
 }
 
 async function selectConfigurationChoice(
   webContents: WebContents,
   configButton: Rectangle,
-  expected: string
+  expected: string | readonly string[]
 ): Promise<void> {
+  const expectedLabel = typeof expected === 'string' ? expected : expected[0]!;
   let state = await readState(webContents);
   throwForAction(state);
   let choice = findChoice(state, expected);
@@ -563,7 +620,7 @@ async function selectConfigurationChoice(
     throwForAction(state);
     choice = findChoice(state, expected);
   }
-  if (choice === undefined) throw new Error(`Google Flow configuration did not expose the ${expected} option.`);
+  if (choice === undefined) throw new Error(`Google Flow configuration did not expose the ${expectedLabel} option.`);
   if (!choice.selected) {
     clickAt(webContents, choice.rectangle);
     await delay(500);
@@ -581,10 +638,11 @@ async function configureGeneration(
   clickAt(webContents, configButton);
   await delay(800);
   onConfiguration({ step: 'panel_opened' });
-  await selectConfigurationChoice(webContents, configButton, 'Image');
+  await selectConfigurationChoice(webContents, configButton, ['Image', 'Hình ảnh', 'Hinh anh']);
   onConfiguration({ step: 'media_type', selected: 'Image' });
-  await selectConfigurationChoice(webContents, configButton, flowOrientationForAspectRatio(aspectRatio));
-  onConfiguration({ step: 'orientation', selected: flowOrientationForAspectRatio(aspectRatio) });
+  const orientation = flowOrientationForAspectRatio(aspectRatio);
+  await selectConfigurationChoice(webContents, configButton, [aspectRatio, orientation]);
+  onConfiguration({ step: 'aspect_ratio', selected: aspectRatio, fallback: orientation });
   await selectConfigurationChoice(webContents, configButton, 'x1');
   onConfiguration({ step: 'count', selected: 'x1' });
 

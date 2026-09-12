@@ -28,6 +28,9 @@ type AutomationState = {
   readonly renameProject?: Rectangle;
   readonly projectTitleInput?: Rectangle;
   readonly projectTitle?: RectangleWithText;
+  readonly agentSettingsOpen?: boolean;
+  readonly agentSettingsClose?: Rectangle;
+  readonly agentToggle?: RectangleWithText;
   readonly configButton?: RectangleWithText;
   readonly modelDropdown?: RectangleWithText;
   readonly tabs: readonly RectangleWithText[];
@@ -70,7 +73,8 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 function normalized(value: string): string {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function clickAt(webContents: WebContents, rectangle: Rectangle): void {
@@ -114,6 +118,17 @@ async function waitForEditor(webContents: WebContents, deadline: number, project
   while (Date.now() < deadline) {
     const state = await readState(webContents);
     throwForAction(state);
+    if (state.agentSettingsOpen === true) {
+      if (state.agentSettingsClose !== undefined) clickAt(webContents, state.agentSettingsClose);
+      else pressKey(webContents, 'ESCAPE');
+      await delay(400);
+      continue;
+    }
+    if (state.agentToggle?.selected === true) {
+      clickAt(webContents, state.agentToggle.rectangle);
+      await delay(500);
+      continue;
+    }
     if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
     if (!enteredProject) {
       const target = projectName === undefined ? undefined : normalized(projectName);

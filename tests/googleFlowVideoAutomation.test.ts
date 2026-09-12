@@ -57,6 +57,7 @@ describe('Google Flow browser video automation', () => {
     vi.useFakeTimers();
     const input = { x: 10, y: 700, width: 300, height: 50 };
     const config = { x: 20, y: 800, width: 300, height: 40 };
+    const agentToggle = { x: 860, y: 805, width: 90, height: 32 };
     const submit = { x: 1100, y: 800, width: 40, height: 40 };
     const oldVideo = { rectangle: { x: 10, y: 10, width: 400, height: 225 }, src: 'blob:https://flow.google.com/old' };
     const newVideo = { rectangle: { x: 420, y: 10, width: 400, height: 225 }, src: 'blob:https://flow.google.com/new' };
@@ -72,6 +73,10 @@ describe('Google Flow browser video automation', () => {
       tabs: selectedTabs, menuItems: [], videos: [oldVideo]
     };
     const executeJavaScript = vi.fn()
+      .mockResolvedValueOnce({
+        ...state,
+        agentToggle: { rectangle: agentToggle, text: 'Tác nhân', selected: true }
+      })
       .mockResolvedValueOnce(state)
       .mockResolvedValueOnce(state)
       .mockResolvedValueOnce(state)
@@ -93,6 +98,9 @@ describe('Google Flow browser video automation', () => {
     await vi.runAllTimersAsync();
     await expect(operation).resolves.toBe(newVideo.src);
     expect(insertText).toHaveBeenCalledWith('Create a dawn aerial shot');
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 905, y: 821, button: 'left', clickCount: 1
+    });
     expect(sendInputEvent).toHaveBeenCalledWith({
       type: 'mouseDown', x: 1120, y: 820, button: 'left', clickCount: 1
     });
