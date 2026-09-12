@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyAiProjectDocument, parseAiProjectDocument } from '../src/shared/aiProjectDomain';
 import { WRITER_STAGES, canOpenWriterStage, parseWriterPipelineState, type WriterStageArtifact } from '../src/shared/writerStages';
-import { approvedWriterShots, applyWriterPipeline, artifactFromWriterDraft, buildWriterStageRequest, editWriterPromptShot, parseWriterPromptText, pipelineBaseRequest, pipelineMatchesBrief, saveWriterArtifact, startWriterPipeline } from '../src/shared/writerPipeline';
+import { approvedWriterShots, applyWriterPipeline, applyWriterStyleLock, artifactFromWriterDraft, buildWriterStageRequest, editWriterPromptShot, parseWriterPromptText, pipelineBaseRequest, pipelineMatchesBrief, saveWriterArtifact, startWriterPipeline } from '../src/shared/writerPipeline';
 import { applyWriterDraft, compileWriterPrompt, parseWriterRequest, validateWriterResponse, writerResponseSchema, writerSystemPrompt, type WriterDraft, type WriterRequest } from '../src/shared/writerWorkflow';
 import { requestGeminiWriter } from '../src/shared/writerGeneration';
 import { chainContinuationFrame, nextApprovedWriterShotId } from '../src/shared/generationReview';
@@ -25,6 +25,18 @@ function approvedWriting() {
 function approvedAll() { return saveWriterArtifact(approvedWriting(), artifactFromWriterDraft('prompts', production, 'test-model'), true); }
 
 describe('manual Writer pipeline', () => {
+  it('reapplies the approved Style Bible exactly once at the generation boundary', () => {
+    const first = applyWriterStyleLock('Grog raises the stone.\nAvoid: phones', production.styleBible);
+    expect(first).toContain('[OPENSCENE_STYLE_LOCK]');
+    expect(first).toContain('Palette: ochre');
+    expect(first).toContain('Forbidden changes: Red hide');
+    const revised = applyWriterStyleLock(`${first}\nMake the action faster.`, { ...production.styleBible, lighting: 'Blue moonlight' });
+    expect(revised.match(/\[OPENSCENE_STYLE_LOCK\]/g)).toHaveLength(1);
+    expect(revised).toContain('Make the action faster.');
+    expect(revised).toContain('Lighting: Blue moonlight');
+    expect(revised).not.toContain('Lighting: Morning sun');
+  });
+
   it('hands off only approved, explicitly imported shots with identity, dialogue and continuity intact', () => {
     const empty = createEmptyAiProjectDocument();
     expect(approvedWriterShots(empty)).toEqual([]);

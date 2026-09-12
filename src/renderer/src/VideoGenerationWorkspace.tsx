@@ -16,7 +16,7 @@ import {
   updateGenerationCandidate,
   type GenerationReviewResult
 } from '../../shared/generationReview';
-import { approvedWriterShots } from '../../shared/writerPipeline';
+import { approvedWriterShots, applyWriterStyleLock } from '../../shared/writerPipeline';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
@@ -229,8 +229,12 @@ export function VideoGenerationWorkspace({
     readonly parentGenerationId?: string;
     readonly referenceAssetIds?: readonly string[];
   }): Promise<void> => {
-    const promptText = overrides?.prompt ?? prompt;
     const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
+    const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
+    const editablePrompt = overrides?.prompt ?? prompt;
+    const promptText = targetWriterShotId !== '' && documentRef.current !== null
+      ? applyWriterStyleLock(editablePrompt, documentRef.current.styleBible)
+      : editablePrompt;
     if (promptText.trim().length === 0 && candidateOperation !== 'motion_control') {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
       return;
@@ -248,7 +252,6 @@ export function VideoGenerationWorkspace({
         : {})
     };
     const targetModelId = overrides?.modelId ?? videoModel.id;
-    const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
       setStatusMsg({ text: `${videoModel.label} does not implement ${inputs.operation} in this build.`, tone: 'warning' });
       return;
@@ -304,7 +307,7 @@ export function VideoGenerationWorkspace({
             capability: inputs.operation,
             prompt: promptText,
             createdAt: job.createdAt,
-            referenceAssetIds: inputs.referenceImage === undefined
+            referenceAssetIds: !['image_to_video', 'start_end'].includes(inputs.operation) || inputs.referenceImage === undefined
               ? []
               : overrides?.referenceAssetIds ?? loadedReferenceAssetIds,
             ...(overrides?.parentGenerationId === undefined ? {} : { parentGenerationId: overrides.parentGenerationId })

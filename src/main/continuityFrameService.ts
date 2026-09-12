@@ -17,6 +17,7 @@ import type { ProjectStore } from './projectStore';
 import { REFERENCE_IMAGE_MAX_BYTES } from './referenceImagePicker';
 
 const FRAME_EXTRACTION_TIMEOUT_MS = 60_000;
+const FRAME_PROCESS_SETTLE_TIMEOUT_MS = 2_500;
 const FRAME_MIME_TYPE = 'image/jpeg';
 
 type RunBoundaryFrameInput = {
@@ -36,16 +37,28 @@ type ContinuityFrameServiceDependencies = {
 
 async function waitForExtraction(execution: FfmpegExecution): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
   try {
     await Promise.race([
       execution.completion,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          execution.cancel();
+          timedOut = true;
           reject(new Error('Continuity-frame extraction timed out.'));
         }, FRAME_EXTRACTION_TIMEOUT_MS);
       })
     ]);
+  } catch (error) {
+    if (timedOut) {
+      execution.cancel();
+      // Windows can keep the staged files locked until FFmpeg has actually
+      // exited. Give cancellation time to settle before cleanup starts.
+      await Promise.race([
+        execution.completion.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, FRAME_PROCESS_SETTLE_TIMEOUT_MS))
+      ]);
+    }
+    throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -84,6 +97,10 @@ function continuationFrameName(asset: MediaAsset): string {
 
 function isJpeg(bytes: Buffer): boolean {
   return bytes.byteLength >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+}
+
+function boundaryFrameTimes(durationMs: number): readonly number[] {
+  return [...new Set([100, 500, 1_500].map((endGuardMs) => Math.max(0, durationMs - endGuardMs)))];
 }
 
 function referenceFromBytes(asset: MediaAsset, bytes: Buffer): ApiResponse<ReferenceImageSelection> {
@@ -139,14 +156,39 @@ export class ContinuityFrameService {
       await source.file.close();
       source = null;
 
-      // A small guard from the nominal end avoids asking FFmpeg for a timestamp
-      // just outside containers whose declared duration is rounded up.
-      const sourceTimeMs = Math.max(0, asset.metadata.durationMs - 100);
-      log('process.started', { sourceBytes: asset.byteLength, sourceTimeMs, runtime: runtime.kind });
-      await this.runExtraction({ executablePath: runtime.executablePath, sourcePath: stagedSourcePath, outputPath, sourceTimeMs });
-      const bytes = await readFile(outputPath);
-      if (!isJpeg(bytes) || bytes.byteLength > REFERENCE_IMAGE_MAX_BYTES) {
-        return fail('FILE_WRITE_FAILED', `FFmpeg did not produce a valid JPEG under ${REFERENCE_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
+      // Containers sometimes round their declared duration upward. Try the
+      // closest frame first, then move slightly earlier only when decoding did
+      // not yield a valid still.
+      let sourceTimeMs = 0;
+      let bytes: Buffer | null = null;
+      let lastExtractionError: unknown = null;
+      const attempts = boundaryFrameTimes(asset.metadata.durationMs);
+      for (const [attemptIndex, candidateTimeMs] of attempts.entries()) {
+        await rm(outputPath, { force: true });
+        log('process.started', {
+          sourceBytes: asset.byteLength,
+          sourceTimeMs: candidateTimeMs,
+          attempt: attemptIndex + 1,
+          attempts: attempts.length,
+          runtime: runtime.kind
+        });
+        try {
+          await this.runExtraction({ executablePath: runtime.executablePath, sourcePath: stagedSourcePath, outputPath, sourceTimeMs: candidateTimeMs });
+          const candidateBytes = await readFile(outputPath);
+          if (isJpeg(candidateBytes) && candidateBytes.byteLength <= REFERENCE_IMAGE_MAX_BYTES) {
+            sourceTimeMs = candidateTimeMs;
+            bytes = candidateBytes;
+            break;
+          }
+          lastExtractionError = new Error('FFmpeg produced an invalid or oversized JPEG.');
+        } catch (error) {
+          if (error instanceof Error && error.message === 'Continuity-frame extraction timed out.') throw error;
+          lastExtractionError = error;
+        }
+        log('process.retrying', { attempt: attemptIndex + 1 });
+      }
+      if (bytes === null) {
+        throw lastExtractionError ?? new Error('FFmpeg did not produce a usable continuity frame.');
       }
 
       const imported = await this.dependencies.assets.import({
@@ -159,9 +201,7 @@ export class ContinuityFrameService {
       const readyAsset = await this.dependencies.assets.updateMetadata({
         projectId: input.projectId,
         assetId: imported.id,
-        durationMs: 0,
-        ...(asset.metadata.width === undefined ? {} : { width: asset.metadata.width }),
-        ...(asset.metadata.height === undefined ? {} : { height: asset.metadata.height })
+        durationMs: 0
       });
       log('request.completed', { assetId: readyAsset.id, bytes: bytes.byteLength, elapsedMs: Date.now() - startedAt });
       return ok({
