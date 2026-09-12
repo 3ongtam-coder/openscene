@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSpeechGenerationJob,
   createVideoGenerationJob,
@@ -79,6 +79,31 @@ describe('AI Job Manager and cloud provider seams', () => {
     expect(videoJob.modelId).toBeDefined();
     expect(speechJob.modelId).toBeDefined();
   });
+
+  it('runs VieNeu locally without an API key and exposes an importable WAV', async () => {
+    const wav = Buffer.alloc(46);
+    wav.write('RIFF', 0, 'ascii'); wav.writeUInt32LE(0xffffffff, 4); wav.write('WAVEfmt ', 8, 'ascii');
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(48_000, 24); wav.writeUInt32LE(96_000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36, 'ascii'); wav.writeUInt32LE(1_000_000_000, 40); wav.writeInt16LE(42, 44);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(wav), { status: 200, headers: { 'Content-Type': 'audio/wav' } })));
+    try {
+      const job = await createSpeechGenerationJob({
+        script: 'Xin chào từ VieNeu.',
+        voiceId: 'voice-north',
+        modelId: 'vieneu-v3-turbo'
+      });
+      expect(job).toMatchObject({ provider: 'vieneu_local', mode: 'local', status: 'queued' });
+
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+      expect(getSpeechGenerationJob(job.id)?.status).toBe('completed');
+      expect(getCompletedAiSource(job.id)).toMatchObject({ kind: 'audio', mimeType: 'audio/wav' });
+      expect(getCompletedAiSource(job.id)?.displayName).toMatch(/\.wav$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 10_000);
 
   it('rejects invalid model controls before a job or provider call is queued', async () => {
     await expect(createVideoGenerationJob({

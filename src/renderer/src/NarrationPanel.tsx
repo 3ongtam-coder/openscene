@@ -3,7 +3,7 @@ import type { AiProjectDocument } from '../../shared/aiProjectDomain';
 import { narrationScriptFromCues, type NarrationPlan, type SubtitleCue } from '../../shared/narrationPlan';
 import { checkNarrationFit } from '../../shared/narrationTiming';
 import { createNarrationPlan, narrationFromApprovedWriter, narrationPlanMatchesWriter, updateNarrationPlan } from '../../shared/subtitleWorkflow';
-import { voiceChoices } from '../../shared/voiceCatalog';
+import { usesRuntimeVoiceCatalog, voiceChoices, type VoiceChoice } from '../../shared/voiceCatalog';
 import type { StatusMessage } from './appTypes';
 import { DomainModelPicker } from './DomainModelPicker';
 import { useAiDomainModel } from './AiDomainModelContext';
@@ -17,9 +17,13 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
 }): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const voiceModel = selectedModel('voice-generation');
-  const choices = voiceChoices(voiceModel.providerId);
+  const staticChoices = voiceChoices(voiceModel.providerId);
   const projectImport = useProjectResultImport();
-  const [voiceId, setVoiceId] = useState(document.narrationPlan?.voiceId ?? choices[0]?.id ?? '');
+  const [choices, setChoices] = useState<readonly VoiceChoice[]>(staticChoices);
+  const [voiceCatalogError, setVoiceCatalogError] = useState<string | null>(null);
+  const [isVoiceCatalogLoading, setIsVoiceCatalogLoading] = useState(false);
+  const [voiceCatalogRefresh, setVoiceCatalogRefresh] = useState(0);
+  const [voiceId, setVoiceId] = useState(document.narrationPlan?.voiceId ?? staticChoices[0]?.id ?? '');
   const [script, setScript] = useState(document.narrationPlan?.script ?? '');
   const [cues, setCues] = useState<readonly SubtitleCue[]>(document.narrationPlan?.cues ?? []);
   const [savedPlan, setSavedPlan] = useState<NarrationPlan | null>(document.narrationPlan ?? null);
@@ -34,9 +38,34 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   const dirty = !isPersisted || savedPlan === null || savedPlan.script !== script.trim() || savedPlan.voiceModelId !== voiceModel.id || savedPlan.voiceId !== voiceId || JSON.stringify(savedPlan.cues) !== JSON.stringify(cues);
   const stale = savedPlan !== null && !narrationPlanMatchesWriter(document, savedPlan);
   useEffect(() => {
+    let active = true;
     const options = voiceChoices(voiceModel.providerId);
-    if (!options.some((voice) => voice.id === voiceId)) setVoiceId(options[0]?.id ?? '');
-  }, [voiceModel.providerId, voiceId]);
+    if (!usesRuntimeVoiceCatalog(voiceModel.providerId)) {
+      setChoices(options);
+      setVoiceCatalogError(null);
+      setIsVoiceCatalogLoading(false);
+      setVoiceId((current) => options.some((voice) => voice.id === current) ? current : options[0]?.id ?? '');
+      return () => { active = false; };
+    }
+    setChoices([]);
+    setVoiceCatalogError(null);
+    setIsVoiceCatalogLoading(true);
+    void window.videoTool.aiListSpeechVoices(voiceModel.id).then((response) => {
+      if (!active) return;
+      setIsVoiceCatalogLoading(false);
+      if (!response.ok) {
+        setVoiceCatalogError(response.error.message);
+        return;
+      }
+      setChoices(response.value);
+      setVoiceId((current) => response.value.some((voice) => voice.id === current) ? current : response.value[0]?.id ?? '');
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setIsVoiceCatalogLoading(false);
+      setVoiceCatalogError(error instanceof Error ? error.message : 'Could not load VieNeu voices.');
+    });
+    return () => { active = false; };
+  }, [voiceModel.id, voiceModel.providerId, voiceCatalogRefresh]);
   useEffect(() => () => {
     if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current);
   }, []);
@@ -64,7 +93,8 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
     return next;
   });
   const generate = async (): Promise<void> => {
-    if (savedPlan?.status !== 'approved' || dirty || stale) { setStatus({ tone: 'warning', text: 'Approve the current narration and subtitle timing before paying for speech synthesis.' }); return; }
+    if (savedPlan?.status !== 'approved' || dirty || stale) { setStatus({ tone: 'warning', text: 'Approve the current narration and subtitle timing before speech synthesis.' }); return; }
+    if (usesRuntimeVoiceCatalog(voiceModel.providerId) && (voiceCatalogError !== null || voiceId.length === 0)) { setStatus({ tone: 'warning', text: 'Connect the local VieNeu server and select a voice before synthesis.' }); return; }
     setIsGenerating(true); setCompletedJobId(null); setStatus({ tone: 'neutral', text: `Sending the approved script and voice choice to ${voiceModel.providerLabel}…` });
     try {
       if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current);
@@ -89,7 +119,9 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   return <section className="studio-surface narration-workflow" aria-labelledby="narration-title">
     <header className="studio-surface__header"><div className="studio-surface__title"><h2 className="studio-surface__title-label" id="narration-title">Narration & Subtitles</h2><span className="studio-surface__title-meta">Review before voice or timeline</span></div><DomainModelPicker domain="voice-generation" ariaLabel="Voice model" /></header>
     <div className="studio-surface__body">
-      <label className="studio-field"><span className="studio-field__label">Voice</span><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>{choices.length ? choices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>) : <option value="">Provider default voice</option>}</select></label>
+      <label className="studio-field"><span className="studio-field__label">Voice</span><select value={voiceId} disabled={isVoiceCatalogLoading || voiceCatalogError !== null} onChange={(e) => setVoiceId(e.target.value)}>{choices.length ? choices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>) : <option value="">{isVoiceCatalogLoading ? 'Loading local voices…' : usesRuntimeVoiceCatalog(voiceModel.providerId) ? 'Local voice server unavailable' : 'Provider default voice'}</option>}</select></label>
+      {voiceCatalogError && <StatusCard tone="warning">{voiceCatalogError} <Button onClick={() => setVoiceCatalogRefresh((value) => value + 1)}>Retry local voices</Button></StatusCard>}
+      {usesRuntimeVoiceCatalog(voiceModel.providerId) && !voiceCatalogError && <p className="studio-reference__empty">VieNeu-TTS runs locally and uses no API key or generation credit. Preset voices come from the server currently running on this computer.</p>}
       {writerSource && <Button onClick={() => build(true)}>Load dialogue from approved Writer ({writerSource.cues.length} cues)</Button>}
       <label className="studio-field"><span className="studio-field__label">Narration script</span><textarea rows={7} value={script} onChange={(e) => setScript(e.target.value)} /></label>
       <Button disabled={!script.trim()} onClick={() => build(false)}>Auto-split subtitles from this script</Button>
@@ -104,6 +136,6 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
       {status && <StatusCard tone={status.tone}>{status.text}</StatusCard>}
       {completedJobId && <Button variant="primary" disabled={projectImport.activeProject === null || projectImport.isImporting} onClick={() => void projectImport.importAiResult(completedJobId).then(setStatus)}>Import voice to project</Button>}
     </div>
-    <div className="studio-composer"><div className="studio-composer__toolbar"><span className="studio-composer__hint">{voiceModel.providerLabel} · approved script only</span><Button variant="primary" disabled={isGenerating || savedPlan?.status !== 'approved' || dirty || stale} onClick={() => void generate()}>{isGenerating ? 'Synthesizing…' : 'Generate approved voice'}</Button></div></div>
+    <div className="studio-composer"><div className="studio-composer__toolbar"><span className="studio-composer__hint">{voiceModel.providerLabel} · {voiceModel.executionPath === 'local' ? 'local, no API key' : 'approved script only'}</span><Button variant="primary" disabled={isGenerating || savedPlan?.status !== 'approved' || dirty || stale || isVoiceCatalogLoading || (usesRuntimeVoiceCatalog(voiceModel.providerId) && (voiceCatalogError !== null || voiceId.length === 0))} onClick={() => void generate()}>{isGenerating ? 'Synthesizing…' : 'Generate approved voice'}</Button></div></div>
   </section>;
 }

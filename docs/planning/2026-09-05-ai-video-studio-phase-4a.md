@@ -15,7 +15,8 @@
 - persist a versioned narration plan with model, voice, source fingerprint, approval status, and cues;
 - require a current approved plan before speech synthesis or timeline mutation;
 - replace only prior automatic captions while preserving manually authored titles;
-- expose provider-aware OpenAI and ElevenLabs voice choices;
+- expose provider-aware OpenAI and ElevenLabs voice choices plus the live preset catalog from VieNeu-TTS v3 Turbo;
+- synthesize VieNeu speech through a user-managed loopback server, repair its streaming WAV header, and never reserve cloud spend;
 - use one shared narration/subtitle contract on desktop and mobile;
 - log the desktop speech lifecycle to the terminal without logging API keys or narration text.
 
@@ -35,7 +36,11 @@ Changing Writer dialogue makes a linked narration plan stale. Editing the narrat
 
 ## Platform boundary
 
-Desktop can call the existing OpenAI or ElevenLabs speech adapters and import the resulting audio. Mobile can select the same model and voice, edit and approve the same plan, and apply captions with the shared core. Mobile speech synthesis remains visibly disabled because its binary result transport is not implemented; it cannot charge a provider from this screen.
+Desktop can call OpenAI or ElevenLabs and can also call a user-managed VieNeu-TTS v3 Turbo server on loopback. VieNeu requires no API key, its voices are discovered from the running server, and its output is stored as a corrected WAV. Mobile can edit and approve the same narration plan and apply captions with the shared core, but VieNeu selection and all speech synthesis remain visibly desktop-only because mobile has neither the local server nor binary result transport.
+
+## VieNeu local runtime
+
+OpenScene does not install Python packages or download model weights. In the official VieNeu-TTS checkout, run `uv sync`, then `uv run python -m apps.web_stream`. The default endpoint is `http://127.0.0.1:8001`; a different loopback port can be set with `OPENSCENE_VIENEU_BASE_URL`. Arbitrary remote hosts, credentials in URLs, paths, queries, and fragments are rejected.
 
 ## Timing accuracy
 
@@ -51,10 +56,10 @@ Writer-derived captions use approved shot timing. Manual narration is distribute
 
 ## Verification result
 
-- focused narration, project-domain, timeline-title, TTS adapter/job, spend-wiring, and desktop-domain tests: 48/48 passed;
+- focused narration, project-domain, timeline-title, TTS adapter/job, VieNeu voice discovery/WAV repair, spend-wiring, and desktop-domain tests: 54/54 passed;
 - root TypeScript check and Electron production build passed;
 - mobile TypeScript check passed against the same shared core;
 - `git diff --check` passed apart from the repository's existing LF-to-CRLF notices;
-- full root suite: 1,172 passed and 40 failed. The 40 failures remain in the recorded Windows/upstream baseline families (`fsync`/symlink permissions, FFmpeg/path behavior, and CRLF-sensitive source assertions); no Phase 4A test failed;
+- full root suite: 1,177 passed and 40 failed. The 40 failures remain in the recorded Windows/upstream baseline families (`fsync`/symlink permissions, FFmpeg/path behavior, and CRLF-sensitive source assertions); no Phase 4A or VieNeu test failed;
 - Electron development startup passed after clearing this runner's inherited `ELECTRON_RUN_AS_NODE=1`; Chromium reported its existing disk-cache warning but the app stayed running;
 - interactive desktop and mobile visual QA remains pending because no in-app Browser session or mobile development client was connected.

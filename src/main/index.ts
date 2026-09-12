@@ -29,7 +29,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
 import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from './openVideoMcpServer';
@@ -401,6 +401,17 @@ async function installIpcHandlers(): Promise<void> {
       return ok(job);
     } catch (err) {
       return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to create speech job');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.aiListSpeechVoices, async (_event, modelId: unknown) => {
+    if (typeof modelId !== 'string' || modelId.trim().length === 0) {
+      return fail('INVALID_INPUT', 'A voice model id is required.');
+    }
+    try {
+      return ok(await listSpeechVoices(modelId));
+    } catch (err) {
+      return fail('UNKNOWN_ERROR', err instanceof Error ? err.message : 'Failed to list speech voices.');
     }
   });
 

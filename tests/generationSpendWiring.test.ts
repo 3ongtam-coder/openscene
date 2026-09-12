@@ -28,12 +28,13 @@ describe('the desktop', () => {
     const jobs = await readRepo('src/main/aiJobManager.ts');
     // A job that never reached a provider — a missing key — cost nothing, and
     // charging a ceiling for it would lock someone out over nothing.
-    for (const call of ['invokeCloudVideoProvider', 'invokeCloudImageProvider', 'invokeCloudSpeechProvider']) {
+    for (const call of ['invokeCloudVideoProvider', 'invokeCloudImageProvider', 'invokeSpeechProvider']) {
       const before = jobs.slice(0, jobs.indexOf(`await ${call}(`));
       expect(before.lastIndexOf("await settleSpend(reservationId, 'charged')")).toBeGreaterThan(
         before.lastIndexOf('apiKey is required')
       );
     }
+    expect(jobs).toContain("model.executionPath === 'api'\n    ? await reserveSpend(estimateSpeechCost({ modelId }), request.acceptUnknownCost)");
   });
 
   it('lets the agent read the limit but never set it', async () => {

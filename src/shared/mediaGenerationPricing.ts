@@ -19,6 +19,7 @@ export const PRICING_AS_OF = '2026-07-31';
 export type GenerationRate =
   | { readonly kind: 'per-second'; readonly usd: number }
   | { readonly kind: 'per-image'; readonly usd: number }
+  | { readonly kind: 'free'; readonly reason: string }
   | { readonly kind: 'unknown'; readonly reason: string };
 
 const UNKNOWN_THIRD_PARTY: GenerationRate = {
@@ -64,11 +65,14 @@ const IMAGE_RATES: Readonly<Record<string, GenerationRate>> = {
 };
 
 /**
- * Speech pricing is deliberately empty rather than approximated. ElevenLabs
- * bills against a monthly credit allowance, not per character, so a
- * dollars-per-word figure would be fiction dressed as arithmetic.
+ * Cloud speech pricing is deliberately unknown rather than approximated.
+ * ElevenLabs bills against a monthly credit allowance, not per character, so
+ * a dollars-per-word figure would be fiction dressed as arithmetic. A
+ * user-managed local runtime is explicitly zero provider cost.
  */
-const SPEECH_RATES: Readonly<Record<string, GenerationRate>> = {};
+const SPEECH_RATES: Readonly<Record<string, GenerationRate>> = {
+  'vieneu-v3-turbo': { kind: 'free', reason: 'Runs on the user-managed local VieNeu-TTS runtime.' }
+};
 
 export type GenerationKind = 'video' | 'image' | 'speech';
 
@@ -133,7 +137,19 @@ export function estimateImageCost(input: { readonly modelId: string; readonly im
 }
 
 export function estimateSpeechCost(input: { readonly modelId: string }): CostEstimate {
-  return unpriced('speech', input.modelId, rateFor('speech', input.modelId));
+  const rate = rateFor('speech', input.modelId);
+  if (rate.kind === 'free') {
+    return {
+      kind: 'speech',
+      modelId: input.modelId,
+      priced: true,
+      amountUsd: 0,
+      basis: 'local runtime',
+      asOf: PRICING_AS_OF,
+      caveat: `${rate.reason} OpenScene sends no paid provider request.`
+    };
+  }
+  return unpriced('speech', input.modelId, rate);
 }
 
 function unpriced(kind: GenerationKind, modelId: string, rate: GenerationRate): CostEstimate {

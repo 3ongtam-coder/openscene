@@ -72,6 +72,12 @@ describe('image and speech cost estimates', () => {
     expect(estimate.priced).toBe(false);
     expect(estimate.amountUsd).toBeUndefined();
   });
+
+  it('reports the user-managed VieNeu runtime as zero provider cost', () => {
+    const estimate = estimateSpeechCost({ modelId: 'vieneu-v3-turbo' });
+    expect(estimate).toMatchObject({ priced: true, amountUsd: 0, basis: 'local runtime' });
+    expect(formatCostEstimate(estimate)).toContain('~$0.00');
+  });
 });
 
 describe('whole-plan estimates', () => {

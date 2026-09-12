@@ -16,3 +16,8 @@ const ELEVENLABS: readonly VoiceChoice[] = [
 export function voiceChoices(providerId: string): readonly VoiceChoice[] {
   return providerId === 'openai' ? OPENAI : providerId === 'elevenlabs' ? ELEVENLABS : [];
 }
+
+/** VieNeu voices are intentionally not frozen here; the local runtime owns its current preset catalog. */
+export function usesRuntimeVoiceCatalog(providerId: string): boolean {
+  return providerId === 'vieneu_local';
+}

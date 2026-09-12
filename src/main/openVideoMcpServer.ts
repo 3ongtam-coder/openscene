@@ -307,7 +307,9 @@ export class OpenVideoMcpServer {
       asOf: estimate.asOf,
       summary: formatCostEstimate(estimate),
       message: estimate.priced
-        ? 'Show this to the user and wait for approval before generating.'
+        ? estimate.amountUsd === 0
+          ? 'This model runs locally and creates no provider charge.'
+          : 'Show this to the user and wait for approval before generating.'
         : 'Cost is unknown. Ask the user to confirm they accept an unknown charge before generating.'
     };
   }
@@ -401,8 +403,8 @@ export class OpenVideoMcpServer {
 
   @McpTool({
     description:
-      'Create AI speech job with the selected voice-generation model. Runs against the provider connected ' +
-      'in Settings; none connected fails with an explicit error.',
+      'Create AI speech job with the selected voice-generation model. Cloud models use the provider connected ' +
+      'in Settings; VieNeu v3 Turbo uses the user-managed local server.',
     input: z.object({
       script: z.string().min(1, 'Script is required'),
       voiceId: z.string().default(''),

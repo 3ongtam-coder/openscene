@@ -5,6 +5,7 @@ import type { GenerationSpendView } from '../shared/generationSpend';
 import type { UpdaterState } from '../shared/updater';
 import type { ExportJobActionInput, LocalExportJob, LocalFfmpegRuntimeStatus, StartExportJobInput } from '../shared/exportTypes';
 import type { ImageGenerationJob, ImageGenerationRequest, ReferenceImageSelection, TextToSpeechJob, TextToSpeechRequest, VideoGenerationJob, VideoGenerationRequest } from '../shared/providerSeams';
+import type { VoiceChoice } from '../shared/voiceCatalog';
 import type {
   AbortRecordingInput,
   ApiResponse,
@@ -99,6 +100,7 @@ export interface VideoToolApi {
   aiSelectReferenceImage(): Promise<ApiResponse<ReferenceImageSelection | null>>;
   aiGetVideoJob(jobId: string): Promise<ApiResponse<VideoGenerationJob>>;
   aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;
+  aiListSpeechVoices(modelId: string): Promise<ApiResponse<readonly VoiceChoice[]>>;
   aiGetSpeechJob(jobId: string): Promise<ApiResponse<TextToSpeechJob>>;
   getProviderCredentialStatus(): Promise<ApiResponse<Record<string, boolean>>>;
   setProviderCredential(provider: string, apiKey: string): Promise<ApiResponse<{ readonly updated: boolean }>>;
@@ -218,6 +220,8 @@ const videoTool: VideoToolApi = {
   aiSelectReferenceImage: () => ipcRenderer.invoke(IPC_CHANNELS.aiSelectReferenceImage) as Promise<ApiResponse<ReferenceImageSelection | null>>,
   aiGetVideoJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetVideoJob, jobId) as Promise<ApiResponse<VideoGenerationJob>>,
   aiGenerateSpeech: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateSpeech, request) as Promise<ApiResponse<TextToSpeechJob>>,
+  aiListSpeechVoices: (modelId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.aiListSpeechVoices, modelId) as Promise<ApiResponse<readonly VoiceChoice[]>>,
   aiGetSpeechJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetSpeechJob, jobId) as Promise<ApiResponse<TextToSpeechJob>>,
   getProviderCredentialStatus: () =>
     ipcRenderer.invoke(IPC_CHANNELS.getProviderCredentials) as Promise<ApiResponse<Record<string, boolean>>>,

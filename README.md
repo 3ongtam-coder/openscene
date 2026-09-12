@@ -106,7 +106,9 @@ Projects and past conversations live on the start page. Picking a chat reopens i
 
 ### Voice generation
 
-Write a script, pick a voice model, generate, and import the result straight into the project.
+Write a script, pick a voice model, generate, and import the result straight into the project. OpenAI and ElevenLabs use your connected API key; VieNeu-TTS v3 Turbo can run locally without a key.
+
+For VieNeu, install the [official VieNeu-TTS project](https://github.com/pnnbao97/VieNeu-TTS) separately, run `uv sync`, then start its FastAPI demo with `uv run python -m apps.web_stream`. OpenScene discovers the running server's preset voices at `http://127.0.0.1:8001` by default and repairs the streamed WAV header before importing it. Set `OPENSCENE_VIENEU_BASE_URL` only if your loopback port differs; remote URLs are rejected.
 
 ![The Voice Generation studio with a voice picker and a script composer](docs/assets/screenshot-voice.png)
 

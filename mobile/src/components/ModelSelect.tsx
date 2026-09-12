@@ -62,7 +62,7 @@ export function ModelSelect({
   }, [models, providers]);
 
   const selectedAvailable = selected !== undefined && isDomainModelAvailableOnRuntime(selected, 'mobile');
-  const needsKey = selectedAvailable && connected[selected.providerId] === false;
+  const needsKey = selectedAvailable && selected?.executionPath === 'api' && connected[selected.providerId] === false;
 
   return (
     <View style={styles.root}>
@@ -142,8 +142,8 @@ export function ModelSelect({
                   <View key={providerId} style={styles.group}>
                     <View style={styles.groupHead}>
                       <Text style={styles.groupTitle}>{group[0]?.providerLabel ?? providerId}</Text>
-                      <Text style={[styles.groupBadge, connected[providerId] === true ? styles.on : styles.off]}>
-                        {connected[providerId] === true ? 'connected' : 'no key'}
+                      <Text style={[styles.groupBadge, group[0]?.executionPath === 'local' || connected[providerId] === true ? styles.on : styles.off]}>
+                        {group[0]?.executionPath === 'local' ? 'local' : connected[providerId] === true ? 'connected' : 'no key'}
                       </Text>
                     </View>
                     {group.map((model) => {

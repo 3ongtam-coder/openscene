@@ -4,11 +4,34 @@ import {
   generateElevenLabsSpeech,
   generateOpenAiSpeech,
   generateSoraVideo,
-  generateVeoVideo
+  generateVeoVideo,
+  generateVieNeuSpeech,
+  listVieNeuVoices,
+  repairStreamingWavHeader,
+  resolveVieNeuBaseUrl
 } from '../src/main/mediaGenerationAdapters';
 
 const AUDIO_BYTES = new Uint8Array([1, 2, 3]).buffer;
 const VIDEO_BYTES = new Uint8Array([9, 8, 7, 6]).buffer;
+
+function streamingWavBytes(): Buffer {
+  const bytes = Buffer.alloc(48);
+  bytes.write('RIFF', 0, 'ascii');
+  bytes.writeUInt32LE(0xffffffff, 4);
+  bytes.write('WAVEfmt ', 8, 'ascii');
+  bytes.writeUInt32LE(16, 16);
+  bytes.writeUInt16LE(1, 20);
+  bytes.writeUInt16LE(1, 22);
+  bytes.writeUInt32LE(48_000, 24);
+  bytes.writeUInt32LE(96_000, 28);
+  bytes.writeUInt16LE(2, 32);
+  bytes.writeUInt16LE(16, 34);
+  bytes.write('data', 36, 'ascii');
+  bytes.writeUInt32LE(1_000_000_000, 40);
+  bytes.writeInt16LE(120, 44);
+  bytes.writeInt16LE(-120, 46);
+  return bytes;
+}
 
 describe('media generation adapters', () => {
   it('sends ElevenLabs synthesis with the key in a header and the model in the body', async () => {
@@ -50,6 +73,43 @@ describe('media generation adapters', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('discovers VieNeu voices from the loopback runtime without a key', async () => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe('http://127.0.0.1:8001/voices');
+      expect(init).toEqual({ method: 'GET', signal: expect.any(AbortSignal) });
+      return new Response(JSON.stringify([{ id: 'voice-north', name: 'Giọng Bắc' }]), { status: 200 });
+    });
+
+    await expect(listVieNeuVoices({ fetchImpl: fetchMock as unknown as typeof fetch })).resolves.toEqual([
+      { id: 'voice-north', label: 'Giọng Bắc', description: 'VieNeu v3 Turbo preset' }
+    ]);
+  });
+
+  it('creates VieNeu speech and repairs the streaming WAV lengths for editor import', async () => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe('http://localhost:9001/stream');
+      expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+      expect(JSON.parse(init.body as string)).toEqual({ text: 'Xin chào', voice_id: 'voice-south' });
+      return new Response(new Uint8Array(streamingWavBytes()), { status: 200, headers: { 'Content-Type': 'audio/wav' } });
+    });
+
+    const bytes = await generateVieNeuSpeech({
+      baseUrl: 'http://localhost:9001',
+      voiceId: 'voice-south',
+      script: 'Xin chào',
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    expect(bytes.readUInt32LE(4)).toBe(bytes.length - 8);
+    expect(bytes.readUInt32LE(40)).toBe(bytes.length - 44);
+  });
+
+  it('rejects non-loopback VieNeu endpoints and malformed WAV responses', () => {
+    expect(() => resolveVieNeuBaseUrl('https://example.com:8001')).toThrow(/loopback|localhost/);
+    expect(() => resolveVieNeuBaseUrl('http://127.0.0.1:8001/private')).toThrow(/loopback|localhost/);
+    expect(() => repairStreamingWavHeader(Buffer.from('not audio'))).toThrow(/not a WAV/);
   });
 
   it('drives Veo through predictLongRunning, operation polling, and the video download', async () => {
