@@ -13,12 +13,21 @@ describe('Writer surface parity', () => {
       readRepo('src/renderer/src/editor/useTimelineEditor.ts')
     ]);
     expect(desktop).toContain("from '../../shared/writerWorkflow'");
-    expect(desktop).toContain('applyWriterDraft({');
+    expect(desktop).toContain('useWriterPipeline(document, onSave)');
     expect(mobile).toContain("from '@openvideo/shared/writerWorkflow'");
     expect(mobile).toContain("from '@openvideo/shared/writerGeneration'");
     expect(mobile).toContain("isDomainModelAvailableOnRuntime(model, 'mobile')");
     expect(mobile).toContain('requestWriter({');
-    expect(mobile).toContain('applyWriterDraft({');
+    expect(mobile).toContain('useWriterPipeline(project?.ai');
+    for (const surface of [desktop, mobile]) {
+      expect(surface).toContain('createUseWriterPipeline({ useEffect, useRef, useState })');
+      expect(surface).toContain('canOpenWriterStage(');
+      expect(surface).toContain('flow.save(true)');
+      expect(surface).toContain('flow.save(false)');
+      expect(surface).toContain('flow.apply()');
+      expect(surface).toContain('flow.edit(');
+      expect(surface).toContain('pipelineMatchesBrief(');
+    }
     expect(preload).toContain('generateWriterDraft(input: WriterGenerationInput)');
     expect(main).toContain("const credentialKey = agentRouter ? AGENT_ROUTER_CREDENTIAL_KEY : 'geminiApiKey'");
     expect(main).toContain('getCredentialValue(credentialKey)');
@@ -35,5 +44,18 @@ describe('Writer surface parity', () => {
     ]);
     expect(desktop).not.toContain('apiKey');
     expect(workflow.slice(workflow.indexOf('export type WriterGenerationInput'), workflow.indexOf('export type WriterDraftCharacter'))).not.toContain('apiKey');
+  });
+
+  it('offers the same explicit approved-shot handoff without automatically rendering', async () => {
+    const [desktop, mobile] = await Promise.all([
+      readRepo('src/renderer/src/VideoGenerationWorkspace.tsx'), readRepo('mobile/src/screens/PlanScreen.tsx')
+    ]);
+    expect(desktop).toContain('approvedWriterShots(writerDocument)');
+    expect(mobile).toContain('approvedWriterShots(projectId');
+    expect(desktop).toContain('durationOptions.includes(shot.durationSeconds)');
+    expect(mobile).toContain('supportedShotSeconds(model.id).includes(shot.durationSeconds)');
+    expect(desktop).toContain('setPrompt(shot.prompt)');
+    expect(mobile).toContain('setPrompt(shot.prompt)');
+    expect(mobile).toContain('<SpendPrompt');
   });
 });

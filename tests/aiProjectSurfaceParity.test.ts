@@ -30,7 +30,7 @@ describe('AI project domain surface parity', () => {
       readRepo('src/renderer/src/App.tsx'),
       readRepo('mobile/App.tsx')
     ]);
-    expect(desktop).toContain('<WriterWorkspace document={editor.project.ai} onSave={editor.saveAiProjectDocument} />');
+    expect(desktop).toContain('<WriterWorkspace key={editor.project.id} document={editor.project.ai} onSave={editor.saveAiProjectDocument} />');
     expect(mobile).toContain('<WriterScreen topInset={0} keyboardOffset={bodyTop} projectId={route.projectId}');
   });
 });

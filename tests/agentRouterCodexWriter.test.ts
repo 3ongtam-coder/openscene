@@ -113,6 +113,51 @@ describe('AgentRouter Codex Writer bridge', () => {
     }
   });
 
+  it('recovers when the model prepends prose before the markdown fence (loose fence strategy)', async () => {
+    let isolatedCwd = '';
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const runCli: AgentRouterCodexRunner = async (input) => {
+      isolatedCwd = input.cwd;
+      const resultPath = input.args[input.args.indexOf('-o') + 1]!;
+      // Model added an acknowledgement sentence before the fence — a common pattern
+      // with non-OpenAI providers routed through AgentRouter.
+      const withProse = `Here is the requested JSON output:\n\`\`\`json\n${JSON.stringify(draft)}\n\`\`\``;
+      await writeFile(resultPath, withProse, 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    try {
+      await expect(requestAgentRouterCodexWriter({
+        apiKey: 'router-secret', modelId: 'agentrouter/gpt-5.6-sol', request,
+        executable: 'codex-test.exe', runCli
+      })).resolves.toEqual(draft);
+    } finally {
+      info.mockRestore();
+      if (isolatedCwd) await rm(isolatedCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('recovers when the model wraps JSON in prose without a fence (object extraction strategy)', async () => {
+    let isolatedCwd = '';
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const runCli: AgentRouterCodexRunner = async (input) => {
+      isolatedCwd = input.cwd;
+      const resultPath = input.args[input.args.indexOf('-o') + 1]!;
+      // Model returned prose with the JSON object embedded inline.
+      const withProse = `Sure! Here is the draft: ${JSON.stringify(draft)} — let me know if you need changes.`;
+      await writeFile(resultPath, withProse, 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    try {
+      await expect(requestAgentRouterCodexWriter({
+        apiKey: 'router-secret', modelId: 'agentrouter/glm-5.3', request,
+        executable: 'codex-test.exe', runCli
+      })).resolves.toEqual(draft);
+    } finally {
+      info.mockRestore();
+      if (isolatedCwd) await rm(isolatedCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   it('fails when Codex exits successfully without a last-message file', async () => {
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {

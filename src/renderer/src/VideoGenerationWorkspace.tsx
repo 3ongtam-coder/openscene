@@ -1,4 +1,6 @@
 import { useState, type ReactElement } from 'react';
+import type { AiProjectDocument } from '../../shared/aiProjectDomain';
+import { approvedWriterShots } from '../../shared/writerPipeline';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
@@ -10,6 +12,7 @@ import { Button, StatusCard } from './ui';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 type VideoGenerationWorkspaceProps = {
+  readonly writerDocument?: AiProjectDocument | null;
   /**
    * Controlled from App so the image studio's "Use for video" can hand a
    * generated still straight into this form. Keeping it local meant the handoff
@@ -20,6 +23,7 @@ type VideoGenerationWorkspaceProps = {
 };
 
 export function VideoGenerationWorkspace({
+  writerDocument,
   referenceImage,
   onReferenceImageChange
 }: VideoGenerationWorkspaceProps): ReactElement {
@@ -27,6 +31,8 @@ export function VideoGenerationWorkspace({
   const videoModel = selectedModel('video-generation');
   const { importAiResult } = useProjectResultImport();
   const [prompt, setPrompt] = useState('');
+  const [writerShotId, setWriterShotId] = useState('');
+  const writerShots = approvedWriterShots(writerDocument);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [durationSeconds, setDurationSeconds] = useState<number>(5);
   const imageInputAvailable = isVideoOperationImplemented(videoModel.id, 'image_to_video');
@@ -316,6 +322,23 @@ export function VideoGenerationWorkspace({
 
       {/* Composer mirrors the chat prompt card: write, then act. */}
       <div className="studio-composer">
+        {writerShots.length > 0 && <div className="studio-field">
+          <label className="studio-field__label" htmlFor="writer-video-shot">Approved Writer shot</label>
+          <select id="writer-video-shot" disabled={isGenerating} value={writerShotId} onChange={(e) => setWriterShotId(e.target.value)}>
+            <option value="">Choose a shot to load into the composer</option>
+            {writerShots.map((shot) => <option key={shot.id} value={shot.id}>{shot.label}</option>)}
+          </select>
+          <Button disabled={isGenerating || !writerShots.some((s) => s.id === writerShotId)} onClick={() => {
+            const shot = writerShots.find((s) => s.id === writerShotId);
+            if (!shot) return;
+            if (!durationOptions.includes(shot.durationSeconds)) {
+              setStatusMsg({ tone: 'warning', text: `This shot needs ${shot.durationSeconds}s; the selected operation accepts ${durationOptions.join('/')}s. Choose a compatible model or revise the Writer shot. Nothing was submitted.` });
+              return;
+            }
+            setPrompt(shot.prompt); setDurationSeconds(shot.durationSeconds);
+            setStatusMsg({ tone: 'neutral', text: 'Approved shot loaded, not generated. Review the prompt, visual preset and any reference image before pressing Generate. References are not attached automatically.' });
+          }}>Use approved shot (no generation)</Button>
+        </div>}
         <textarea
           className="studio-composer__input"
           rows={3}

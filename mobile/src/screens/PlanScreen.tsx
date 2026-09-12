@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { composeShotPrompt, refineShotPrompt, revisionsOf, takeLabel } from '@openvideo/shared/shotPrompt';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { approvedWriterShots } from '@openvideo/shared/writerPipeline';
 import { getVideoOperationConstraints } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
 import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
@@ -60,6 +61,8 @@ export function PlanScreen({
   const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [prompt, setPrompt] = useState('');
+  const [writerMessage, setWriterMessage] = useState('');
+  const writerShots = approvedWriterShots(projectId === null ? null : readProject(projectId)?.ai);
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
   const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
   // Keyed by shot index, because the plan can change under them and an array
@@ -301,6 +304,19 @@ export function PlanScreen({
 
   return (
     <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
+      {writerShots.length > 0 && <View>
+        <Text style={styles.label}>Approved Writer shots — choose one to load, not generate</Text>
+        {writerShots.map((shot) => <Pressable key={shot.id} accessibilityRole="button" disabled={running || redoing !== null || asking}
+          style={press({ minHeight: MIN_TAP, padding: 10 })} onPress={() => {
+            if (!supportedShotSeconds(model.id).includes(shot.durationSeconds)) {
+              setWriterMessage(`This shot needs ${shot.durationSeconds}s; the model accepts ${supportedShotSeconds(model.id).join('/')}s. Choose a compatible model or revise the Writer shot.`);
+              return;
+            }
+            setPlan(() => { setPrompt(shot.prompt); setTotalSeconds(shot.durationSeconds); setDescriptions({}); });
+            setWriterMessage('Shot loaded, not generated. Review the prompt, references and spend confirmation before rendering.');
+          }}><Text style={{ color: theme.text }}>{shot.label}</Text></Pressable>)}
+        {!!writerMessage && <Text style={{ color: theme.textWeak }}>{writerMessage}</Text>}
+      </View>}
       <Text style={styles.h1}>Plan a video</Text>
       <Text style={styles.sub}>Shot lengths and prices come from the same modules the desktop app uses.</Text>
 
