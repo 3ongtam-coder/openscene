@@ -22,6 +22,31 @@ export interface BrowserSessionProviderPolicy {
   readonly allowedNavigationOrigins: readonly string[];
 }
 
+export type GeminiBrowserImagePromptInput = {
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly stylePreset?: string;
+  readonly negativePrompt?: string;
+};
+
+/**
+ * Gemini Apps does not expose the API's aspect-ratio fields to this bridge.
+ * Preserve the same intent as explicit prompt text so the user can review the
+ * complete request before submitting it through the provider UI.
+ */
+export function buildGeminiBrowserImagePrompt(input: GeminiBrowserImagePromptInput): string {
+  const lines = [
+    'Create one image (do not answer with only text).',
+    input.prompt.trim(),
+    `Use a ${input.aspectRatio} aspect ratio.`
+  ];
+  const style = input.stylePreset?.trim();
+  if (style) lines.push(`Visual style: ${style}.`);
+  const avoid = input.negativePrompt?.trim();
+  if (avoid) lines.push(`Do not include: ${avoid}.`);
+  return lines.join('\n');
+}
+
 const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProviderPolicy>> = {
   gemini: {
     id: 'gemini',

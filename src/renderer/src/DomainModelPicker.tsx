@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 
 import { isDomainModelAvailableOnRuntime, type AiDomain } from '../../shared/aiDomainModels';
+import { getLlmProvider } from '../../shared/llmProviders';
 import { agentModelGroupStatus, buildAgentModelGroups } from './agentModelPickerModel';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { useLlmModel } from './LlmProviderContext';
@@ -10,6 +11,8 @@ import { useModelVisibility } from './ModelVisibilityContext';
 type DomainModelPickerProps = {
   readonly domain: AiDomain;
   readonly ariaLabel: string;
+  /** Provider sessions that can run this surface without an API key. */
+  readonly linkedProviderIds?: readonly string[];
 };
 
 const POPOVER_WIDTH_PX = 300;
@@ -21,7 +24,7 @@ const POPOVER_WIDTH_PX = 300;
  * The popover renders through a body portal because the studio surface and the
  * workspace both clip overflow.
  */
-export function DomainModelPicker({ domain, ariaLabel }: DomainModelPickerProps): ReactElement {
+export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [] }: DomainModelPickerProps): ReactElement {
   const { selectedModel, setSelectedModelId } = useAiDomainModel();
   const { credentialStatus } = useLlmModel();
   const { isModelVisible } = useModelVisibility();
@@ -31,10 +34,15 @@ export function DomainModelPicker({ domain, ariaLabel }: DomainModelPickerProps)
   const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
 
   const activeModel = selectedModel(domain);
+  const effectiveCredentialStatus = { ...credentialStatus };
+  for (const providerId of linkedProviderIds) {
+    const credentialKey = getLlmProvider(providerId)?.credentialKey;
+    if (credentialKey !== undefined) effectiveCredentialStatus[credentialKey] = true;
+  }
   const groups = buildAgentModelGroups({
     domain,
     activeModelId: activeModel.id,
-    credentialStatus,
+    credentialStatus: effectiveCredentialStatus,
     // The ChatGPT sign-in only serves Edit Agent chat models.
     chatGptConnected: false,
     isModelVisible
@@ -80,7 +88,10 @@ export function DomainModelPicker({ domain, ariaLabel }: DomainModelPickerProps)
       style={anchorStyle}
     >
       {groups.map((group) => {
-        const status = agentModelGroupStatus(group, { credentialStatus, chatGptConnected: false });
+        const linkedBySession = linkedProviderIds.includes(group.providerId);
+        const status = linkedBySession
+          ? 'Session'
+          : agentModelGroupStatus(group, { credentialStatus: effectiveCredentialStatus, chatGptConnected: false });
         const connected = status !== 'Not connected';
         return (
           <div key={group.providerId} className="agent-model-picker__group">
