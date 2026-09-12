@@ -6,7 +6,8 @@ import {
   buildGoogleFlowStateProbeScript,
   detectDownloadedImageMime,
   flowConfigurationHasExactModel,
-  flowOrientationForAspectRatio
+  flowOrientationForAspectRatio,
+  renameGoogleFlowProject
 } from '../src/main/googleFlowImageAutomation';
 
 afterEach(() => {
@@ -38,6 +39,32 @@ describe('Google Flow browser image automation', () => {
     expect(flowConfigurationHasExactModel('🍌 Nano Banana 2 crop_square x1', 'Nano Banana 2')).toBe(true);
     expect(flowConfigurationHasExactModel('🍌 Nano Banana 2 Lite crop_square x1', 'Nano Banana 2')).toBe(false);
     expect(flowConfigurationHasExactModel('🍌 Nano Banana Pro crop_square x1', 'Nano Banana Pro')).toBe(true);
+  });
+
+  it('renames through the always-editable project title used by the current Flow UI', async () => {
+    vi.useFakeTimers();
+    const projectTitle = { rectangle: { x: 110, y: 20, width: 240, height: 40 }, text: 'Sep 09 - 15:30' };
+    const executeJavaScript = vi.fn()
+      .mockResolvedValueOnce({ url: 'https://flow.google.com/project/new', projectTitleInput: projectTitle, tabs: [], menuItems: [], images: [] })
+      .mockResolvedValueOnce({
+        url: 'https://flow.google.com/project/new',
+        projectTitleInput: { ...projectTitle, text: 'nhanvat ai' },
+        tabs: [], menuItems: [], images: []
+      });
+    const insertText = vi.fn(async () => undefined);
+    const sendInputEvent = vi.fn();
+    const operation = renameGoogleFlowProject(
+      { executeJavaScript, insertText, sendInputEvent } as unknown as WebContents,
+      'nhanvat ai',
+      Date.now() + 5_000
+    );
+
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toBe(true);
+    expect(insertText).toHaveBeenCalledWith('nhanvat ai');
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 230, y: 40, button: 'left', clickCount: 1
+    });
   });
 
   it('exits the Vietnamese Agent UI, configures Image x1, and returns only a new result URL', async () => {
