@@ -1,6 +1,7 @@
 import { extname, basename } from 'node:path';
 
 import type { ApiResponse } from '../shared/models';
+import { MEDIA_PLAYBACK_SCHEME } from '../shared/mediaPlaybackUrls';
 import type {
   CreateProjectInput,
   CreateProjectResult,
@@ -240,7 +241,7 @@ export class TimelineIpcService {
     const playbackSource = await this.resolveAssetPlaybackSource(input.projectId, input.assetId);
     return playbackSource === null
       ? fail('ASSET_NOT_FOUND', 'The requested asset is not available for playback.')
-      : ok({ url: `video-tool-asset://playback/${input.projectId}/${input.assetId}` });
+      : ok({ url: `${MEDIA_PLAYBACK_SCHEME}://playback/${input.projectId}/${input.assetId}` });
   }
 
   async resolveAssetPlaybackSource(projectId: string, assetId: string): Promise<AssetPlaybackSource | null> {

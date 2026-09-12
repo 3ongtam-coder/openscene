@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app } from 'electron';
 import type {
@@ -36,6 +37,9 @@ import {
   type GeneratedImage
 } from './imageGenerationAdapters';
 import { tmpdir } from 'node:os';
+import { speechPreviewUrl } from '../shared/mediaPlaybackUrls';
+import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
+import { isInsideDirectory } from './projectStoreSupport';
 
 const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
@@ -542,6 +546,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       job.status = 'completed';
       if (result.outputFilePath !== undefined) {
         job.outputFilePath = result.outputFilePath;
+        job.previewUrl = speechPreviewUrl(job.id);
       }
 
       job.updatedAt = new Date().toISOString();
@@ -565,6 +570,58 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
 
 export function getSpeechGenerationJob(jobId: string): TextToSpeechJob | null {
   return speechJobs.get(jobId) ?? null;
+}
+
+/**
+ * Opens a completed speech result for the privileged media protocol.
+ * The renderer receives only a job URL; the file path remains in main and is
+ * revalidated at playback time in case it was replaced after generation.
+ */
+export async function openCompletedSpeechPreviewSource(jobId: string): Promise<OpenedAssetPlaybackSource | null> {
+  const job = speechJobs.get(jobId);
+  if (job === undefined || job.status !== 'completed' || job.outputFilePath === undefined) return null;
+  const speechDirectory = join(getAiStorageDir(), 'speech');
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    const directoryBefore = await lstat(speechDirectory);
+    if (directoryBefore.isSymbolicLink() || !directoryBefore.isDirectory()) return null;
+    const speechRealPath = await realpath(speechDirectory);
+    file = await open(job.outputFilePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const [openedStats, pathStats, outputRealPath, directoryAfter] = await Promise.all([
+      file.stat(),
+      lstat(job.outputFilePath),
+      realpath(job.outputFilePath),
+      lstat(speechDirectory)
+    ]);
+    const valid =
+      openedStats.isFile() &&
+      openedStats.size > 0 &&
+      !pathStats.isSymbolicLink() &&
+      pathStats.isFile() &&
+      pathStats.dev === openedStats.dev &&
+      pathStats.ino === openedStats.ino &&
+      isInsideDirectory(speechRealPath, outputRealPath) &&
+      !directoryAfter.isSymbolicLink() &&
+      directoryAfter.isDirectory() &&
+      directoryAfter.dev === directoryBefore.dev &&
+      directoryAfter.ino === directoryBefore.ino;
+    if (!valid) {
+      await file.close();
+      return null;
+    }
+    const source = file;
+    file = undefined;
+    return {
+      file: source,
+      filePath: job.outputFilePath,
+      byteLength: openedStats.size,
+      mimeType: job.provider === 'vieneu_local' ? 'audio/wav' : 'audio/mpeg'
+    };
+  } catch (error) {
+    await file?.close();
+    if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ELOOP')) return null;
+    throw error;
+  }
 }
 
 export async function listSpeechVoices(modelId: string): Promise<readonly VoiceChoice[]> {

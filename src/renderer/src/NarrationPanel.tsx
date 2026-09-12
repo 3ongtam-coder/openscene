@@ -31,12 +31,15 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   const [isGenerating, setIsGenerating] = useState(false);
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [completedJobId, setCompletedJobId] = useState<string | null>(null);
+  const [speechPreviewUrl, setSpeechPreviewUrl] = useState<string | null>(null);
+  const [importedJobId, setImportedJobId] = useState<string | null>(null);
   const pollIntervalRef = useRef<number | null>(null);
   const writerSource = narrationFromApprovedWriter(document);
   const effectiveTargetSeconds = Math.max(1, targetSeconds, (writerSource?.cues.at(-1)?.endMs ?? 0) / 1_000);
   const fit = useMemo(() => script.trim() ? checkNarrationFit({ script, targetSeconds: effectiveTargetSeconds }) : null, [script, effectiveTargetSeconds]);
   const dirty = !isPersisted || savedPlan === null || savedPlan.script !== script.trim() || savedPlan.voiceModelId !== voiceModel.id || savedPlan.voiceId !== voiceId || JSON.stringify(savedPlan.cues) !== JSON.stringify(cues);
   const stale = savedPlan !== null && !narrationPlanMatchesWriter(document, savedPlan);
+  const clearCompletedVoice = (): void => { setCompletedJobId(null); setSpeechPreviewUrl(null); setImportedJobId(null); };
   useEffect(() => {
     let active = true;
     const options = voiceChoices(voiceModel.providerId);
@@ -69,10 +72,20 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   useEffect(() => () => {
     if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current);
   }, []);
+  useEffect(() => {
+    if (pollIntervalRef.current !== null) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setIsGenerating(false);
+    setCompletedJobId(null);
+    setSpeechPreviewUrl(null);
+    setImportedJobId(null);
+  }, [voiceModel.id, voiceId, script]);
   const build = (fromWriter: boolean): void => {
     try {
       const plan = createNarrationPlan({ ai: document, ...(fromWriter ? {} : { script }), durationMs: Math.round(effectiveTargetSeconds * 1_000), voiceModelId: voiceModel.id, voiceId });
-      setScript(plan.script); setCues(plan.cues); setSavedPlan(plan); setIsPersisted(false); setStatus({ tone: 'neutral', text: `${plan.cues.length} subtitle cues prepared. Review text and timing before approval.` });
+      clearCompletedVoice(); setScript(plan.script); setCues(plan.cues); setSavedPlan(plan); setIsPersisted(false); setStatus({ tone: 'neutral', text: `${plan.cues.length} subtitle cues prepared. Review text and timing before approval.` });
     } catch (error) { setStatus({ tone: 'danger', text: error instanceof Error ? error.message : 'Could not prepare narration.' }); }
   };
   const makePlan = (approve: boolean): NarrationPlan => {
@@ -89,13 +102,13 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   };
   const editCue = (index: number, patch: Partial<SubtitleCue>): void => setCues((current) => {
     const next = current.map((cue, at) => at === index ? { ...cue, ...patch } : cue);
-    if (patch.text !== undefined) setScript(narrationScriptFromCues(next));
+    if (patch.text !== undefined) { clearCompletedVoice(); setScript(narrationScriptFromCues(next)); }
     return next;
   });
   const generate = async (): Promise<void> => {
     if (savedPlan?.status !== 'approved' || dirty || stale) { setStatus({ tone: 'warning', text: 'Approve the current narration and subtitle timing before speech synthesis.' }); return; }
     if (usesRuntimeVoiceCatalog(voiceModel.providerId) && (voiceCatalogError !== null || voiceId.length === 0)) { setStatus({ tone: 'warning', text: 'Connect the local VieNeu server and select a voice before synthesis.' }); return; }
-    setIsGenerating(true); setCompletedJobId(null); setStatus({ tone: 'neutral', text: `Sending the approved script and voice choice to ${voiceModel.providerLabel}…` });
+    setIsGenerating(true); clearCompletedVoice(); setStatus({ tone: 'neutral', text: `Sending the approved script and voice choice to ${voiceModel.providerLabel}…` });
     try {
       if (pollIntervalRef.current !== null) window.clearInterval(pollIntervalRef.current);
       const response = await window.videoTool.aiGenerateSpeech({ script: savedPlan.script, voiceId: savedPlan.voiceId, modelId: voiceModel.id });
@@ -106,7 +119,7 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
         if (Date.now() >= deadline) { stop(); setStatus({ tone: 'danger', text: 'Speech synthesis did not finish within 10 minutes. Check the terminal log and provider status before retrying.' }); return; }
         const poll = await window.videoTool.aiGetSpeechJob(response.value.id);
         if (!poll.ok) { stop(); setStatus({ tone: 'danger', text: poll.error.message }); return; }
-        if (poll.value.status === 'completed') { stop(); setCompletedJobId(poll.value.id); setStatus({ tone: 'success', text: 'Speech ready. Import it, then listen and fine-tune subtitle timing against the actual voice.' }); }
+        if (poll.value.status === 'completed') { stop(); setCompletedJobId(poll.value.id); setSpeechPreviewUrl(poll.value.previewUrl ?? null); setStatus({ tone: 'success', text: 'Speech ready. Listen here before importing, then fine-tune subtitle timing against the actual voice.' }); }
         else if (poll.value.status === 'failed') { stop(); setStatus({ tone: 'danger', text: poll.value.error ?? 'Speech synthesis failed.' }); }
       }, 1_000);
       pollIntervalRef.current = intervalId;
@@ -116,14 +129,20 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
     if (!savedPlan || savedPlan.status !== 'approved' || dirty || stale) { setStatus({ tone: 'warning', text: 'Save and approve current, non-stale subtitles first.' }); return; }
     setStatus(onApplyCaptions(savedPlan) ? { tone: 'success', text: `${savedPlan.cues.length} captions added to the unsaved timeline. Review them in Editing, then save the project.` } : { tone: 'danger', text: 'Captions could not be applied to the timeline.' });
   };
+  const importCompletedVoice = async (): Promise<void> => {
+    if (completedJobId === null) return;
+    const result = await projectImport.importAiResult(completedJobId);
+    setStatus(result);
+    if (result.tone === 'success') setImportedJobId(completedJobId);
+  };
   return <section className="studio-surface narration-workflow" aria-labelledby="narration-title">
     <header className="studio-surface__header"><div className="studio-surface__title"><h2 className="studio-surface__title-label" id="narration-title">Narration & Subtitles</h2><span className="studio-surface__title-meta">Review before voice or timeline</span></div><DomainModelPicker domain="voice-generation" ariaLabel="Voice model" /></header>
     <div className="studio-surface__body">
-      <label className="studio-field"><span className="studio-field__label">Voice</span><select value={voiceId} disabled={isVoiceCatalogLoading || voiceCatalogError !== null} onChange={(e) => setVoiceId(e.target.value)}>{choices.length ? choices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>) : <option value="">{isVoiceCatalogLoading ? 'Loading local voices…' : usesRuntimeVoiceCatalog(voiceModel.providerId) ? 'Local voice server unavailable' : 'Provider default voice'}</option>}</select></label>
+      <label className="studio-field"><span className="studio-field__label">Voice</span><select value={voiceId} disabled={isVoiceCatalogLoading || voiceCatalogError !== null} onChange={(e) => { clearCompletedVoice(); setVoiceId(e.target.value); }}>{choices.length ? choices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>) : <option value="">{isVoiceCatalogLoading ? 'Loading local voices…' : usesRuntimeVoiceCatalog(voiceModel.providerId) ? 'Local voice server unavailable' : 'Provider default voice'}</option>}</select></label>
       {voiceCatalogError && <StatusCard tone="warning">{voiceCatalogError} <Button onClick={() => setVoiceCatalogRefresh((value) => value + 1)}>Retry local voices</Button></StatusCard>}
       {usesRuntimeVoiceCatalog(voiceModel.providerId) && !voiceCatalogError && <p className="studio-reference__empty">VieNeu-TTS runs locally and uses no API key or generation credit. Preset voices come from the server currently running on this computer.</p>}
       {writerSource && <Button onClick={() => build(true)}>Load dialogue from approved Writer ({writerSource.cues.length} cues)</Button>}
-      <label className="studio-field"><span className="studio-field__label">Narration script</span><textarea rows={7} value={script} onChange={(e) => setScript(e.target.value)} /></label>
+      <label className="studio-field"><span className="studio-field__label">Narration script</span><textarea rows={7} value={script} onChange={(e) => { clearCompletedVoice(); setScript(e.target.value); }} /></label>
       <Button disabled={!script.trim()} onClick={() => build(false)}>Auto-split subtitles from this script</Button>
       {fit && <StatusCard tone={fit.verdict === 'fits' ? 'success' : 'warning'}>{fit.advice}</StatusCard>}
       {stale && <StatusCard tone="warning">The approved Writer dialogue changed. Reload it or detach by rebuilding subtitles from the edited script.</StatusCard>}
@@ -134,7 +153,13 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
       <p className="studio-reference__empty">Subtitle timing is derived from approved shot timing or distributed across the script. It is not word-level audio alignment; listen after synthesis and adjust before final export.</p>
       <div className="writer-preview__actions"><Button disabled={!script.trim() || !cues.length} onClick={() => void savePlan(false)}>Save draft</Button><Button variant="primary" disabled={!script.trim() || !cues.length || (!dirty && savedPlan?.status === 'approved')} onClick={() => void savePlan(true)}>Approve narration & subtitles</Button><Button disabled={savedPlan?.status !== 'approved' || dirty || stale} onClick={apply}>Apply captions to timeline</Button></div>
       {status && <StatusCard tone={status.tone}>{status.text}</StatusCard>}
-      {completedJobId && <Button variant="primary" disabled={projectImport.activeProject === null || projectImport.isImporting} onClick={() => void projectImport.importAiResult(completedJobId).then(setStatus)}>Import voice to project</Button>}
+      {completedJobId && <section className="speech-result-review" aria-labelledby="speech-result-review-title">
+        <div><strong id="speech-result-review-title">Review generated voice</strong><p>Play, pause, seek and adjust volume before adding this take to the project.</p></div>
+        {speechPreviewUrl
+          ? <audio className="speech-result-review__player" key={speechPreviewUrl} aria-label="Generated voice preview" controls preload="metadata" src={speechPreviewUrl} onError={() => setStatus({ tone: 'danger', text: 'The generated voice preview could not be loaded. Check the terminal log, or generate the voice again.' })} />
+          : <StatusCard tone="warning">This completed provider result has no in-app preview. You can still try importing it.</StatusCard>}
+        <Button variant="primary" disabled={projectImport.activeProject === null || projectImport.isImporting || importedJobId === completedJobId} onClick={() => void importCompletedVoice()}>{importedJobId === completedJobId ? 'Voice imported' : 'Import voice to project'}</Button>
+      </section>}
     </div>
     <div className="studio-composer"><div className="studio-composer__toolbar"><span className="studio-composer__hint">{voiceModel.providerLabel} · {voiceModel.executionPath === 'local' ? 'local, no API key' : 'approved script only'}</span><Button variant="primary" disabled={isGenerating || savedPlan?.status !== 'approved' || dirty || stale || isVoiceCatalogLoading || (usesRuntimeVoiceCatalog(voiceModel.providerId) && (voiceCatalogError !== null || voiceId.length === 0))} onClick={() => void generate()}>{isGenerating ? 'Synthesizing…' : 'Generate approved voice'}</Button></div></div>
   </section>;

@@ -29,7 +29,7 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, setAiJobManagerCredentialStore, setAiJobManagerSpendStore } from './aiJobManager';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
 import { getOpenVideoMcpDefinition, OpenVideoMcpServer } from './openVideoMcpServer';
@@ -538,7 +538,10 @@ app.whenReady().then(async () => {
     });
   });
   installDisplayMediaHandler();
-  registerTimelineAssetProtocol(timelineIpcService);
+  registerTimelineAssetProtocol({
+    openAssetPlaybackSource: (projectId, assetId) => timelineIpcService.openAssetPlaybackSource(projectId, assetId),
+    openGeneratedSpeechSource: (jobId) => openCompletedSpeechPreviewSource(jobId)
+  });
   await installIpcHandlers();
   createWindow();
 

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { ApiResponse } from '../shared/models';
 import type { ImportProjectAssetsResult, ImportRecordingResultAssetInput, ImportTtsResultAssetInput, MediaKind } from '../shared/timelineTypes';
 import { parseImportRecordingResultAssetInput, parseImportTtsResultAssetInput } from '../shared/timelineValidators';
@@ -30,6 +32,21 @@ function inputFromSource(projectId: string, source: CompletedResultAssetSource) 
   };
 }
 
+function importErrorDetails(error: unknown): Readonly<Record<string, unknown>> {
+  if (!(error instanceof Error)) return { error: 'Unknown import failure.' };
+  const systemError = error as Error & { code?: unknown; syscall?: unknown; errno?: unknown; path?: unknown; dest?: unknown };
+  const containsFilePath = typeof systemError.path === 'string' || typeof systemError.dest === 'string';
+  return {
+    error: containsFilePath
+      ? `${typeof systemError.code === 'string' ? systemError.code : error.name}: ${typeof systemError.syscall === 'string' ? systemError.syscall : 'filesystem operation'}`
+      : error.message,
+    errorName: error.name,
+    ...(typeof systemError.code === 'string' ? { code: systemError.code } : {}),
+    ...(typeof systemError.syscall === 'string' ? { syscall: systemError.syscall } : {}),
+    ...(typeof systemError.errno === 'number' ? { errno: systemError.errno } : {})
+  };
+}
+
 export class ResultAssetImportService {
   constructor(private readonly dependencies: ResultAssetImportDependencies) {}
 
@@ -42,7 +59,7 @@ export class ResultAssetImportService {
     if (source === null) {
       return fail('SESSION_NOT_FOUND', 'The completed recording result is not available.');
     }
-    return this.importResult(input, source, 'The completed recording result could not be imported.');
+    return this.importResult(input, source, 'recording', 'The completed recording result could not be imported.');
   }
 
   async importAiResult(payload: unknown): Promise<ApiResponse<ImportProjectAssetsResult>> {
@@ -54,17 +71,24 @@ export class ResultAssetImportService {
     if (source === null) {
       return fail('TTS_RESULT_UNAVAILABLE', 'The completed AI generation result is not available.');
     }
-    return this.importResult(input, source, 'The completed AI generation result could not be imported.');
+    return this.importResult(input, source, 'ai-generation', 'The completed AI generation result could not be imported.');
   }
 
   private async importResult(
     input: ImportRecordingResultAssetInput | ImportTtsResultAssetInput,
     source: CompletedResultAssetSource,
+    resultKind: 'recording' | 'ai-generation',
     failureMessage: string
   ): Promise<ApiResponse<ImportProjectAssetsResult>> {
+    const requestId = randomUUID().slice(0, 8);
+    const startedAt = Date.now();
+    console.info(`[OpenScene][Result Import][${requestId}] request.start ${JSON.stringify({ resultKind, projectId: input.projectId, mediaKind: source.kind, mimeType: source.mimeType })}`);
     try {
-      return ok({ assets: await this.dependencies.assets.importMany([inputFromSource(input.projectId, source)]) });
+      const assets = await this.dependencies.assets.importMany([inputFromSource(input.projectId, source)]);
+      console.info(`[OpenScene][Result Import][${requestId}] request.completed ${JSON.stringify({ elapsedMs: Date.now() - startedAt, assets: assets.length })}`);
+      return ok({ assets });
     } catch (error: unknown) {
+      console.error(`[OpenScene][Result Import][${requestId}] request.failed ${JSON.stringify({ elapsedMs: Date.now() - startedAt, ...importErrorDetails(error) })}`);
       if (error instanceof ProjectStoreError && error.message.startsWith('Project ')) {
         return fail('PROJECT_NOT_FOUND', error.message);
       }
