@@ -221,6 +221,16 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: true
   },
   {
+    id: 'gemini-omni-1.1-flash',
+    providerId: 'google_gemini',
+    label: 'Gemini Omni 1.1 Flash',
+    providerLabel: 'Google Gemini',
+    description: 'Fast text/image-to-video with native audio, 3-10s at 720p.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
     id: 'sora-2',
     providerId: 'openai',
     label: 'Sora 2',
@@ -513,7 +523,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
         available: true
       }))
   ),
-  // ── Image generation: cloud models. OpenAI Images, Google Imagen, and BytePlus
+  // ── Image generation: cloud models. OpenAI Images, Google Nano Banana, and BytePlus
   // Seedream adapters are implemented; the rest stay honestly unavailable so the
   // picker never offers a model that would fail after the user hits Generate.
   {
@@ -537,31 +547,41 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: true
   },
   {
-    id: 'imagen-4.0-generate-001',
+    id: 'gemini-3.1-flash-image',
     providerId: 'google_gemini',
-    label: 'Imagen 4',
-    providerLabel: 'Google Imagen',
-    description: 'Google photorealistic image generation with native aspect ratios.',
+    label: 'Nano Banana 2',
+    providerLabel: 'Google Nano Banana',
+    description: 'Recommended all-round Gemini image generation and reference editing model.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
   },
   {
-    id: 'imagen-4.0-ultra-generate-001',
+    id: 'gemini-3.1-flash-lite-image',
     providerId: 'google_gemini',
-    label: 'Imagen 4 Ultra',
-    providerLabel: 'Google Imagen',
-    description: 'Highest-fidelity Imagen tier, one image per request.',
+    label: 'Nano Banana 2 Lite',
+    providerLabel: 'Google Nano Banana',
+    description: 'Fastest and lowest-cost Nano Banana model at 1K output.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
   },
   {
-    id: 'imagen-3.0-generate-002',
+    id: 'gemini-3-pro-image',
     providerId: 'google_gemini',
-    label: 'Imagen 3',
-    providerLabel: 'Google Imagen',
-    description: 'Previous-generation Imagen model.',
+    label: 'Nano Banana Pro',
+    providerLabel: 'Google Nano Banana',
+    description: 'Premium Gemini image model for complex, production-quality assets.',
+    executionPath: 'api',
+    domains: ['image-generation'],
+    available: true
+  },
+  {
+    id: 'gemini-2.5-flash-image',
+    providerId: 'google_gemini',
+    label: 'Nano Banana',
+    providerLabel: 'Google Nano Banana',
+    description: 'Legacy Nano Banana model for fast 1K generation and editing.',
     executionPath: 'api',
     domains: ['image-generation'],
     available: true

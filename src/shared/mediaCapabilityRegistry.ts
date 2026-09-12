@@ -4,8 +4,8 @@
  * says what this OpenScene build can actually send without dropping inputs.
  */
 
-export const MEDIA_CAPABILITY_REGISTRY_VERSION = 2 as const;
-export const MEDIA_CAPABILITIES_AS_OF = '2026-09-06' as const;
+export const MEDIA_CAPABILITY_REGISTRY_VERSION = 3 as const;
+export const MEDIA_CAPABILITIES_AS_OF = '2026-09-07' as const;
 
 export const VIDEO_OPERATIONS = [
   'text_to_video',
@@ -32,9 +32,9 @@ export type VideoOperationConstraints = {
 };
 
 export type VideoProviderBinding = {
-  readonly adapterId: 'google_veo' | 'openai_sora' | 'runway' | 'luma' | 'comfyui_wan';
+  readonly adapterId: 'google_veo' | 'google_omni' | 'openai_sora' | 'runway' | 'luma' | 'comfyui_wan';
   readonly credentialKey?: 'geminiApiKey' | 'openaiApiKey' | 'runwayApiKey' | 'lumaApiKey';
-  readonly seamProviderId: 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'luma_dream' | 'comfyui_wan';
+  readonly seamProviderId: 'gemini_veo' | 'gemini_omni' | 'openai_sora' | 'runway_gen4' | 'luma_dream' | 'comfyui_wan';
 };
 
 export type VideoModelCapabilities = {
@@ -58,6 +58,7 @@ const range = (minimum: number, maximum: number): readonly number[] =>
   Array.from({ length: maximum - minimum + 1 }, (_, index) => minimum + index);
 
 const GOOGLE_VIDEO_SOURCE = 'https://ai.google.dev/gemini-api/docs/veo';
+const GOOGLE_OMNI_SOURCE = 'https://ai.google.dev/gemini-api/docs/omni';
 const GOOGLE_MODELS_SOURCE = 'https://ai.google.dev/gemini-api/docs/models';
 const XAI_VIDEO_SOURCE = 'https://docs.x.ai/developers/model-capabilities/video/generation';
 const XAI_EDIT_SOURCE = 'https://docs.x.ai/developers/model-capabilities/video/editing';
@@ -67,6 +68,9 @@ const LANDSCAPE_PORTRAIT: readonly VideoAspectRatio[] = ['16:9', '9:16'];
 const ALL_APP_RATIOS: readonly VideoAspectRatio[] = ['16:9', '9:16', '1:1'];
 const GOOGLE_BINDING: VideoProviderBinding = {
   adapterId: 'google_veo', credentialKey: 'geminiApiKey', seamProviderId: 'gemini_veo'
+};
+const GOOGLE_OMNI_BINDING: VideoProviderBinding = {
+  adapterId: 'google_omni', credentialKey: 'geminiApiKey', seamProviderId: 'gemini_omni'
 };
 const OPENAI_BINDING: VideoProviderBinding = {
   adapterId: 'openai_sora', credentialKey: 'openaiApiKey', seamProviderId: 'openai_sora'
@@ -171,6 +175,25 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
       image_to_video: operation([5, 6, 7, 8], LANDSCAPE_PORTRAIT, ['720p'], false)
     },
     implemented: ['text_to_video', 'image_to_video']
+  }),
+  model({
+    modelId: 'gemini-omni-1.1-flash', providerId: 'google_gemini', providerLabel: 'Google Gemini',
+    label: 'Gemini Omni 1.1 Flash',
+    description: 'Fast multimodal video generation with native audio and cinematic controls.',
+    sourceUrls: [GOOGLE_OMNI_SOURCE, GOOGLE_MODELS_SOURCE], binding: GOOGLE_OMNI_BINDING,
+    operations: {
+      text_to_video: operation(range(3, 10), LANDSCAPE_PORTRAIT, ['720p'], true),
+      image_to_video: operation(range(3, 10), LANDSCAPE_PORTRAIT, ['720p'], true, {
+        minReferenceImages: 1, maxReferenceImages: 1
+      }),
+      start_end: operation(range(3, 10), LANDSCAPE_PORTRAIT, ['720p'], true, {
+        minReferenceImages: 2, maxReferenceImages: 2
+      }),
+      reference_to_video: operation(range(3, 10), LANDSCAPE_PORTRAIT, ['720p'], true, {
+        minReferenceImages: 1, maxReferenceImages: 3
+      })
+    },
+    implemented: ['text_to_video', 'image_to_video', 'start_end', 'reference_to_video']
   }),
   model({
     modelId: 'sora-2', providerId: 'openai', providerLabel: 'OpenAI Sora', label: 'Sora 2',

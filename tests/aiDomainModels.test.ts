@@ -24,7 +24,12 @@ describe('AI domain model catalog', () => {
     expect(isDomainModelAvailableOnRuntime(wan!, 'desktop')).toBe(true);
     expect(isDomainModelAvailableOnRuntime(wan!, 'mobile')).toBe(false);
     expect(videoModels.map((model) => model.id)).toContain('veo-3.0-generate-001');
+    expect(videoModels.map((model) => model.id)).toContain('gemini-omni-1.1-flash');
     expect(videoModels.map((model) => model.id)).toContain('sora-2');
+    const imageModelIds = getAvailableDomainModels('image-generation').map((model) => model.id);
+    expect(imageModelIds).toContain('gemini-3.1-flash-image');
+    expect(imageModelIds).toContain('gemini-3-pro-image');
+    expect(imageModelIds).not.toContain('imagen-3.0-generate-002');
     // The Edit Agent keeps the local engine.
     const editAgentModels = getAvailableDomainModels('edit-agent');
     expect(editAgentModels[0]?.id).toBe('qwen2.5-coder');

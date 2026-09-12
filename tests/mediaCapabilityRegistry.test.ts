@@ -19,7 +19,7 @@ describe('versioned media capability registry', () => {
     const ids = VIDEO_MODEL_CAPABILITIES.map((model) => model.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     expect(VIDEO_MODEL_CAPABILITIES.every((model) => model.registryVersion === MEDIA_CAPABILITY_REGISTRY_VERSION)).toBe(true);
-    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-06');
+    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-07');
     expect(GENERATION_CAPABILITIES).toEqual(VIDEO_OPERATIONS);
   });
 
@@ -77,6 +77,22 @@ describe('versioned media capability registry', () => {
       expect(capabilityModel, catalogModel.id).toBeDefined();
       expect(catalogModel.available, catalogModel.id).toBe((capabilityModel?.implemented.length ?? 0) > 0);
     }
+  });
+
+  it('registers direct Gemini Omni separately from the Runway-hosted route', () => {
+    const omni = getVideoModelCapabilities('gemini-omni-1.1-flash');
+    expect(omni?.providerId).toBe('google_gemini');
+    expect(omni?.operations).toMatchObject({
+      text_to_video: { durationSeconds: [3, 4, 5, 6, 7, 8, 9, 10], aspectRatios: ['16:9', '9:16'], nativeAudio: true },
+      image_to_video: { minReferenceImages: 1, maxReferenceImages: 1 },
+      start_end: { minReferenceImages: 2, maxReferenceImages: 2 },
+      reference_to_video: { minReferenceImages: 1, maxReferenceImages: 3 }
+    });
+    expect(omni?.implemented).toEqual(['text_to_video', 'image_to_video', 'start_end', 'reference_to_video']);
+    expect(getVideoProviderBinding(omni!.modelId)).toEqual({
+      adapterId: 'google_omni', credentialKey: 'geminiApiKey', seamProviderId: 'gemini_omni'
+    });
+    expect(getVideoModelCapabilities('gemini_omni_flash')?.providerId).toBe('runway');
   });
 
   it('registers Wan Animate as a desktop-local motion-only workflow', () => {
