@@ -1,4 +1,4 @@
-import { mkdtemp, open, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, open, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -121,6 +121,83 @@ describe('export IPC service', () => {
     await expect(service.revealExportResult({ jobId: 'export_01' })).resolves.toEqual({ ok: true, value: { revealed: true } });
     expect(opened.map((path) => basename(path))).toEqual(['export_01.mp4']);
     expect(revealed.map((path) => basename(path))).toEqual(['export_01.mp4']);
+  });
+
+  it('writes a selected sidecar after the MP4 while leaving automatic captions out of burn-in', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const processInputs: StartFfmpegExportProcessInput[] = [];
+    const captioned = {
+      ...SNAPSHOT,
+      timeline: {
+        ...SNAPSHOT.timeline,
+        titles: [{ id: 'auto-caption-a-1', text: 'Xin chào', timelineStartMs: 0, timelineEndMs: 900, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 360 }]
+      }
+    };
+    const service = new ExportIpcService({
+      projects: { open: async () => captioned },
+      assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs: new ExportJobStore({ createId: () => 'export_captioned' }),
+      exportsRoot: join(root, 'exports'),
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input): FfmpegExecution => {
+        processInputs.push(input);
+        return { completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined };
+      },
+      runInBackground: (task) => backgroundTasks.push(task())
+    });
+    const started = await service.startExportJob({
+      projectId: SNAPSHOT.id,
+      subtitleDelivery: { burnAutomaticCaptions: false, sidecarFormat: 'srt' }
+    });
+    expect(started.ok).toBe(true);
+    await Promise.all(backgroundTasks);
+    const completed = await service.getExportJob({ jobId: 'export_captioned' });
+    expect(completed).toMatchObject({ ok: true, value: { state: { kind: 'completed', subtitleFileName: 'export_captioned.srt' } } });
+    expect(processInputs[0]?.args.join(' ')).not.toContain('drawtext');
+    expect(await readFile(join(root, 'exports', 'export_captioned.srt'), 'utf8')).toContain('Xin chào');
+  });
+
+  it('refuses a requested sidecar before creating a job when no automatic captions exist', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const jobs = new ExportJobStore({ createId: () => 'must-not-exist' });
+    const service = new ExportIpcService({
+      projects: { open: async () => SNAPSHOT }, assets: { openPlaybackSource: async () => null }, jobs,
+      exportsRoot: join(root, 'exports'), discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath })
+    });
+    await expect(service.startExportJob({
+      projectId: SNAPSHOT.id,
+      subtitleDelivery: { burnAutomaticCaptions: true, sidecarFormat: 'vtt' }
+    })).resolves.toMatchObject({ ok: false, error: { code: 'EXPORT_REFUSED', message: expect.stringContaining('Apply approved automatic captions') } });
+    expect(jobs.get('must-not-exist')).toBeNull();
+  });
+
+  it('fails closed and removes the MP4 when a sidecar output already exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const exportsRoot = join(root, 'exports');
+    await mkdir(exportsRoot);
+    await writeFile(join(exportsRoot, 'export_collision.srt'), 'keep me');
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const captioned = {
+      ...SNAPSHOT,
+      timeline: { ...SNAPSHOT.timeline, titles: [{ id: 'auto-caption-a-1', text: 'Caption', timelineStartMs: 0, timelineEndMs: 900, sizePx: 64, color: '#ffffff', positionX: 0, positionY: 360 }] }
+    };
+    const service = new ExportIpcService({
+      projects: { open: async () => captioned }, assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs: new ExportJobStore({ createId: () => 'export_collision' }), exportsRoot,
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input) => ({ completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined }),
+      runInBackground: (task) => backgroundTasks.push(task())
+    });
+    await service.startExportJob({ projectId: SNAPSHOT.id, subtitleDelivery: { burnAutomaticCaptions: false, sidecarFormat: 'srt' } });
+    await Promise.all(backgroundTasks);
+    await expect(service.getExportJob({ jobId: 'export_collision' })).resolves.toMatchObject({ ok: true, value: { state: { kind: 'failed' } } });
+    await expect(access(join(exportsRoot, 'export_collision.mp4'))).rejects.toThrow();
+    expect(await readFile(join(exportsRoot, 'export_collision.srt'), 'utf8')).toBe('keep me');
   });
 
   it('cancels a running job and removes its partial output', async () => {

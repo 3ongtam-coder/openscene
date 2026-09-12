@@ -4,6 +4,7 @@ import { outputFrameFor, type FramePreference } from '@openvideo/shared/outputFr
 import { buildCompositionPlan, CompositionPlanError } from '@openvideo/shared/videoCompositionPlan';
 import type { CompositionSegment } from '@openvideo/shared/videoCompositionPlan';
 import type { TimelineDocument } from '@openvideo/shared/timelineTypes';
+import { DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleDelivery } from '@openvideo/shared/subtitleDelivery';
 import * as Sharing from 'expo-sharing';
 import VideoExport, { areLayersComposited, areStillsRenderable } from '../../modules/video-export';
 import type { EditorAsset } from './editorState';
@@ -59,7 +60,13 @@ export async function exportTimeline(input: {
    */
   readonly frame?: FramePreference;
   readonly frameRate?: number;
+  readonly subtitleDelivery?: SubtitleDelivery;
 }): Promise<ExportOutcome> {
+  const delivery = input.subtitleDelivery ?? DEFAULT_SUBTITLE_DELIVERY;
+  if (delivery.sidecarFormat !== 'none') {
+    return { ok: false, message: 'Subtitle sidecar delivery is currently desktop-only. Choose burn-in or no automatic captions on mobile.' };
+  }
+  const exportTimeline = timelineForSubtitleDelivery(input.timeline, delivery);
   /*
     Whether this renderer can make this cut, before anything is rendered.
 
@@ -69,7 +76,7 @@ export async function exportTimeline(input: {
     asked here, once, against what this build actually reports it can do.
   */
   const problems = preflightExport({
-    timeline: input.timeline,
+    timeline: exportTimeline,
     assets: input.assets,
     capabilities: { stills: areStillsRenderable, layeredVideo: areLayersComposited }
   });
@@ -80,7 +87,7 @@ export async function exportTimeline(input: {
   let plan;
   try {
     plan = buildCompositionPlan({
-      timeline: input.timeline,
+      timeline: exportTimeline,
       // The plan is built from the timeline, which does not record what an asset
       // is. Without this the native renderer opens a still as a movie.
       stillAssetIds: new Set(input.assets.filter((asset) => asset.kind === 'image').map((asset) => asset.id)),

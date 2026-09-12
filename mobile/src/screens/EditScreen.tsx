@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { nextVisualBoundaryMs } from '@openvideo/shared/timelinePlayback';
 import { clipDurationMs, clipTimelineEndMs } from '@openvideo/shared/timelineClipGeometry';
 import { titlesAt } from '@openvideo/shared/titlePreviewLayout';
+import { DEFAULT_SUBTITLE_DELIVERY } from '@openvideo/shared/subtitleDelivery';
 import { track } from '../lib/analyticsClient';
 import { theme } from '../lib/theme';
 import { useMobileEditor, type EditorAsset } from '../lib/editorState';
@@ -158,11 +159,13 @@ export function EditScreen({
   const [transitioning, setTransitioning] = useState(false);
   const [titling, setTitling] = useState(false);
   const [framePreference, setFramePreference] = useState<FramePreference>('source');
+  const [burnAutomaticCaptions, setBurnAutomaticCaptions] = useState(true);
 
   // Read once per project: the choice belongs to the project, not to this screen.
   useEffect(() => {
     if (projectId === null) return;
     setFramePreference(readProject(projectId)?.frame ?? 'source');
+    setBurnAutomaticCaptions(readProject(projectId)?.subtitleDelivery?.burnAutomaticCaptions ?? DEFAULT_SUBTITLE_DELIVERY.burnAutomaticCaptions);
   }, [projectId, reloadToken]);
 
   /*
@@ -792,6 +795,17 @@ export function EditScreen({
               {`Frame: ${FRAME_LABELS[framePreference]} · ${exportFrame.width}×${exportFrame.height}`}
             </Text>
           </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => {
+            if (projectId === null) return;
+            const next = !burnAutomaticCaptions;
+            const current = readProject(projectId);
+            if (current === null) return;
+            writeProject({ ...current, subtitleDelivery: { burnAutomaticCaptions: next, sidecarFormat: 'none' } });
+            setBurnAutomaticCaptions(next);
+          }} style={press(styles.sheetRow)}>
+            <Text style={styles.sheetRowText}>Automatic captions: {burnAutomaticCaptions ? 'burn into video' : 'do not burn'}</Text>
+          </Pressable>
+          <Text style={styles.panelNote}>SRT, VTT and ASS sidecar files are currently desktop-only.</Text>
           <Pressable accessibilityRole="button" onPress={() => setMoreOpen(false)} style={press(styles.sheetRow)}>
             <Text style={styles.sheetRowText}>Close</Text>
           </Pressable>
