@@ -60,6 +60,8 @@ describe('browser session security wiring', () => {
     expect(automation).toContain('inputFound: state.input !== undefined');
     expect(automation).toContain('configFound: state.configButton !== undefined');
     expect(automation).toContain('/generate|create|submit|send/i.test(aria)');
+    expect(automation).toContain('projectTitleMenu');
+    expect(automation).toContain('renameProjectEntry');
     expect(automation).toContain("'iframe[src*=\"recaptcha\"]'");
     expect(automation).toContain('const challengeElement = visible([');
     expect(automation).toContain("style.opacity !== '0'");
