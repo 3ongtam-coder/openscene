@@ -1,4 +1,4 @@
-import { mkdtemp, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { createTimelineAssetRequestHandler } from '../src/main/timelineAssetResp
 import { TimelineIpcService } from '../src/main/timelineIpcService';
 import { speechPreviewUrl, videoPreviewUrl } from '../src/shared/mediaPlaybackUrls';
 import { createMp4MediaFixture, type Mp4MediaFixture } from './helpers/mediaFixtures';
+import { createSymlinkOrSkip } from './helpers/symlinkCapability';
 
 let mediaFixture: Mp4MediaFixture | undefined;
 
@@ -220,13 +221,13 @@ describe('timeline asset response', () => {
     });
   });
 
-  it('given a playback URL whose file becomes a symlink, when the protocol serves it, then serve-time validation rejects it', async () => {
+  it('given a playback URL whose file becomes a symlink, when the protocol serves it, then serve-time validation rejects it', async ({ skip }) => {
     await withPlaybackFixture(async ({ request, playbackPath, directory }) => {
       // Given
       const outsidePath = join(directory, 'outside.webm');
       await writeFile(outsidePath, Buffer.from([9, 9, 9, 9, 9, 9, 9, 9, 9, 9]));
       await rm(playbackPath);
-      await symlink(outsidePath, playbackPath);
+      if (!(await createSymlinkOrSkip(outsidePath, playbackPath, skip))) return;
 
       // When
       const response = await request();

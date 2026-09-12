@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -26,6 +26,7 @@ async function createVieNeuFixture(): Promise<{ workingDirectory: string; projec
   await mkdir(workingDirectory, { recursive: true });
   await writeFile(join(projectDirectory, 'apps', 'web_stream.py'), '# fixture');
   await writeFile(pythonPath, 'fixture');
+  if (process.platform !== 'win32') await chmod(pythonPath, 0o755);
   return { workingDirectory, projectDirectory, pythonPath };
 }
 

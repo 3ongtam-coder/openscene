@@ -1,4 +1,9 @@
 import AVFoundation
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 import CoreGraphics
 import CoreImage
 import CoreText
@@ -747,7 +752,8 @@ public enum VideoComposer {
         let padding = CGFloat(max(0, min(64, title.paddingPx)))
         let measured = attributed.boundingRect(
           with: CGSize(width: renderSize.width * 0.8, height: renderSize.height),
-          options: [.usesLineFragmentOrigin, .usesFontLeading]
+          options: [.usesLineFragmentOrigin, .usesFontLeading],
+          context: nil
         )
         let width = min(renderSize.width, ceil(measured.width) + padding * 2)
         let height = min(renderSize.height, ceil(measured.height) + padding * 2)

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,7 +27,7 @@ import {
 const runningJob: PersistedVideoGenerationJob = {
   id: 'video-job-recovery-01', provider: 'gemini_veo', mode: 'api', status: 'running',
   prompt: 'Private project prompt', operation: 'text_to_video', aspectRatio: '16:9', durationSeconds: 8,
-  modelId: 'veo-3.1-generate-preview', outputFilePath: 'C:\\private\\video-job-recovery-01.mp4',
+  modelId: 'veo-3.1-generate-preview', outputFilePath: resolve('private', 'video-job-recovery-01.mp4'),
   createdAt: '2026-09-10T05:00:00.000Z', updatedAt: '2026-09-10T05:01:00.000Z'
 };
 

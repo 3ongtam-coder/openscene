@@ -9,7 +9,7 @@ import { discoverFfmpeg } from '../src/main/ffmpegDiscovery';
 import { applyCaptionPreset } from '../src/shared/captionStyle';
 import { compileFfmpegTimeline } from '../src/shared/ffmpegTimelineCompiler';
 import { createSubtitleSidecar } from '../src/shared/subtitleDelivery';
-import { escapeFontPath, fontCandidates } from '../src/shared/titleFont';
+import { escapeFontPath, FILTER_LIST_ARGS, fontCandidates, supportsDrawtext } from '../src/shared/titleFont';
 import { DEFAULT_CLIP_EFFECTS, TIMELINE_SCHEMA_VERSION } from '../src/shared/timelineTypes';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +25,11 @@ describe('styled title FFmpeg render', () => {
   it('renders a real boxed bold caption without filter-graph errors', async () => {
     const runtime = await discoverFfmpeg({ environment: process.env, platform: process.platform });
     if (runtime.kind === 'unavailable') return;
+    const filterListing = await execFileAsync(runtime.executablePath, [...FILTER_LIST_ARGS]);
+    // The product performs this same capability preflight and refuses a title
+    // export with a precise message. Homebrew's standard FFmpeg build currently
+    // omits drawtext, while the Windows development build includes it.
+    if (!supportsDrawtext(`${filterListing.stdout}\n${filterListing.stderr}`)) return;
     const regular = await installedFont('regular');
     const bold = await installedFont('bold');
     if (regular === null || bold === null) return;
