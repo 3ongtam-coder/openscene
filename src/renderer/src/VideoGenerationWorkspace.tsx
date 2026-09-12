@@ -16,7 +16,16 @@ import {
   updateGenerationCandidate,
   type GenerationReviewResult
 } from '../../shared/generationReview';
-import { approvedWriterShots, applyWriterStyleLock } from '../../shared/writerPipeline';
+import { approvedWriterShots } from '../../shared/writerPipeline';
+import { compileVideoContinuityPrompt, stripVideoContinuityLocks, videoContinuityAvailability } from '../../shared/videoContinuity';
+import {
+  DEFAULT_VIDEO_CONTINUITY_CONTROLS,
+  VIDEO_CONTINUITY_CONTROL_KEYS,
+  parseVideoContinuityPreferences,
+  videoContinuityPreferencesStorageKey,
+  type VideoContinuityControlKey,
+  type VideoContinuityControls
+} from '../../shared/videoContinuitySettings';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
@@ -55,6 +64,27 @@ const CONTINUITY_LABELS: Readonly<Record<ContinuityReviewField, string>> = {
   boundaryMatch: 'Start / end boundary'
 };
 const REVIEW_VALUES: readonly Exclude<ContinuityReviewValue, 'unchecked'>[] = ['pass', 'warning', 'fail'];
+const CONTINUITY_CONTROL_DETAILS: Readonly<Record<VideoContinuityControlKey, {
+  readonly label: string;
+  readonly description: string;
+}>> = {
+  characterConsistency: {
+    label: 'Character consistency',
+    description: 'Pin Character Bible identity traits and auto-load approved character references when opening a shot.'
+  },
+  styleConsistency: {
+    label: 'Visual style lock',
+    description: 'Keep the approved palette, lighting, camera grammar, texture and forbidden changes.'
+  },
+  sceneConsistency: {
+    label: 'Scene continuity',
+    description: 'Keep the same setting, time of day, object layout and scene continuity notes.'
+  },
+  motionContinuity: {
+    label: 'Motion continuity',
+    description: 'Carry action, camera axis and screen direction forward from the previous Writer shot.'
+  }
+};
 
 type VideoInputSnapshot = {
   readonly operation: VideoOperation;
@@ -147,12 +177,16 @@ export function VideoGenerationWorkspace({
     ? aspectRatio
     : aspectRatioOptions[0] ?? '16:9';
   const [selectedStyle, setSelectedStyle] = useState<string>('Cinematic');
-  const effectiveStylePreset = loadedWriterShotId === '' ? selectedStyle : 'Writer Style Bible';
+  const [continuityControls, setContinuityControls] = useState<VideoContinuityControls>(DEFAULT_VIDEO_CONTINUITY_CONTROLS);
+  const continuityAvailability = videoContinuityAvailability(writerDocument, loadedWriterShotId);
+  const effectiveStylePreset = loadedWriterShotId !== '' && continuityControls.styleConsistency ? 'Writer Style Bible' : selectedStyle;
   // Image-to-video seed: the bytes travel inline, so no path reaches here.
   const [jobs, setJobs] = useState<readonly VideoGenerationJob[]>([]);
   const [jobInputs, setJobInputs] = useState<Readonly<Record<string, VideoInputSnapshot>>>({});
+  const [jobContinuityControls, setJobContinuityControls] = useState<Readonly<Record<string, VideoContinuityControls>>>({});
   const [candidateNotes, setCandidateNotes] = useState<Readonly<Record<string, string>>>({});
   const [loadedReferenceAssetIds, setLoadedReferenceAssetIds] = useState<readonly string[]>([]);
+  const [autoLoadedCharacterReferenceIds, setAutoLoadedCharacterReferenceIds] = useState<readonly string[]>([]);
   const [isChainingFrame, setIsChainingFrame] = useState(false);
   const documentRef = useRef<AiProjectDocument | null>(writerDocument ?? null);
   const candidateSaveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -175,6 +209,16 @@ export function VideoGenerationWorkspace({
   useEffect(() => {
     documentRef.current = writerDocument ?? null;
   }, [writerDocument]);
+
+  useEffect(() => {
+    try {
+      setContinuityControls(parseVideoContinuityPreferences(
+        window.localStorage.getItem(videoContinuityPreferencesStorageKey(projectId))
+      ));
+    } catch {
+      setContinuityControls(DEFAULT_VIDEO_CONTINUITY_CONTROLS);
+    }
+  }, [projectId]);
 
   useEffect(() => {
     void window.videoTool.getBrowserSessionStatuses().then((response) => {
@@ -257,6 +301,27 @@ export function VideoGenerationWorkspace({
     inFlightPollJobs.current.clear();
   }, []);
 
+  const toggleContinuityControl = (key: VideoContinuityControlKey): void => {
+    const next = { ...continuityControls, [key]: !continuityControls[key] };
+    setContinuityControls(next);
+    try {
+      window.localStorage.setItem(videoContinuityPreferencesStorageKey(projectId), JSON.stringify(next));
+    } catch {
+      // The controls still work for this session when storage is unavailable.
+    }
+    if (key === 'characterConsistency' && !next.characterConsistency && autoLoadedCharacterReferenceIds.length > 0) {
+      setReferenceImages([]);
+      setLoadedReferenceAssetIds((current) => current.filter((id) => !autoLoadedCharacterReferenceIds.includes(id)));
+      setAutoLoadedCharacterReferenceIds([]);
+      if (selectedOperation === 'reference_to_video') {
+        setSelectedOperation(isVideoOperationImplemented(videoModel.id, 'text_to_video') ? 'text_to_video' : selectedOperation);
+      }
+      setStatusMsg({ tone: 'neutral', text: 'Character consistency disabled; automatically attached Character Bible references were removed.' });
+    } else if (key === 'characterConsistency' && next.characterConsistency && loadedWriterShotId !== '') {
+      setStatusMsg({ tone: 'neutral', text: 'Character consistency enabled. Re-open the approved shot to auto-load its saved character references.' });
+    }
+  };
+
   /**
    * `overrides` is how a refined take is run: it carries the previous take's
    * own prompt, length, shape and style, so asking for one change does not
@@ -273,12 +338,14 @@ export function VideoGenerationWorkspace({
     readonly parentGenerationId?: string;
     readonly referenceAssetIds?: readonly string[];
     readonly mode?: ProviderExecutionMode;
+    readonly continuityControls?: VideoContinuityControls;
   }): Promise<void> => {
     const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
     const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
     const editablePrompt = overrides?.prompt ?? prompt;
+    const targetContinuityControls = overrides?.continuityControls ?? continuityControls;
     const promptText = targetWriterShotId !== '' && documentRef.current !== null
-      ? applyWriterStyleLock(editablePrompt, documentRef.current.styleBible)
+      ? compileVideoContinuityPrompt(editablePrompt, documentRef.current, targetWriterShotId, targetContinuityControls).prompt
       : editablePrompt;
     if (promptText.trim().length === 0 && candidateOperation !== 'motion_control') {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
@@ -358,6 +425,7 @@ export function VideoGenerationWorkspace({
         const job = response.value as VideoGenerationJob;
         setJobs((prev) => [job, ...prev]);
         setJobInputs((current) => ({ ...current, [job.id]: inputs }));
+        setJobContinuityControls((current) => ({ ...current, [job.id]: targetContinuityControls }));
         if (targetWriterShotId !== '') {
           const recorded = await persistCandidateChange((document) => addGenerationCandidate(document, {
             id: job.id,
@@ -373,6 +441,7 @@ export function VideoGenerationWorkspace({
                 ? loadedReferenceAssetIds
                 : []
             ),
+            continuityControls: targetContinuityControls,
             ...(overrides?.parentGenerationId === undefined ? {} : { parentGenerationId: overrides.parentGenerationId })
           }));
           if (!recorded) {
@@ -466,7 +535,7 @@ export function VideoGenerationWorkspace({
     setNote('');
     // Shown in the composer as well, so what was asked for is visible rather
     // than only implied by a new job appearing.
-    setPrompt(refined.prompt);
+    setPrompt(stripVideoContinuityLocks(refined.prompt));
     const sourceCandidate = documentRef.current?.generations.find((entry) => entry.id === job.id);
     void handleGenerate({
       prompt: refined.prompt,
@@ -476,6 +545,7 @@ export function VideoGenerationWorkspace({
       ...(job.stylePreset === undefined ? {} : { stylePreset: job.stylePreset }),
       mode: job.mode,
       inputs: jobInputs[job.id] ?? { operation: job.operation ?? 'text_to_video' },
+      continuityControls: sourceCandidate?.continuityControls ?? jobContinuityControls[job.id] ?? continuityControls,
       ...(sourceCandidate === undefined ? {} : {
         writerShotId: sourceCandidate.shotId,
         parentGenerationId: sourceCandidate.id,
@@ -493,11 +563,13 @@ export function VideoGenerationWorkspace({
     if (response.value === null) return;
     if (target === 'first') {
       setLoadedReferenceAssetIds([]);
+      setAutoLoadedCharacterReferenceIds([]);
       onReferenceImageChange(response.value);
     }
     else if (target === 'last') setLastFrame(response.value);
     else {
       setLoadedReferenceAssetIds([]);
+      setAutoLoadedCharacterReferenceIds([]);
       setReferenceImages((current) => current.length >= 3 ? current : [...current, response.value as ReferenceImageSelection]);
     }
   };
@@ -555,6 +627,7 @@ export function VideoGenerationWorkspace({
     }
     onReferenceImageChange(response.value);
     setLoadedReferenceAssetIds([reference.id]);
+    setAutoLoadedCharacterReferenceIds([]);
     setSelectedOperation('image_to_video');
     setStatusMsg({ tone: 'success', text: 'Saved storyboard or continuity image loaded as the first frame. Review it before generation.' });
   };
@@ -575,6 +648,7 @@ export function VideoGenerationWorkspace({
     setPrompt(shot.prompt);
     setDurationSeconds(shot.durationSeconds);
     setLoadedReferenceAssetIds([]);
+    setAutoLoadedCharacterReferenceIds([]);
     setReferenceImages([]);
     onReferenceImageChange(null);
 
@@ -592,7 +666,7 @@ export function VideoGenerationWorkspace({
     ).map((id) => current.referenceAssets.find((entry) => entry.id === id))
       .filter((entry): entry is NonNullable<typeof entry> => entry?.role === 'character')
       .slice(0, 3);
-    if (projectId && characterReferences.length > 0 && isVideoOperationImplemented(videoModel.id, 'reference_to_video')) {
+    if (continuityControls.characterConsistency && projectId && characterReferences.length > 0 && isVideoOperationImplemented(videoModel.id, 'reference_to_video')) {
       const loaded = await Promise.all(characterReferences.map(async (reference) => ({
         reference,
         response: await window.videoTool.aiGetProjectImageReference({ projectId, assetId: reference.assetId })
@@ -603,6 +677,7 @@ export function VideoGenerationWorkspace({
       if (available.length > 0) {
         setReferenceImages(available.map((entry) => entry.value));
         setLoadedReferenceAssetIds(available.map((entry) => entry.reference.id));
+        setAutoLoadedCharacterReferenceIds(available.map((entry) => entry.reference.id));
         setSelectedOperation('reference_to_video');
         setStatusMsg({ tone: 'success', text: `Shot loaded with ${available.length} persisted character reference(s). Review everything before generating.` });
         return;
@@ -650,6 +725,7 @@ export function VideoGenerationWorkspace({
       setPrompt(next.prompt);
       setDurationSeconds(next.durationSeconds);
       setLoadedReferenceAssetIds([referenceId]);
+      setAutoLoadedCharacterReferenceIds([]);
       onReferenceImageChange(extracted.value.reference);
       if (isVideoOperationImplemented(videoModel.id, 'image_to_video')) {
         setSelectedOperation('image_to_video');
@@ -744,7 +820,7 @@ export function VideoGenerationWorkspace({
 
         {selectedOperation !== 'motion_control' && <div className="studio-field">
           <span className="studio-field__label">Style</span>
-          {loadedWriterShotId !== '' && writerDocument !== null && writerDocument !== undefined
+          {loadedWriterShotId !== '' && writerDocument !== null && writerDocument !== undefined && continuityControls.styleConsistency
             ? <StatusCard tone="success">Writer Style Bible locked: {[...writerDocument.styleBible.palette, writerDocument.styleBible.lighting, writerDocument.styleBible.cameraGrammar, writerDocument.styleBible.texture].filter(Boolean).join(' · ') || 'approved prompt constraints'}.</StatusCard>
             : <div className="studio-chips" role="group" aria-label="Style preset">
             {STYLE_PRESETS.map((preset) => (
@@ -759,6 +835,40 @@ export function VideoGenerationWorkspace({
               </button>
             ))}
           </div>}
+        </div>}
+
+        {selectedOperation !== 'motion_control' && <div className="studio-field">
+          <span className="studio-field__label">Continuity controls</span>
+          <div className="studio-toggle-list">
+            {VIDEO_CONTINUITY_CONTROL_KEYS.map((key) => {
+              const available = loadedWriterShotId !== '' && continuityAvailability[key];
+              const detail = CONTINUITY_CONTROL_DETAILS[key];
+              return <div className={`studio-toggle-row${available ? '' : ' studio-toggle-row--disabled'}`} key={key}>
+                <span className="studio-toggle-row__copy">
+                  <span className="studio-toggle-row__name">{detail.label}</span>
+                  <span className="studio-toggle-row__description">{available
+                    ? detail.description
+                    : loadedWriterShotId === ''
+                      ? 'Load an approved Writer shot to use this control.'
+                      : key === 'motionContinuity'
+                        ? 'This is the first shot in its scene, so there is no previous motion to carry forward.'
+                        : `This Writer shot has no ${key === 'characterConsistency' ? 'Character Bible' : 'matching scene'} data.`}</span>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={continuityControls[key]}
+                  aria-label={`${detail.label}: ${continuityControls[key] ? 'on' : 'off'}`}
+                  disabled={!available}
+                  className={`settings-switch${continuityControls[key] ? ' settings-switch--on' : ''}`}
+                  onClick={() => toggleContinuityControl(key)}
+                >
+                  <span className="settings-switch__thumb" aria-hidden="true" />
+                </button>
+              </div>;
+            })}
+          </div>
+          <span className="studio-reference__empty">Enabled locks are compiled into the provider prompt and saved with each candidate. Visual reference images remain visible inputs.</span>
         </div>}
 
         {selectedOperation !== 'motion_control' && <div className="studio-field">
@@ -899,10 +1009,10 @@ export function VideoGenerationWorkspace({
                     <span className="studio-job__provider">{job.provider}</span>
                     <span className="studio-job__provider">{job.operation ?? 'text_to_video'}</span>
                   </div>
-                  <p className="studio-job__prompt">{originalOf(job.prompt)}</p>
-                  {revisionsOf(job.prompt).length > 0 && (
+                  <p className="studio-job__prompt">{originalOf(stripVideoContinuityLocks(job.prompt))}</p>
+                  {revisionsOf(stripVideoContinuityLocks(job.prompt)).length > 0 && (
                     <ol className="studio-job__revisions">
-                      {revisionsOf(job.prompt).map((revision) => (
+                      {revisionsOf(stripVideoContinuityLocks(job.prompt)).map((revision) => (
                         <li key={revision}>{revision}</li>
                       ))}
                     </ol>
@@ -968,7 +1078,13 @@ export function VideoGenerationWorkspace({
                       <span className="studio-job__provider">{candidate.modelId}</span>
                       <span className={`studio-candidate__decision studio-candidate__decision--${review.decision}`}>{review.decision}</span>
                     </div>
-                    <p className="studio-job__prompt">{originalOf(candidate.prompt)}</p>
+                    <p className="studio-job__prompt">{originalOf(stripVideoContinuityLocks(candidate.prompt))}</p>
+                    {candidate.continuityControls !== undefined && <p className="studio-reference__empty">
+                      Generation locks: {VIDEO_CONTINUITY_CONTROL_KEYS
+                        .filter((key) => candidate.continuityControls?.[key])
+                        .map((key) => CONTINUITY_CONTROL_DETAILS[key].label)
+                        .join(', ') || 'none'}.
+                    </p>}
                     {outputNames.length === 0
                       ? <p className="studio-reference__empty">Not imported. Import the completed job above before approval.</p>
                       : <p className="studio-reference__empty">Project asset: {outputNames.join(', ')}</p>}
@@ -1026,6 +1142,7 @@ export function VideoGenerationWorkspace({
             setWriterShotId(e.target.value);
             setLoadedWriterShotId('');
             setLoadedReferenceAssetIds([]);
+            setAutoLoadedCharacterReferenceIds([]);
             onReferenceImageChange(null);
           }}>
             <option value="">Choose a shot to load into the composer</option>

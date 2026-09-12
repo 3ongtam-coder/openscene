@@ -10,6 +10,7 @@ import {
 } from './aiProjectDomain';
 import type { VideoOperation } from './mediaCapabilityRegistry';
 import { approvedWriterShots } from './writerPipeline';
+import type { VideoContinuityControls } from './videoContinuitySettings';
 
 export function emptyContinuityReview(): ContinuityReview {
   return {
@@ -31,6 +32,7 @@ export type AddGenerationCandidateInput = {
   readonly createdAt: string;
   readonly parentGenerationId?: string;
   readonly referenceAssetIds?: readonly string[];
+  readonly continuityControls?: VideoContinuityControls;
 };
 
 export type GenerationReviewResult =
@@ -136,6 +138,7 @@ export function addGenerationCandidate(
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
     ...(input.parentGenerationId === undefined ? {} : { parentGenerationId: input.parentGenerationId }),
+    ...(input.continuityControls === undefined ? {} : { continuityControls: input.continuityControls }),
     review: { decision: 'pending', continuity: emptyContinuityReview(), notes: '' }
   };
   return {

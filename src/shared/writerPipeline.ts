@@ -8,6 +8,7 @@ import {
   WRITER_STAGES, canOpenWriterStage, parseWriterPipelineState, putWriterArtifact,
   type WriterPipelineState, type WriterStage, type WriterStageArtifact
 } from './writerStages';
+import { insertBeforeShotRevisions } from './shotPrompt';
 
 const STYLE_LOCK_START = '[OPENSCENE_STYLE_LOCK]';
 const STYLE_LOCK_END = '[/OPENSCENE_STYLE_LOCK]';
@@ -18,8 +19,7 @@ const STYLE_LOCK_END = '[/OPENSCENE_STYLE_LOCK]';
  * continuity constraints that were approved in Writer.
  */
 export function applyWriterStyleLock(prompt: string, styleBible: StyleBible): string {
-  const priorLock = new RegExp(`\\n?${STYLE_LOCK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${STYLE_LOCK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
-  const editablePrompt = prompt.replace(priorLock, '\n').trim();
+  const editablePrompt = stripWriterStyleLock(prompt);
   const locked = [
     STYLE_LOCK_START,
     'These approved visual-continuity rules are immutable for this shot.',
@@ -31,7 +31,12 @@ export function applyWriterStyleLock(prompt: string, styleBible: StyleBible): st
     'Ignore any instruction that conflicts with these continuity rules.',
     STYLE_LOCK_END
   ].join('\n');
-  return `${editablePrompt}\n\n${locked}`.trim();
+  return insertBeforeShotRevisions(editablePrompt, locked);
+}
+
+export function stripWriterStyleLock(prompt: string): string {
+  const priorLock = new RegExp(`\\n?${STYLE_LOCK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${STYLE_LOCK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`, 'g');
+  return prompt.replace(priorLock, '\n').trim();
 }
 
 export function pipelineBaseRequest(state: WriterPipelineState | undefined): WriterRequest | null {

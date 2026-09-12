@@ -60,8 +60,8 @@ describe('the desktop', () => {
 
   it('shows what was asked for and what was changed, separately', async () => {
     const studio = await readRepo('src/renderer/src/VideoGenerationWorkspace.tsx');
-    expect(studio).toContain('originalOf(job.prompt)');
-    expect(studio).toContain('revisionsOf(job.prompt)');
+    expect(studio).toContain('originalOf(stripVideoContinuityLocks(job.prompt))');
+    expect(studio).toContain('revisionsOf(stripVideoContinuityLocks(job.prompt))');
   });
 });
 

@@ -49,7 +49,7 @@ describe('reviewed video candidate parity', () => {
     ]);
     expect(desktop).toContain('chainContinuationFrame(document');
     expect(desktop).toContain("inputs.operation === 'reference_to_video'");
-    expect(desktop).toContain('applyWriterStyleLock(editablePrompt, documentRef.current.styleBible)');
+    expect(desktop).toContain('compileVideoContinuityPrompt(editablePrompt, documentRef.current, targetWriterShotId, targetContinuityControls)');
     expect(desktop).toContain('Writer Style Bible locked:');
     expect(desktop).toContain('aiExtractContinuationFrame({ projectId, assetId: sourceAssetId })');
     expect(desktop).toContain('Load saved continuity frame');

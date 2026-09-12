@@ -843,6 +843,54 @@ button {
   background: var(--surface-inset);
 }
 
+.studio-toggle-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.studio-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+}
+
+.studio-toggle-row--disabled {
+  opacity: 0.55;
+}
+
+.studio-toggle-row__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.studio-toggle-row__name {
+  color: var(--foreground);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.studio-toggle-row__description {
+  color: var(--text-weak);
+  font-size: var(--text-caption);
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .studio-toggle-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Image studio: the result is the point, so the preview gets real space rather
    than the 48px thumbnail the video studio uses for its reference seed. */
 .studio-image-result {
