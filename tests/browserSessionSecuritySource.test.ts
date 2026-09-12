@@ -22,6 +22,7 @@ describe('browser session security wiring', () => {
     expect(service).toContain('sandbox: true');
     expect(service).toContain('nodeIntegration: false');
     expect(service).toContain('devTools: false');
+    expect(service).toContain("clearStorageData({ storages: ['cookies'] })");
   });
 
   it('shows desktop controls while mobile clearly disables the unsupported lane', async () => {

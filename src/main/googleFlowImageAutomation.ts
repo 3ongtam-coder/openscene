@@ -3,6 +3,7 @@ import type { GoogleFlowImageModel } from '../shared/browserSession';
 
 const POLL_INTERVAL_MS = 1_000;
 const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
+const FLOW_PROJECT_RENAME_TIMEOUT_MS = 5_000;
 
 type RectangleWithText = {
   readonly rectangle: Rectangle;
@@ -76,8 +77,8 @@ function clickAt(webContents: WebContents, rectangle: Rectangle): void {
  * Flow. Account text, prompts, cookie values, and project content never leave
  * the isolated renderer.
  */
-async function readState(webContents: WebContents): Promise<AutomationState> {
-  return webContents.executeJavaScript(`(() => {
+export function buildGoogleFlowStateProbeScript(): string {
+  return `(() => {
     const visibleRect = (element) => {
       if (!(element instanceof HTMLElement)) return null;
       const style = window.getComputedStyle(element);
@@ -130,7 +131,7 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
       .filter(({ element, rectangle }) => {
         if (rectangle.width < 60 || rectangle.height < 30 || rectangle.width > window.innerWidth * 0.8) return false;
         const text = normalized(label(element));
-        return /new project|du an moi/.test(text) || /^\+\s*(new|du an)/.test(text);
+        return /new project|du an moi/.test(text) || /^\\+\\s*(new|du an)/.test(text);
       })
       .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
     const buttons = visible('button');
@@ -210,7 +211,7 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
       'input[autocomplete="one-time-code"]'
     ].join(','));
     const accountChallengePath = location.hostname === 'accounts.google.com'
-      && /\/challenge(?:\/|$)|\/signin\/v2\/challenge(?:\/|$)/i.test(location.pathname);
+      && /\\/challenge(?:\\/|$)|\\/signin\\/v2\\/challenge(?:\\/|$)/i.test(location.pathname);
     let actionRequired;
     if (challengeElement || accountChallengePath) {
       actionRequired = 'verification';
@@ -239,7 +240,11 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
       images,
       ...(actionRequired ? { actionRequired } : {})
     };
-  })()`, true) as Promise<AutomationState>;
+  })()`;
+}
+
+async function readState(webContents: WebContents): Promise<AutomationState> {
+  return webContents.executeJavaScript(buildGoogleFlowStateProbeScript(), true) as Promise<AutomationState>;
 }
 
 function normalizedLabel(value: string): string {
@@ -284,12 +289,14 @@ async function waitForProjectEditor(
     let state: AutomationState;
     try {
       state = await readState(webContents);
-    } catch {
+    } catch (error) {
       // Flow replaces its renderer frame while entering a project. A DOM read
       // during that hand-off can reject even though navigation is healthy.
       if (Date.now() - lastHeartbeat >= 10_000) {
         lastHeartbeat = Date.now();
-        onProject();
+        onProject({
+          stateReadError: error instanceof Error ? error.message.slice(0, 240) : 'Unknown DOM state error'
+        });
       }
       await delay(POLL_INTERVAL_MS);
       continue;
@@ -351,7 +358,9 @@ async function waitForProjectEditor(
 function isFlowProjectUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'https:' && parsed.hostname === 'labs.google' && /\/project\//.test(parsed.pathname);
+    return parsed.protocol === 'https:'
+      && (parsed.hostname === 'labs.google' || parsed.hostname === 'flow.google.com')
+      && /\/project\//.test(parsed.pathname);
   } catch {
     return false;
   }
@@ -519,7 +528,8 @@ export async function automateGoogleFlowImageGeneration(
     await rememberProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
   }
   if (projectResult.createdProject && input.projectName !== undefined) {
-    const renamed = await renameFlowProject(webContents, input.projectName, deadline);
+    const renameDeadline = Math.min(deadline, Date.now() + FLOW_PROJECT_RENAME_TIMEOUT_MS);
+    const renamed = await renameFlowProject(webContents, input.projectName, renameDeadline);
     input.onProgress?.('project', Date.now() - startedAt, {
       projectName: input.projectName,
       projectCreated: true,
