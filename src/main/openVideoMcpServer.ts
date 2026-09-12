@@ -10,6 +10,7 @@ import { cutNearest, removeTransitionAtCut, setTransitionAtCut } from '../shared
 import { clipDurationMs, clipTimelineEndMs } from '../shared/timelineClipGeometry';
 import { resolveTimelineTrackForAsset, trackAppendStartMs } from '../shared/timelineClipPlacement';
 import type { ExportIpcService } from './exportIpcService';
+import { METADATA_PRIVACY_MODES, type MetadataPrivacyMode } from '../shared/metadataPrivacy';
 import type { ResultAssetImportService } from './resultAssetImportService';
 import type { ProjectStore } from './projectStore';
 import { discoverFfmpeg } from './ffmpegDiscovery';
@@ -1175,21 +1176,23 @@ export class OpenVideoMcpServer {
 
   @McpTool({
     // No quality parameter: the export pipeline has no preset concept
-    // (StartExportJobInput carries only size and frame rate), and the tool used
+    // (StartExportJobInput carries size, frame rate and delivery policy), and the tool used
     // to accept one, drop it, and echo it back as if it had applied.
-    description: 'Start FFmpeg MP4 export for an OpenScene project timeline. Exports at the project settings; there is no quality preset.',
+    description: 'Start FFmpeg MP4 export for an OpenScene project timeline. Exports at the project settings; preserve_provenance is the safe metadata default and privacy_clean removes only an explicit personal-container-tag allowlist.',
     input: z.object({
-      projectId: z.string().min(1)
+      projectId: z.string().min(1),
+      metadataPrivacyMode: z.enum(METADATA_PRIVACY_MODES).optional()
     })
   })
-  async exportProjectVideo(params: { projectId: string }) {
+  async exportProjectVideo(params: { projectId: string; metadataPrivacyMode?: MetadataPrivacyMode }) {
     if (!this.exportIpcService) {
       return { success: false, error: 'Export service is not available.' };
     }
 
     try {
       const response = await this.exportIpcService.startExportJob({
-        projectId: params.projectId
+        projectId: params.projectId,
+        ...(params.metadataPrivacyMode === undefined ? {} : { metadataPrivacyMode: params.metadataPrivacyMode })
       });
 
       if (!response.ok) {

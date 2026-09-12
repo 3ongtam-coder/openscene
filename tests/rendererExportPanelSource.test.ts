@@ -13,6 +13,10 @@ describe('renderer export panel source contract', () => {
     expect(exportPanelSource).toContain('window.videoTool.revealExportResult');
     expect(exportPanelSource).toContain('Burn approved captions into MP4');
     expect(exportPanelSource).toContain('SUBTITLE_SIDECAR_FORMATS');
+    expect(exportPanelSource).toContain('METADATA_PRIVACY_MODES');
+    expect(exportPanelSource).toContain('metadataPrivacyPlan(mode).label');
+    expect(exportPanelSource).toContain('export-ID.provenance.json');
+    expect(exportPanelSource).toContain('Never targets Content Credentials/C2PA');
     expect(exportPanelSource).not.toContain('ipcRenderer');
   });
 

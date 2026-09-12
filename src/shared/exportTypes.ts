@@ -1,4 +1,5 @@
 import type { ExportReview } from './exportReview';
+import type { MetadataPrivacyMode } from './metadataPrivacy';
 import type { SubtitleDelivery } from './subtitleDelivery';
 
 export const EXPORT_DEFAULTS = {
@@ -14,6 +15,8 @@ export type StartExportJobInput = {
   readonly frameRate?: number;
   /** Absent preserves pre-caption export behavior: burn timeline captions and create no sidecar. */
   readonly subtitleDelivery?: SubtitleDelivery;
+  /** Absent preserves container metadata for backward compatibility. */
+  readonly metadataPrivacyMode?: MetadataPrivacyMode;
 };
 
 export type ExportJobActionInput = {
@@ -40,6 +43,7 @@ export type ExportJobState =
       readonly fileName: string;
       readonly fileSizeBytes: number;
       readonly subtitleFileName?: string;
+      readonly provenanceFileName?: string;
       /**
        * What the finished file turned out to be, read back off the file.
        *

@@ -15,6 +15,7 @@ import type {
   TransitionDescriptor
 } from './timelineTypes';
 import { resolvedTitleStyle, titleOutputPosition } from './captionStyle';
+import { DEFAULT_METADATA_PRIVACY_MODE, ffmpegMetadataPrivacyArgs, type MetadataPrivacyMode } from './metadataPrivacy';
 
 export type CompileFfmpegTimelineInput = {
   readonly timeline: TimelineDocument;
@@ -55,6 +56,8 @@ export type CompileFfmpegTimelineInput = {
   readonly width: number;
   readonly height: number;
   readonly frameRate: number;
+  /** Output-only container metadata policy; source files are never modified. */
+  readonly metadataPrivacyMode?: MetadataPrivacyMode;
 };
 
 export type CompiledFfmpegTimeline = {
@@ -456,6 +459,7 @@ export function compileFfmpegTimeline(input: CompileFfmpegTimelineInput): Compil
     '-preset', 'medium',
     '-crf', '20',
     '-pix_fmt', 'yuv420p',
+    ...ffmpegMetadataPrivacyArgs(input.metadataPrivacyMode ?? DEFAULT_METADATA_PRIVACY_MODE),
     '-movflags', '+faststart',
     '-t', seconds(durationMs),
     input.outputPath

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 
 import type { LocalExportJob } from '../../../shared/exportTypes';
+import { DEFAULT_METADATA_PRIVACY_MODE, METADATA_PRIVACY_MODES, metadataPrivacyPlan, type MetadataPrivacyMode } from '../../../shared/metadataPrivacy';
 import { automaticCaptionTitles, DEFAULT_SUBTITLE_DELIVERY, SUBTITLE_SIDECAR_FORMATS, type SubtitleDelivery, type SubtitleSidecarFormat } from '../../../shared/subtitleDelivery';
 import { outputFrameFor, type FramePreference } from '../../../shared/outputFrame';
 import {
@@ -43,10 +44,12 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
   const hasProject = project !== null;
   const [framePreference, setFramePreference] = useState<FramePreference>(DEFAULT_EXPORT_FRAME);
   const [subtitleDelivery, setSubtitleDelivery] = useState<SubtitleDelivery>(DEFAULT_SUBTITLE_DELIVERY);
+  const [metadataPrivacyMode, setMetadataPrivacyMode] = useState<MetadataPrivacyMode>(DEFAULT_METADATA_PRIVACY_MODE);
 
   useEffect(() => {
     setFramePreference(project === null ? DEFAULT_EXPORT_FRAME : readExportFramePreference(project.id));
     setSubtitleDelivery(DEFAULT_SUBTITLE_DELIVERY);
+    setMetadataPrivacyMode(DEFAULT_METADATA_PRIVACY_MODE);
   }, [project?.id]);
 
   const automaticCaptionCount = useMemo(
@@ -79,6 +82,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
     () => getExportActionState({ hasProject, hasUnsavedTimeline: editor.hasUnsavedTimeline, isStarting, job }),
     [editor.hasUnsavedTimeline, hasProject, isStarting, job]
   );
+  const privacyPlan = useMemo(() => metadataPrivacyPlan(metadataPrivacyMode), [metadataPrivacyMode]);
   const statusView = useMemo(
     () => getExportStatusView({
       hasProject,
@@ -117,7 +121,8 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
       // Sent explicitly: the main process falls back to the first video asset's
       // size, which is the answer this control exists to replace.
       ...(frame === null ? {} : { width: frame.width, height: frame.height }),
-      subtitleDelivery
+      subtitleDelivery,
+      metadataPrivacyMode
     });
     setIsStarting(false);
     if (response.ok) {
@@ -125,7 +130,7 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
       return;
     }
     setUnavailableReason(errorMessage(response.error));
-  }, [actionState.canStart, frame, project, subtitleDelivery]);
+  }, [actionState.canStart, frame, metadataPrivacyMode, project, subtitleDelivery]);
 
   const cancelExport = useCallback(async (): Promise<void> => {
     if (job === null || !actionState.canCancel) return;
@@ -220,6 +225,23 @@ export function ExportPanel({ editor }: ExportPanelProps): ReactElement {
               </select>
             </label>
             <span>Sidecars contain automatic captions only; manual timeline titles remain in the MP4.</span>
+          </fieldset>
+          <fieldset className="export-panel__privacy" disabled={!hasProject || isStarting || actionState.canCancel}>
+            <legend>Metadata and provenance</legend>
+            <label htmlFor="export-metadata-privacy">
+              Delivery preset
+              <select id="export-metadata-privacy" value={metadataPrivacyMode}
+                onChange={(event) => setMetadataPrivacyMode(event.target.value as MetadataPrivacyMode)}>
+                {METADATA_PRIVACY_MODES.map((mode) => <option key={mode} value={mode}>{metadataPrivacyPlan(mode).label}</option>)}
+              </select>
+            </label>
+            <span>{privacyPlan.summary}</span>
+            {privacyPlan.removedFields.length > 0 && <details>
+              <summary>Before/after plan: clear {privacyPlan.removedFields.length} allowlisted personal tags</summary>
+              <p>{privacyPlan.removedFields.map((field) => field.label).join(', ')}.</p>
+            </details>}
+            <span>Always writes an export-ID.provenance.json manifest with the MP4 checksum and project revision. It contains no prompts, credentials, rights-note text or local paths.</span>
+            <span>Never targets Content Credentials/C2PA, SynthID, required provider labels or visible watermarks.</span>
           </fieldset>
           <div className="export-popover__actions" role="toolbar" aria-label="MP4 export actions">
             <Button variant="primary" onClick={() => void startExport()} disabled={!actionState.canStart || isStarting}>Export MP4</Button>

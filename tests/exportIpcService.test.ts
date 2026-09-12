@@ -113,7 +113,9 @@ describe('export IPC service', () => {
     await Promise.all(backgroundTasks);
 
     const completed = await service.getExportJob({ jobId: 'export_01' });
-    expect(completed).toMatchObject({ ok: true, value: { state: { kind: 'completed', fileName: 'export_01.mp4' } } });
+    expect(completed).toMatchObject({ ok: true, value: { state: {
+      kind: 'completed', fileName: 'export_01.mp4', provenanceFileName: 'export_01.provenance.json'
+    } } });
     expect(JSON.stringify(completed)).not.toContain(root);
     expect(processInputs[0]?.args).not.toContain(sourcePath);
     expect(processInputs[0]?.args.some((argument) => argument.includes('.stage-export_01-'))).toBe(true);
@@ -121,6 +123,44 @@ describe('export IPC service', () => {
     await expect(service.revealExportResult({ jobId: 'export_01' })).resolves.toEqual({ ok: true, value: { revealed: true } });
     expect(opened.map((path) => basename(path))).toEqual(['export_01.mp4']);
     expect(revealed.map((path) => basename(path))).toEqual(['export_01.mp4']);
+    const provenance = JSON.parse(await readFile(join(root, 'exports', 'export_01.provenance.json'), 'utf8')) as {
+      delivery: { output: { sha256: string }; metadataPrivacyMode: string };
+    };
+    expect(provenance.delivery.output.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(provenance.delivery.metadataPrivacyMode).toBe('preserve_provenance');
+  });
+
+  it('passes the selected Privacy Clean allowlist to FFmpeg without targeting provenance tags', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const processInputs: StartFfmpegExportProcessInput[] = [];
+    const service = new ExportIpcService({
+      projects: { open: async () => SNAPSHOT },
+      assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs: new ExportJobStore({ createId: () => 'export_private' }),
+      exportsRoot: join(root, 'exports'),
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input) => {
+        processInputs.push(input);
+        return { completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined };
+      },
+      runInBackground: (task) => backgroundTasks.push(task()),
+      now: () => new Date('2026-09-10T03:00:00.000Z')
+    });
+
+    await service.startExportJob({ projectId: SNAPSHOT.id, metadataPrivacyMode: 'privacy_clean' });
+    await Promise.all(backgroundTasks);
+
+    expect(processInputs[0]?.args).toContain('location=');
+    expect(processInputs[0]?.args).toContain('author=');
+    expect(processInputs[0]?.args).not.toContain('copyright=');
+    const manifest = JSON.parse(await readFile(join(root, 'exports', 'export_private.provenance.json'), 'utf8')) as {
+      delivery: { exportedAt: string; removedContainerMetadataKeys: string[] };
+    };
+    expect(manifest.delivery.exportedAt).toBe('2026-09-10T03:00:00.000Z');
+    expect(manifest.delivery.removedContainerMetadataKeys).toContain('location');
   });
 
   it('writes a selected sidecar after the MP4 while leaving automatic captions out of burn-in', async () => {
@@ -198,6 +238,30 @@ describe('export IPC service', () => {
     await expect(service.getExportJob({ jobId: 'export_collision' })).resolves.toMatchObject({ ok: true, value: { state: { kind: 'failed' } } });
     await expect(access(join(exportsRoot, 'export_collision.mp4'))).rejects.toThrow();
     expect(await readFile(join(exportsRoot, 'export_collision.srt'), 'utf8')).toBe('keep me');
+  });
+
+  it('fails closed, removes its MP4, and preserves a colliding provenance file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const exportsRoot = join(root, 'exports');
+    await mkdir(exportsRoot);
+    await writeFile(join(exportsRoot, 'export_provenance_collision.provenance.json'), 'keep me');
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const service = new ExportIpcService({
+      projects: { open: async () => SNAPSHOT }, assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs: new ExportJobStore({ createId: () => 'export_provenance_collision' }), exportsRoot,
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input) => ({ completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined }),
+      runInBackground: (task) => backgroundTasks.push(task())
+    });
+
+    await service.startExportJob({ projectId: SNAPSHOT.id });
+    await Promise.all(backgroundTasks);
+
+    await expect(service.getExportJob({ jobId: 'export_provenance_collision' })).resolves.toMatchObject({ ok: true, value: { state: { kind: 'failed' } } });
+    await expect(access(join(exportsRoot, 'export_provenance_collision.mp4'))).rejects.toThrow();
+    expect(await readFile(join(exportsRoot, 'export_provenance_collision.provenance.json'), 'utf8')).toBe('keep me');
   });
 
   it('cancels a running job and removes its partial output', async () => {
