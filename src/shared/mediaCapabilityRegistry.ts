@@ -32,9 +32,9 @@ export type VideoOperationConstraints = {
 };
 
 export type VideoProviderBinding = {
-  readonly adapterId: 'google_veo' | 'google_omni' | 'openai_sora' | 'runway' | 'luma' | 'comfyui_wan';
+  readonly adapterId: 'google_veo' | 'google_omni' | 'grok_imagine_browser' | 'openai_sora' | 'runway' | 'luma' | 'comfyui_wan';
   readonly credentialKey?: 'geminiApiKey' | 'openaiApiKey' | 'runwayApiKey' | 'lumaApiKey';
-  readonly seamProviderId: 'gemini_veo' | 'gemini_omni' | 'openai_sora' | 'runway_gen4' | 'luma_dream' | 'comfyui_wan';
+  readonly seamProviderId: 'gemini_veo' | 'gemini_omni' | 'grok_imagine' | 'openai_sora' | 'runway_gen4' | 'luma_dream' | 'comfyui_wan';
 };
 
 export type VideoModelCapabilities = {
@@ -71,6 +71,9 @@ const GOOGLE_BINDING: VideoProviderBinding = {
 };
 const GOOGLE_OMNI_BINDING: VideoProviderBinding = {
   adapterId: 'google_omni', credentialKey: 'geminiApiKey', seamProviderId: 'gemini_omni'
+};
+const GROK_IMAGINE_BROWSER_BINDING: VideoProviderBinding = {
+  adapterId: 'grok_imagine_browser', seamProviderId: 'grok_imagine'
 };
 const OPENAI_BINDING: VideoProviderBinding = {
   adapterId: 'openai_sora', credentialKey: 'openaiApiKey', seamProviderId: 'openai_sora'
@@ -294,11 +297,13 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
     label: 'Grok Imagine Video 1.5', description: 'xAI text, image, and multi-reference video generation.',
     sourceUrls: [XAI_VIDEO_SOURCE],
     operations: {
-      text_to_video: operation(range(1, 15), ALL_APP_RATIOS, ['480p', '720p', '1080p'], true),
-      image_to_video: operation(range(1, 15), ALL_APP_RATIOS, ['480p', '720p', '1080p'], true, { minReferenceImages: 1, maxReferenceImages: 1 }),
+      text_to_video: operation([6, 10, 15], ALL_APP_RATIOS, ['480p'], true),
+      image_to_video: operation([6, 10, 15], ALL_APP_RATIOS, ['480p'], true, { minReferenceImages: 1, maxReferenceImages: 1 }),
       reference_to_video: operation(range(1, 15), ALL_APP_RATIOS, ['480p', '720p'], true, { minReferenceImages: 1 })
     },
-    implemented: [], unavailableReason: 'The xAI API adapter is deferred; Grok browser-session smoke testing is tracked separately.'
+    binding: GROK_IMAGINE_BROWSER_BINDING,
+    implemented: ['text_to_video', 'image_to_video'],
+    unavailableReason: 'Grok Imagine runs through the signed-in browser lane in this build; reference, edit, and extend remain unavailable until their public UI controls are verified.'
   }),
   model({
     modelId: 'grok-imagine-video', providerId: 'xai', providerLabel: 'xAI Grok Imagine',

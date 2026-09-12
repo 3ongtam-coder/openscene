@@ -431,11 +431,11 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     providerId: 'xai',
     label: 'Grok Imagine Video 1.5',
     providerLabel: 'xAI Grok Imagine',
-    description: 'xAI text, image, and reference-to-video generation.',
+    description: 'Desktop browser-session text/image-to-video using the signed-in Grok Imagine UI.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: false,
-    unavailableReason: 'The xAI API adapter is deferred; Grok browser-session testing is tracked separately.'
+    available: true,
+    availableOn: ['desktop']
   },
   {
     id: 'grok-imagine-video',
@@ -607,6 +607,17 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     executionPath: 'api',
     domains: ['image-generation'],
     available: true
+  },
+  {
+    id: 'grok-imagine-image',
+    providerId: 'xai',
+    label: 'Grok Imagine Image (signed-in web)',
+    providerLabel: 'xAI Grok Imagine',
+    description: 'Desktop browser-session image generation through the signed-in Grok Imagine UI.',
+    executionPath: 'api',
+    domains: ['image-generation'],
+    available: true,
+    availableOn: ['desktop']
   },
   {
     id: 'seedream-4-0-250828',

@@ -98,8 +98,12 @@ const llmPromptRouter = new LlmPromptRouter({
   chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
 });
 setAiJobManagerCredentialStore(credentialStore);
-setAiJobManagerBrowserImageGenerator((input) => browserSessionService.generateGoogleFlowImage(input));
-setAiJobManagerBrowserVideoGenerator((input) => browserSessionService.generateGoogleFlowVideo(input));
+setAiJobManagerBrowserImageGenerator((input) => input.modelId === 'grok-imagine-image'
+  ? browserSessionService.generateGrokImagineImage(input)
+  : browserSessionService.generateGoogleFlowImage(input));
+setAiJobManagerBrowserVideoGenerator((input) => input.modelId === 'grok-imagine-video-1.5'
+  ? browserSessionService.generateGrokImagineVideo(input)
+  : browserSessionService.generateGoogleFlowVideo(input));
 const managedVieNeuRuntime = new ManagedVieNeuRuntime({ workingDirectory: process.cwd() });
 setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 /*

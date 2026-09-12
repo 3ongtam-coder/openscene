@@ -138,8 +138,10 @@ export function VideoGenerationWorkspace({
   const { selectedModel } = useAiDomainModel();
   const videoModel = selectedModel('video-generation');
   const flowVideoModel = googleFlowVideoModelFor(videoModel.id);
+  const grokImagineBrowser = videoModel.id === 'grok-imagine-video-1.5';
+  const browserSessionSupported = flowVideoModel !== null || grokImagineBrowser;
   const [generationMode, setGenerationMode] = useState<ProviderExecutionMode>(
-    flowVideoModel === null ? videoModel.executionPath : 'browser_session'
+    browserSessionSupported ? 'browser_session' : videoModel.executionPath
   );
   const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const { importAiResult, placeAiAssetOnTimeline, assembleApprovedWriterShots } = useProjectResultImport();
@@ -168,9 +170,13 @@ export function VideoGenerationWorkspace({
     ?? getVideoOperationConstraints(videoModel.id, 'text_to_video');
   const durationOptions = generationMode === 'browser_session' && flowVideoModel !== null
     ? googleFlowVideoDurationOptions(flowVideoModel)
+    : generationMode === 'browser_session' && grokImagineBrowser
+      ? [6, 10, 15]
     : operationConstraints?.durationSeconds ?? [4, 8];
   const aspectRatioOptions = generationMode === 'browser_session' && flowVideoModel !== null
     ? ['16:9', '9:16'] as const
+    : generationMode === 'browser_session' && grokImagineBrowser
+      ? ['16:9', '9:16', '1:1'] as const
     : operationConstraints?.aspectRatios ?? ['16:9', '9:16'];
   // Switching engines keeps the chosen length when valid, else the closest option.
   const effectiveDuration = durationOptions.includes(durationSeconds)
@@ -229,14 +235,15 @@ export function VideoGenerationWorkspace({
 
   useEffect(() => {
     void window.videoTool.getBrowserSessionStatuses().then((response) => {
-      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === (grokImagineBrowser ? 'grok' : 'gemini')) ?? null);
     });
-  }, []);
+  }, [grokImagineBrowser]);
 
   useEffect(() => {
     if (previousVideoModelId.current === videoModel.id) return;
     previousVideoModelId.current = videoModel.id;
-    setGenerationMode(googleFlowVideoModelFor(videoModel.id) === null ? videoModel.executionPath : 'browser_session');
+    setGenerationMode(videoModel.id === 'grok-imagine-video-1.5' || googleFlowVideoModelFor(videoModel.id) !== null ? 'browser_session' : videoModel.executionPath);
+    setSelectedOperation('text_to_video');
   }, [videoModel.id, videoModel.executionPath]);
 
   const persistCandidateChange = async (
@@ -495,8 +502,8 @@ export function VideoGenerationWorkspace({
     };
     const targetModelId = overrides?.modelId ?? videoModel.id;
     const targetGenerationMode = overrides?.mode ?? generationMode;
-    if (targetGenerationMode === 'browser_session' && googleFlowVideoModelFor(targetModelId) === null) {
-      setStatusMsg({ text: 'The selected model has no exact counterpart in Google Flow. Choose API key or a supported Flow model.', tone: 'warning' });
+    if (targetGenerationMode === 'browser_session' && googleFlowVideoModelFor(targetModelId) === null && targetModelId !== 'grok-imagine-video-1.5') {
+      setStatusMsg({ text: 'The selected model has no exact counterpart in the signed-in browser UI. Choose API key or a supported browser model.', tone: 'warning' });
       return;
     }
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
@@ -530,7 +537,7 @@ export function VideoGenerationWorkspace({
     setIsGenerating(true);
     setStatusMsg({
       text: targetGenerationMode === 'browser_session'
-        ? flowWindowVisible ? 'Opening the signed-in Google Flow windowâ€¦' : 'Starting the hidden signed-in Google Flow video workerâ€¦'
+        ? flowWindowVisible ? `Opening the signed-in ${grokImagineBrowser ? 'Grok Imagine' : 'Google Flow'} window…` : `Starting the hidden signed-in ${grokImagineBrowser ? 'Grok Imagine' : 'Google Flow'} video worker…`
         : `Submitting ${videoModel.providerLabel} ${targetGenerationMode === 'local' ? 'worker' : 'cloud'} job...`,
       tone: 'neutral'
     });
@@ -822,14 +829,14 @@ export function VideoGenerationWorkspace({
           <h2 className="studio-surface__title-label" id="video-generation-title">Video Generation</h2>
           {/* The picker beside it already names the model and provider. */}
           <span className="studio-surface__title-meta">
-            {generationMode === 'browser_session' ? 'Signed-in Google Flow worker' : 'Cloud + user-managed local generation'}
+            {generationMode === 'browser_session' ? `Signed-in ${grokImagineBrowser ? 'Grok Imagine' : 'Google Flow'} worker` : 'Cloud + user-managed local generation'}
           </span>
         </div>
         <DomainModelPicker
           domain="video-generation"
           ariaLabel="Video model"
           linkedModelIds={flowSession?.kind === 'stored'
-            ? ['gemini-omni-1.1-flash', 'veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview']
+            ? ['gemini-omni-1.1-flash', 'veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview', 'grok-imagine-video-1.5']
             : []}
         />
       </header>
@@ -846,21 +853,22 @@ export function VideoGenerationWorkspace({
             onGenerateStoryboardImage={(shotId) => onGenerateProductionImage({ kind: 'storyboard', shotId }, effectiveAspectRatio)}
             onAssemble={assembleApprovedWriterShots}
           />}
-        {flowVideoModel !== null && (
+        {browserSessionSupported && (
           <div className="studio-field">
             <span className="studio-field__label">Connection</span>
-            <div className="studio-chips" role="group" aria-label="Google Flow video connection mode">
+            <div className="studio-chips" role="group" aria-label={`${grokImagineBrowser ? 'Grok Imagine' : 'Google Flow'} video connection mode`}>
               <button
                 type="button"
                 aria-pressed={generationMode === 'browser_session'}
                 className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
                 onClick={() => setGenerationMode('browser_session')}
               >
-                Google Flow session
+                {grokImagineBrowser ? 'Grok Imagine session' : 'Google Flow session'}
               </button>
               <button
                 type="button"
                 aria-pressed={generationMode === 'api'}
+                disabled={grokImagineBrowser}
                 className={`studio-chip${generationMode === 'api' ? ' studio-chip--selected' : ''}`}
                 onClick={() => setGenerationMode('api')}
               >

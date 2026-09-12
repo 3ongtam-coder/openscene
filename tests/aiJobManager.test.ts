@@ -30,7 +30,7 @@ describe('AI Job Manager and cloud provider seams', () => {
     // Aleph edits a source video this build does not send, so job creation
     // refuses all three up front. Runway and Luma moved out of this list when
     // their adapters landed.
-    for (const modelId of ['kling-v2.5-turbo', 'minimax-hailuo-02', 'aleph2', 'grok-imagine-video-1.5', 'veo-3.0-generate-001', 'veo-3.0-fast-generate-001']) {
+    for (const modelId of ['kling-v2.5-turbo', 'minimax-hailuo-02', 'aleph2', 'veo-3.0-generate-001', 'veo-3.0-fast-generate-001']) {
       await expect(createVideoGenerationJob({
         prompt: `Test prompt for ${modelId}`,
         aspectRatio: '16:9',
@@ -206,6 +206,29 @@ describe('AI Job Manager and cloud provider seams', () => {
     }
   }, 10_000);
 
+  it('routes Grok Imagine image and video jobs through the signed-in browser seam', async () => {
+    const generatedPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const generatedMp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+    const imageGenerate = vi.fn(async () => ({ bytes: generatedPng, mimeType: 'image/png' as const, providerJobId: 'grok-image-test' }));
+    const videoGenerate = vi.fn(async () => ({ bytes: generatedMp4, providerJobId: 'grok-video-test' }));
+    setAiJobManagerBrowserImageGenerator(imageGenerate);
+    setAiJobManagerBrowserVideoGenerator(videoGenerate);
+    try {
+      const imageJob = await createImageGenerationJob({ prompt: 'A fox', aspectRatio: '1:1', modelId: 'grok-imagine-image' });
+      const videoJob = await createVideoGenerationJob({ prompt: 'A fox runs', aspectRatio: '16:9', durationSeconds: 6, modelId: 'grok-imagine-video-1.5' });
+      expect(imageJob).toMatchObject({ mode: 'browser_session', provider: 'grok_imagine' });
+      expect(videoJob).toMatchObject({ mode: 'browser_session', provider: 'grok_imagine' });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(imageGenerate).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-imagine-image', showBrowserWindow: true }));
+      expect(videoGenerate).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-imagine-video-1.5', operation: 'text_to_video', durationSeconds: 6 }));
+      expect(getImageGenerationJob(imageJob.id)?.status).toBe('completed');
+      expect(getVideoGenerationJob(videoJob.id)?.status).toBe('completed');
+    } finally {
+      setAiJobManagerBrowserImageGenerator(undefined);
+      setAiJobManagerBrowserVideoGenerator(undefined);
+    }
+  }, 10_000);
+
   it('rejects video models and controls without an exact Flow counterpart before queuing', async () => {
     await expect(createVideoGenerationJob({
       prompt: 'Unsupported Flow model', aspectRatio: '16:9', durationSeconds: 8,
@@ -218,7 +241,7 @@ describe('AI Job Manager and cloud provider seams', () => {
     await expect(createVideoGenerationJob({
       prompt: 'Wrong provider', aspectRatio: '16:9', durationSeconds: 4,
       modelId: 'sora-2', mode: 'browser_session'
-    })).rejects.toThrow(/available only for Google models/);
+    })).rejects.toThrow(/explicitly supported Google Flow or Grok Imagine/);
   });
 
   it('does not let a non-Gemini model masquerade as a browser-session job', async () => {
@@ -227,7 +250,7 @@ describe('AI Job Manager and cloud provider seams', () => {
       aspectRatio: '1:1',
       modelId: 'gpt-image-1',
       mode: 'browser_session'
-    })).rejects.toThrow('available only for Google models routed through Flow');
+    })).rejects.toThrow('explicitly supported Google Flow or Grok Imagine');
   });
 
   it('rejects invalid model controls before a job or provider call is queued', async () => {

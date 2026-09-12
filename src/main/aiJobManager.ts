@@ -272,6 +272,7 @@ type CloudProviderResult =
 const VIDEO_PROVIDER_LABELS: Record<VideoGenerationProviderId, string> = {
   gemini_veo: 'Google Veo',
   gemini_omni: 'Google Gemini Omni',
+  grok_imagine: 'xAI Grok Imagine',
   openai_sora: 'OpenAI Sora',
   runway_gen4: 'Runway',
   kling_v3: 'Kling',
@@ -284,6 +285,7 @@ const IMAGE_PROVIDER_LABELS: Record<ImageGenerationProviderId, string> = {
   openai_images: 'OpenAI Images',
   google_imagen: 'Google Imagen (legacy)',
   google_nano_banana: 'Google Nano Banana',
+  grok_imagine: 'xAI Grok Imagine',
   byteplus_seedream: 'BytePlus Seedream',
   stability_image: 'Stability AI',
   flux_image: 'Black Forest Labs',
@@ -293,6 +295,7 @@ const IMAGE_PROVIDER_LABELS: Record<ImageGenerationProviderId, string> = {
 const IMAGE_MODEL_PROVIDERS: Record<string, { seam: ImageGenerationProviderId; credentialKey: string }> = {
   openai: { seam: 'openai_images', credentialKey: 'openaiApiKey' },
   google_gemini: { seam: 'google_nano_banana', credentialKey: 'geminiApiKey' },
+  xai: { seam: 'grok_imagine', credentialKey: 'xaiApiKey' },
   byteplus: { seam: 'byteplus_seedream', credentialKey: 'bytePlusApiKey' },
   stability: { seam: 'stability_image', credentialKey: 'stabilityApiKey' },
   black_forest_labs: { seam: 'flux_image', credentialKey: 'blackForestLabsApiKey' },
@@ -452,23 +455,26 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   const constraints = getVideoOperationConstraints(modelId, operation);
   const durationSeconds = request.durationSeconds ?? constraints?.durationSeconds[0] ?? 4;
   const aspectRatio = request.aspectRatio ?? constraints?.aspectRatios[0] ?? '16:9';
-  const mode = request.mode ?? model.executionPath;
+  const mode = request.mode ?? (model.providerId === 'xai' ? 'browser_session' : model.executionPath);
   if (mode === 'browser_session') {
-    if (model.providerId !== 'google_gemini') {
-      throw new Error('Browser-session video generation is available only for Google models routed through Flow.');
+    const flowModel = model.providerId === 'google_gemini' ? googleFlowVideoModelFor(modelId) : null;
+    if (model.providerId === 'google_gemini') {
+      if (flowModel === null) {
+        throw new Error(`${model.label} has no exact counterpart in the current Google Flow video menu. Use the API lane instead.`);
+      }
+    } else if (!(model.providerId === 'xai' && providerMapping.adapterId === 'grok_imagine_browser')) {
+      throw new Error('Browser-session video generation is available only for an explicitly supported Google Flow or Grok Imagine model.');
     }
-    const flowModel = googleFlowVideoModelFor(modelId);
-    if (flowModel === null) {
-      throw new Error(`${model.label} has no exact counterpart in the current Google Flow video menu. Use the API lane instead.`);
-    }
-    if (!['text_to_video', 'image_to_video', 'reference_to_video', 'start_end'].includes(operation)) {
-      throw new Error(`Google Flow browser-session video does not support ${operation}. Use the matching API or local worker.`);
-    }
-    if (!['16:9', '9:16'].includes(aspectRatio)) {
-      throw new Error('Google Flow browser-session video supports only 16:9 or 9:16.');
-    }
-    if (!googleFlowVideoDurationOptions(flowModel).includes(durationSeconds)) {
-      throw new Error(`${model.label} accepts ${googleFlowVideoDurationOptions(flowModel).join(', ')} second clips through Google Flow.`);
+    if (model.providerId === 'google_gemini') {
+      if (!['text_to_video', 'image_to_video', 'reference_to_video', 'start_end'].includes(operation)) {
+        throw new Error(`Google Flow browser-session video does not support ${operation}. Use the matching API or local worker.`);
+      }
+      if (!['16:9', '9:16'].includes(aspectRatio)) {
+        throw new Error('Google Flow browser-session video supports only 16:9 or 9:16.');
+      }
+      if (!googleFlowVideoDurationOptions(flowModel!).includes(durationSeconds)) {
+        throw new Error(`${model.label} accepts ${googleFlowVideoDurationOptions(flowModel!).join(', ')} second clips through Google Flow.`);
+      }
     }
   }
   if (mode === 'local' && providerMapping.adapterId !== 'comfyui_wan') {
@@ -548,7 +554,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       logVideoJob(id, 'provider.request.started', { provider: VIDEO_PROVIDER_LABELS[provider] });
       let cloudResult: CloudProviderResult;
       if (mode === 'browser_session') {
-        if (activeBrowserVideoGenerator === undefined) throw new Error('Google Flow browser-session video generation is unavailable in this runtime.');
+        if (activeBrowserVideoGenerator === undefined) throw new Error('Signed-in browser-session video generation is unavailable in this runtime.');
         const generated = await activeBrowserVideoGenerator({
           modelId,
           prompt: request.prompt,
@@ -642,12 +648,12 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   const model = resolveGenerationModel('image-generation', request.modelId);
   const providerMapping = IMAGE_MODEL_PROVIDERS[model.providerId];
   const provider: ImageGenerationProviderId = providerMapping?.seam ?? 'openai_images';
-  const mode = request.mode ?? 'api';
+  const mode = request.mode ?? (model.providerId === 'xai' ? 'browser_session' : 'api');
   if (mode === 'local') {
     throw new Error('No local image generation adapter is configured for this model.');
   }
-  if (mode === 'browser_session' && model.providerId !== 'google_gemini') {
-    throw new Error('Browser-session image generation is available only for Google models routed through Flow.');
+  if (mode === 'browser_session' && model.providerId !== 'google_gemini' && model.providerId !== 'xai') {
+    throw new Error('Browser-session image generation is available only for an explicitly supported Google Flow or Grok Imagine model.');
   }
   // One image per job, which is what this seam creates.
   const estimate = estimateImageCost({ modelId: model.id, imageCount: 1 });
@@ -690,7 +696,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
       let image: GeneratedImage;
       if (mode === 'browser_session') {
         if (activeBrowserImageGenerator === undefined) {
-          throw new Error('Google Flow browser-session image generation is unavailable in this runtime.');
+          throw new Error('Signed-in browser-session image generation is unavailable in this runtime.');
         }
         logImageJob(id, 'browser.request.started');
         image = await activeBrowserImageGenerator({

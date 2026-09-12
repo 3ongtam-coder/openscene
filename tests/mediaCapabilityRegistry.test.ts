@@ -38,14 +38,16 @@ describe('versioned media capability registry', () => {
     });
   });
 
-  it('lists current xAI capabilities without pretending the deferred adapter runs', () => {
+  it('lists current xAI capabilities with an explicitly scoped signed-in browser lane', () => {
     const grok = getVideoModelCapabilities('grok-imagine-video-1.5');
     expect(grok?.providerId).toBe('xai');
     expect(Object.keys(grok?.operations ?? {})).toEqual(['text_to_video', 'image_to_video', 'reference_to_video']);
-    expect(grok?.operations.text_to_video?.resolutions).toEqual(['480p', '720p', '1080p']);
-    expect(grok?.implemented).toEqual([]);
+    expect(grok?.operations.text_to_video?.resolutions).toEqual(['480p']);
+    expect(grok?.implemented).toEqual(['text_to_video', 'image_to_video']);
     expect(grok?.sourceUrls).toContain('https://docs.x.ai/developers/model-capabilities/video/generation');
-    expect(getVideoProviderBinding(grok!.modelId)).toBeUndefined();
+    expect(getVideoProviderBinding(grok!.modelId)).toEqual({
+      adapterId: 'grok_imagine_browser', seamProviderId: 'grok_imagine'
+    });
   });
 
   it('validates every constraint before execution and distinguishes not implemented', () => {

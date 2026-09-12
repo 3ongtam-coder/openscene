@@ -1,12 +1,13 @@
 import type { MotionControlMode } from './comfyUiMotion';
 
-export type VideoGenerationProviderId = 'gemini_veo' | 'gemini_omni' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'comfyui_wan';
+export type VideoGenerationProviderId = 'gemini_veo' | 'gemini_omni' | 'grok_imagine' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'comfyui_wan';
 export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts' | 'vieneu_local';
 export type ImageGenerationProviderId =
   | 'openai_images'
   /** Kept so image jobs saved by older builds still deserialize. */
   | 'google_imagen'
   | 'google_nano_banana'
+  | 'grok_imagine'
   | 'byteplus_seedream'
   | 'stability_image'
   | 'flux_image'

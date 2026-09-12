@@ -32,6 +32,7 @@ import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
 import { automateGoogleFlowImageGeneration, detectDownloadedImageMime } from './googleFlowImageAutomation';
 import { automateGoogleFlowVideoGeneration, detectDownloadedMp4 } from './googleFlowVideoAutomation';
+import { automateGrokImagineGeneration } from './grokImagineAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
 const BROWSER_SIGN_IN_PAGE_LOAD_TIMEOUT_MS = 60_000;
@@ -100,6 +101,22 @@ export type GoogleFlowVideoGenerationInput = {
 export type BrowserSessionGeneratedVideo = {
   readonly bytes: Buffer;
   readonly providerJobId: string;
+};
+
+export type GrokImagineImageGenerationInput = {
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly showBrowserWindow?: boolean;
+};
+
+export type GrokImagineVideoGenerationInput = {
+  readonly prompt: string;
+  readonly operation: VideoOperation;
+  readonly aspectRatio: string;
+  readonly durationSeconds: number;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly showBrowserWindow?: boolean;
 };
 
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -422,6 +439,118 @@ export class BrowserSessionService {
    * Chromium renderer which can be visible for observability. Cookie material remains inside the isolated Electron
    * session; automation sees only DOM geometry and the downloaded image.
    */
+  async generateGrokImagineImage(input: GrokImagineImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
+    return this.generateGrokImagineMedia('image', input) as Promise<BrowserSessionGeneratedImage>;
+  }
+
+  async generateGrokImagineVideo(input: GrokImagineVideoGenerationInput): Promise<BrowserSessionGeneratedVideo> {
+    if (!['text_to_video', 'image_to_video'].includes(input.operation)) {
+      throw new Error(`Grok Imagine browser session does not support ${input.operation} in this build.`);
+    }
+    return this.generateGrokImagineMedia('video', input);
+  }
+
+  private async generateGrokImagineMedia(
+    kind: 'image' | 'video',
+    input: GrokImagineImageGenerationInput | GrokImagineVideoGenerationInput
+  ): Promise<BrowserSessionGeneratedImage | BrowserSessionGeneratedVideo> {
+    const providerId = 'grok' as const;
+    if (this.activeProviders.has(providerId)) throw new Error('Grok Imagine is already being used by another browser-session operation. Wait for it to finish and retry.');
+    const requestId = randomUUID().slice(0, 8);
+    const temporaryPath = join(this.temporaryDirectory, `openscene-grok-${kind}-${requestId}.download`);
+    const showBrowserWindow = input.showBrowserWindow !== false;
+    const timeoutMs = kind === 'image' ? GOOGLE_FLOW_IMAGE_TIMEOUT_MS : GOOGLE_FLOW_VIDEO_TIMEOUT_MS;
+    const downloadTimeoutMs = kind === 'image' ? GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS : GOOGLE_FLOW_VIDEO_DOWNLOAD_TIMEOUT_MS;
+    const log = (event: string, details: Readonly<Record<string, unknown>> = {}): void => {
+      const suffix = Object.keys(details).length === 0 ? '' : ` ${JSON.stringify(details)}`;
+      console.info(`[OpenScene][Grok Imagine ${kind}][${requestId}] ${event}${suffix}`);
+    };
+    let isolatedSession: Electron.Session | undefined;
+    let automationWindow: BrowserWindow | undefined;
+    let downloadListener: ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void) | undefined;
+    let downloadTimer: ReturnType<typeof setTimeout> | undefined;
+    let downloadArmed = false;
+    let operationSettled = false;
+    let activeDownloadItem: DownloadItem | undefined;
+    let windowClosed: Promise<never> | undefined;
+    this.activeProviders.add(providerId);
+    try {
+      const stored = await this.vault.loadSecret(providerId);
+      if (stored === null || stored.cookies.length === 0) throw new Error('No Grok browser session is stored. Open Settings, sign in to Grok, close that window, then retry.');
+      isolatedSession = await this.loadIntoPartition(providerId);
+      automationWindow = new BrowserWindow({
+        width: 1280, height: 900, show: showBrowserWindow, skipTaskbar: !showBrowserWindow,
+        title: `OpenScene Grok Imagine ${kind} worker`, backgroundColor: '#101010', autoHideMenuBar: true,
+        webPreferences: { partition: partitionFor(providerId), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, devTools: false, backgroundThrottling: false }
+      });
+      windowClosed = new Promise<never>((_resolve, reject) => automationWindow!.once('closed', () => {
+        if (!operationSettled) reject(new Error(`The Grok Imagine window was closed before ${kind} generation completed.`));
+      }));
+      void windowClosed.catch(() => undefined);
+      const guard = (event: Electron.Event, url: string): void => { if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault(); };
+      automationWindow.webContents.on('will-navigate', guard);
+      automationWindow.webContents.on('will-redirect', guard);
+      automationWindow.webContents.setWindowOpenHandler(({ url }) => isBrowserSessionNavigationAllowed(providerId, url) ? { action: 'allow' } : { action: 'deny' });
+      const download = new Promise<BrowserSessionGeneratedImage | BrowserSessionGeneratedVideo>((resolve, reject) => {
+        downloadListener = (event, item, sourceWebContents) => {
+          if (sourceWebContents.id !== automationWindow!.webContents.id) return;
+          if (!downloadArmed) { event.preventDefault(); reject(new Error(`Grok Imagine attempted an unexpected ${kind} download before generation completed.`)); return; }
+          downloadArmed = false;
+          activeDownloadItem = item;
+          if (kind === 'video' && item.getTotalBytes() > MAX_BROWSER_VIDEO_BYTES) { event.preventDefault(); reject(new Error('Grok Imagine declared a video larger than the 500 MB browser-session limit.')); return; }
+          item.setSavePath(temporaryPath);
+          item.once('done', (_event, state) => void (async () => {
+            if (state !== 'completed') throw new Error(`Grok Imagine ${kind} download ${state}.`);
+            const bytes = await readFile(temporaryPath);
+            if (kind === 'image') {
+              if (bytes.length === 0 || bytes.length > MAX_BROWSER_IMAGE_BYTES) throw new Error('Grok Imagine returned an empty or unexpectedly large image download.');
+              const mimeType = detectDownloadedImageMime(bytes);
+              if (mimeType === null) throw new Error('Grok Imagine download was not a valid PNG, JPEG, or WebP image.');
+              resolve({ bytes, mimeType, providerJobId: `grok-imagine-browser-${requestId}` });
+            } else {
+              if (bytes.length === 0 || bytes.length > MAX_BROWSER_VIDEO_BYTES || !detectDownloadedMp4(bytes)) throw new Error('Grok Imagine download was not a valid MP4 within the browser-session limit.');
+              resolve({ bytes, providerJobId: `grok-imagine-browser-video-${requestId}` });
+            }
+          })().catch((error: unknown) => reject(error instanceof Error ? error : new Error(`Grok Imagine ${kind} download could not be read.`))));
+        };
+        isolatedSession!.on('will-download', downloadListener);
+      });
+      void download.catch(() => undefined);
+      await Promise.race([
+        withTimeout(loadAllowedProviderPage(automationWindow.webContents, providerId, 'https://grok.com/imagine'), GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS, 'Grok Imagine did not finish loading within 60 seconds.'),
+        windowClosed
+      ]);
+      const operation = kind === 'image' ? 'image' : (input as GrokImagineVideoGenerationInput).operation;
+      const generatedUrl = await Promise.race([
+        automateGrokImagineGeneration(automationWindow.webContents, {
+          prompt: input.prompt,
+          operation: operation as 'image' | 'text_to_video' | 'image_to_video',
+          aspectRatio: input.aspectRatio,
+          ...('durationSeconds' in input ? { durationSeconds: input.durationSeconds } : {}),
+          ...(input.referenceImage === undefined ? {} : { referenceImage: input.referenceImage }),
+          timeoutMs,
+          onProgress: (stage, elapsedMs, details = {}) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000), ...details })
+        }),
+        windowClosed
+      ]);
+      downloadArmed = true;
+      automationWindow.webContents.downloadURL(generatedUrl);
+      const timeout = new Promise<never>((_resolve, reject) => { downloadTimer = setTimeout(() => reject(new Error(`Grok Imagine created ${kind} media, but its browser download did not finish in time.`)), downloadTimeoutMs); });
+      const result = await Promise.race([download, timeout, windowClosed]);
+      operationSettled = true;
+      return result;
+    } finally {
+      operationSettled = true;
+      if (downloadTimer !== undefined) clearTimeout(downloadTimer);
+      if (isolatedSession !== undefined && downloadListener !== undefined) isolatedSession.removeListener('will-download', downloadListener);
+      if (activeDownloadItem?.getState() === 'progressing') activeDownloadItem.cancel();
+      if (isolatedSession !== undefined) await this.persistPartition(providerId, isolatedSession).catch(() => undefined);
+      if (automationWindow !== undefined && !automationWindow.isDestroyed()) automationWindow.destroy();
+      await removeTemporaryDownload(temporaryPath);
+      this.activeProviders.delete(providerId);
+    }
+  }
+
   async generateGoogleFlowImage(input: GoogleFlowImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
     const providerId = 'gemini' as const;
     const policy = getBrowserSessionProviderPolicy(providerId);

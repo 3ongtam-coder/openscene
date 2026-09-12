@@ -24,7 +24,7 @@ describe('image generation domain', () => {
   it('marks a model available only where an adapter actually exists', () => {
     // The picker offering a model the job manager cannot run turns a click into
     // a failure the user cannot act on, so availability has to track the code.
-    const IMPLEMENTED_PROVIDERS = ['openai', 'google_gemini', 'byteplus'];
+    const IMPLEMENTED_PROVIDERS = ['openai', 'google_gemini', 'byteplus', 'xai'];
 
     for (const model of getDomainModels('image-generation')) {
       const dispatchable = IMPLEMENTED_PROVIDERS.includes(model.providerId);

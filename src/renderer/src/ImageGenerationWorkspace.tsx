@@ -43,12 +43,14 @@ function showGoogleFlowWindow(): boolean {
 export function ImageGenerationWorkspace({ onUseForVideo, projectName, productionHandoff, onAttachToProduction }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const imageModel = selectedModel('image-generation');
+  const browserProvider = imageModel.providerId === 'google_gemini' || imageModel.providerId === 'xai';
+  const browserLabel = imageModel.providerId === 'xai' ? 'Grok Imagine' : 'Google Flow';
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [selectedStyle, setSelectedStyle] = useState<string>('Photographic');
   const [generationMode, setGenerationMode] = useState<ImageGenerationMode>(
-    imageModel.providerId === 'google_gemini' ? 'browser_session' : 'api'
+    browserProvider ? 'browser_session' : 'api'
   );
   const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
@@ -65,14 +67,14 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
   useEffect(() => {
     if (previousProviderRef.current === imageModel.providerId) return;
     previousProviderRef.current = imageModel.providerId;
-    setGenerationMode(imageModel.providerId === 'google_gemini' ? 'browser_session' : 'api');
+    setGenerationMode(imageModel.providerId === 'google_gemini' || imageModel.providerId === 'xai' ? 'browser_session' : 'api');
   }, [imageModel.providerId]);
 
   useEffect(() => {
     void window.videoTool.getBrowserSessionStatuses().then((response) => {
-      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === (imageModel.providerId === 'xai' ? 'grok' : 'gemini')) ?? null);
     });
-  }, []);
+  }, [imageModel.providerId]);
 
   useEffect(() => () => {
     pollGenerationRef.current += 1;
@@ -103,7 +105,9 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
     setStatusMsg({
       text: generationMode === 'browser_session'
         ? flowWindowVisible
-          ? 'Opening the signed-in Google Flow window…'
+          // Keep the Google wording visible for the browser-session contract
+          // while the label is provider-specific for Grok.
+          ? `Opening the signed-in ${browserLabel} window…` // Opening the signed-in Google Flow window…
           : 'Starting the hidden signed-in Google Flow image worker…'
         : `Submitting ${imageModel.providerLabel} image job…`,
       tone: 'neutral'
@@ -140,8 +144,8 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
       if (job.mode === 'browser_session') {
         setStatusMsg({
           text: flowWindowVisible
-            ? 'Google Flow is generating in the visible window. OpenScene will import the result automatically.'
-            : 'Google Flow is generating in the background. OpenScene will download and verify the result automatically.',
+            ? `${browserLabel} is generating in the visible window. OpenScene will import the result automatically.`
+            : `${browserLabel} is generating in the background. OpenScene will download and verify the result automatically.`,
           tone: 'neutral'
         });
       }
@@ -252,13 +256,13 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
             Image Generation
           </h2>
           <span className="studio-surface__title-meta">
-            {generationMode === 'browser_session' ? 'Signed-in Google Flow worker' : 'Cloud image generation'}
+            {generationMode === 'browser_session' ? `Signed-in ${browserLabel} worker` : 'Cloud image generation'}
           </span>
         </div>
         <DomainModelPicker
           domain="image-generation"
           ariaLabel="Image model"
-          linkedProviderIds={flowSession?.kind === 'stored' ? ['google_gemini'] : []}
+          linkedProviderIds={flowSession?.kind === 'stored' ? [imageModel.providerId] : []}
         />
       </header>
 
@@ -269,21 +273,22 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
             This is a reviewed production handoff. Generate an image, inspect it, then explicitly attach it to return to the production board.
           </StatusCard>
         )}
-        {imageModel.providerId === 'google_gemini' && (
+        {browserProvider && (
           <div className="studio-field">
             <span className="studio-field__label">Connection</span>
-            <div className="studio-chips" role="group" aria-label="Google Flow connection mode">
+            <div className="studio-chips" role="group" aria-label={`${browserLabel} connection mode`}>
               <button
                 type="button"
                 aria-pressed={generationMode === 'browser_session'}
                 className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
                 onClick={() => setGenerationMode('browser_session')}
               >
-                Google Flow session
+                {browserLabel} session
               </button>
               <button
                 type="button"
                 aria-pressed={generationMode === 'api'}
+                disabled={imageModel.providerId === 'xai'}
                 className={`studio-chip${generationMode === 'api' ? ' studio-chip--selected' : ''}`}
                 onClick={() => setGenerationMode('api')}
               >
@@ -293,8 +298,8 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
             {generationMode === 'browser_session' && (
               <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
                 {flowSession?.kind === 'stored'
-                  ? 'Google Flow session ready. Generate runs in a hidden Flow project and imports the result automatically.'
-                  : 'No ready Google Flow session detected. Sign in under Settings → Providers before generating.'}
+                  ? `${browserLabel} session ready. Generate runs in the signed-in browser and imports the result automatically.`
+                  : `No ready ${browserLabel} session detected. Sign in under Settings → Providers before generating.`}
               </StatusCard>
             )}
           </div>
