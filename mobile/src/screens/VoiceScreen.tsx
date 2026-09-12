@@ -6,6 +6,7 @@ import { applySubtitleCues, createNarrationPlan, narrationFromApprovedWriter, na
 import { usesRuntimeVoiceCatalog, voiceChoices } from '@openvideo/shared/voiceCatalog';
 import { getDomainModels } from '@openvideo/shared/aiDomainModels';
 import { createVoiceDeliverySettings, voiceDeliveryCapabilities, type VoiceDeliverySettings } from '@openvideo/shared/voiceDelivery';
+import { applyTranscriptionCues, updateTranscriptionDraft, type TranscriptionDraft } from '@openvideo/shared/transcription';
 import { ModelSelect } from '../components/ModelSelect';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { FormScreen } from '../components/FormScreen';
@@ -31,6 +32,8 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   const [saved, setSaved] = useState<NarrationPlan | null>(project?.ai.narrationPlan ?? null);
   const [isPersisted, setIsPersisted] = useState(project?.ai.narrationPlan !== undefined);
   const [message, setMessage] = useState('');
+  const [transcript, setTranscript] = useState<TranscriptionDraft | null>(project?.ai.transcriptionDraft ?? null);
+  const [savedTranscript, setSavedTranscript] = useState<TranscriptionDraft | null>(project?.ai.transcriptionDraft ?? null);
   const reveal = useRevealOnFocus(); const input = useRef<TextInput>(null);
   const refresh = useCallback((): void => { void readProviderConnections().then(setConnected); }, []);
   useEffect(refresh, [refresh, connectionsVersion]);
@@ -45,6 +48,9 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
   const savedDelivery = saved?.delivery ?? createVoiceDeliverySettings(saved?.script ?? script);
   const dirty = !isPersisted || saved === null || saved.script !== script.trim() || saved.voiceModelId !== model?.id || saved.voiceId !== voiceId || JSON.stringify(savedDelivery) !== JSON.stringify(delivery) || JSON.stringify(saved.cues) !== JSON.stringify(cues);
   const stale = saved !== null && project !== null && !narrationPlanMatchesWriter(project.ai, saved);
+  const transcriptDirty = transcript !== null && JSON.stringify(transcript) !== JSON.stringify(savedTranscript);
+  const transcriptSourceMissing = transcript !== null && !project?.assets.some((asset) => asset.id === transcript.sourceAssetId);
+  const transcriptSourceNotPlaced = transcript !== null && !project?.timeline.tracks.some((track) => track.clips.some((clip) => clip.assetId === transcript.sourceAssetId));
   const updateScript = (next: string): void => {
     setDelivery((current) => current.performanceScript.trim() === script.trim() ? { ...current, performanceScript: next } : current);
     setScript(next);
@@ -74,9 +80,47 @@ function ProjectVoiceScreen({ topInset, keyboardOffset, targetSeconds, connectio
     try { writeProject({ ...latest, timeline: applySubtitleCues(latest.timeline, saved) }); setMessage(`${saved.cues.length} captions added. Review them in Edit; mobile save is immediate.`); }
     catch (error) { setMessage(error instanceof Error ? error.message : 'Could not apply captions.'); }
   };
+  const editTranscriptCue = (index: number, patch: Partial<SubtitleCue>): void => setTranscript((current) => current === null ? null : ({
+    ...current,
+    status: 'draft',
+    cues: current.cues.map((cue, at) => at === index ? { ...cue, ...patch } : cue)
+  }));
+  const saveTranscript = (approve: boolean): void => {
+    if (!projectId || transcript === null) return;
+    try {
+      const latest = readProject(projectId); if (!latest) throw new Error('Open a project first.');
+      const next = updateTranscriptionDraft(transcript, transcript.cues, approve);
+      writeProject({ ...latest, ai: { ...latest.ai, transcriptionDraft: next } });
+      setTranscript(next); setSavedTranscript(next);
+      setMessage(approve ? 'Transcript approved. Applying captions remains a separate action.' : 'Transcript draft saved locally.');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not save transcript.'); }
+  };
+  const applyTranscript = (): void => {
+    if (!projectId || transcript === null || transcript.status !== 'approved' || transcriptDirty || transcriptSourceMissing || transcriptSourceNotPlaced) {
+      setMessage(transcriptSourceNotPlaced ? 'Place the transcript source asset on the timeline first.' : 'Approve the current transcript before applying captions.'); return;
+    }
+    const latest = readProject(projectId); if (!latest) return;
+    try { writeProject({ ...latest, timeline: applyTranscriptionCues(latest.timeline, transcript) }); setMessage(`${transcript.cues.length} audio-aligned captions applied.`); }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'Could not apply transcript captions.'); }
+  };
   const action = (label: string, onPress: () => void, disabled = false) => <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={press([styles.button, disabled && styles.off])}><Text style={styles.buttonText}>{label}</Text></Pressable>;
   return <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
     <Text style={styles.h1}>Narration & Subtitles</Text><Text style={styles.sub}>Prepare voice text and timed captions together. Review and approve before either is used.</Text>
+    <View style={styles.card}>
+      <Text style={styles.label}>Automatic subtitles from audio or video</Text>
+      <Text style={styles.note}>Local whisper.cpp transcription runs on desktop because mobile cannot access the user-managed executable or FFmpeg worker. Generate there; this screen can review, approve, and apply the same saved transcript.</Text>
+      {action('Transcribe on desktop', () => undefined, true)}
+      {transcriptSourceMissing && <Text style={styles.warn}>The transcript source asset is no longer in this project.</Text>}
+      {!transcriptSourceMissing && transcriptSourceNotPlaced && <Text style={styles.warn}>Place the transcript source asset on the timeline first. Trim, offset and speed will be mapped automatically.</Text>}
+      {transcript !== null && <>
+        <Text style={styles.note}>{transcript.modelName} · {transcript.language} · {transcript.cues.length} cue(s)</Text>
+        {transcript.cues.map((cue, index) => <View key={cue.id} style={styles.card}><Text style={styles.label}>Transcript cue {index + 1}</Text><View style={styles.row}>
+          <TextInput accessibilityLabel={`Transcript cue ${index + 1} start milliseconds`} keyboardType="number-pad" value={String(cue.startMs)} onChangeText={(text) => editTranscriptCue(index, { startMs: Number(text) })} style={[styles.input, styles.time]} />
+          <TextInput accessibilityLabel={`Transcript cue ${index + 1} end milliseconds`} keyboardType="number-pad" value={String(cue.endMs)} onChangeText={(text) => editTranscriptCue(index, { endMs: Number(text) })} style={[styles.input, styles.time]} />
+        </View><TextInput multiline value={cue.text} onChangeText={(text) => editTranscriptCue(index, { text })} style={styles.input} /></View>)}
+        <View style={styles.row}>{action('Save transcript', () => saveTranscript(false))}{action('Approve transcript', () => saveTranscript(true))}{action('Apply transcript captions', applyTranscript, transcript.status !== 'approved' || transcriptDirty || transcriptSourceMissing || transcriptSourceNotPlaced)}</View>
+      </>}
+    </View>
     <Text style={styles.label}>Voice model</Text><ModelSelect domain="voice-generation" selectedId={modelId} connected={connected} onSelect={(next) => setModelId(next.id)} onConnectionChange={refresh} />
     <Text style={styles.label}>Voice</Text><View style={styles.row}>{choices.length ? choices.map((voice) => <View key={voice.id}>{action(`${voiceId === voice.id ? '✓ ' : ''}${voice.label}`, () => setVoiceId(voice.id))}</View>) : <Text style={styles.note}>{usesRuntimeVoiceCatalog(model?.providerId ?? '') ? `VieNeu preset voices are discovered by the desktop app from its local server${voiceId ? `; saved voice: ${voiceId}` : ''}.` : 'Provider default voice'}</Text>}</View>
     {writer && action(`Load approved Writer dialogue (${writer.cues.length} cues)`, () => create(true))}

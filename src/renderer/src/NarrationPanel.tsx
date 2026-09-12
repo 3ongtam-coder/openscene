@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { AiProjectDocument } from '../../shared/aiProjectDomain';
+import type { TranscriptionDraft } from '../../shared/transcription';
+import type { MediaAsset, TimelineDocument } from '../../shared/timelineTypes';
 import { narrationScriptFromCues, type NarrationPlan, type SubtitleCue } from '../../shared/narrationPlan';
 import { checkNarrationFit } from '../../shared/narrationTiming';
 import { createNarrationPlan, narrationFromApprovedWriter, narrationPlanMatchesWriter, updateNarrationPlan } from '../../shared/subtitleWorkflow';
@@ -10,11 +12,14 @@ import { DomainModelPicker } from './DomainModelPicker';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { useProjectResultImport } from './ProjectResultImportContext';
 import { Button, StatusCard } from './ui';
+import { TranscriptionPanel } from './TranscriptionPanel';
 
-export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCaptions }: {
+export function NarrationPanel({ projectId, assets, timeline, document, targetSeconds, onSaveAi, onApplyCaptions, onApplyTranscription }: {
+  readonly projectId: string; readonly assets: readonly MediaAsset[]; readonly timeline: TimelineDocument;
   readonly document: AiProjectDocument; readonly targetSeconds: number;
   readonly onSaveAi: (document: AiProjectDocument) => Promise<boolean>;
   readonly onApplyCaptions: (plan: NarrationPlan) => boolean;
+  readonly onApplyTranscription: (draft: TranscriptionDraft) => boolean;
 }): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const voiceModel = selectedModel('voice-generation');
@@ -194,6 +199,7 @@ export function NarrationPanel({ document, targetSeconds, onSaveAi, onApplyCapti
   return <section className="studio-surface narration-workflow" aria-labelledby="narration-title">
     <header className="studio-surface__header"><div className="studio-surface__title"><h2 className="studio-surface__title-label" id="narration-title">Narration & Subtitles</h2><span className="studio-surface__title-meta">Review before voice or timeline</span></div><DomainModelPicker domain="voice-generation" ariaLabel="Voice model" /></header>
     <div className="studio-surface__body">
+      <TranscriptionPanel projectId={projectId} assets={assets} timeline={timeline} document={document} onSaveAi={onSaveAi} onApplyCaptions={onApplyTranscription} />
       <label className="studio-field"><span className="studio-field__label">Voice</span><select value={voiceId} disabled={isVoiceCatalogLoading || voiceCatalogError !== null} onChange={(e) => { clearCompletedVoice(); setVoiceId(e.target.value); }}>{choices.length ? choices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>) : <option value="">{isVoiceCatalogLoading ? 'Loading local voices…' : usesRuntimeVoiceCatalog(voiceModel.providerId) ? 'Local voice server unavailable' : 'Provider default voice'}</option>}</select></label>
       {voiceCatalogError && <StatusCard tone="warning">{voiceCatalogError} <Button onClick={() => setVoiceCatalogRefresh((value) => value + 1)}>Retry local voices</Button></StatusCard>}
       {usesRuntimeVoiceCatalog(voiceModel.providerId) && !voiceCatalogError && <p className="studio-reference__empty">VieNeu-TTS runs locally and uses no API key or generation credit. Preset voices come from the server currently running on this computer.</p>}

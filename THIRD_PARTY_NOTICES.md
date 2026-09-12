@@ -11,7 +11,7 @@ OpenScene is used as the application base under the MIT License.
 - Pinned source: see `UPSTREAM_PINS.md`
 - License text: `LICENSE`
 
-No source from CutAgent, Weave, AutoVio, Velorn, Milimo Video, ComfyUI, Wan or LTX-Video has been copied into this repository during Phase 0.
+No source from CutAgent, Weave, AutoVio, Velorn, Milimo Video, ComfyUI, Wan, whisper.cpp or LTX-Video has been copied into this repository.
 
 ## Direct JavaScript dependencies
 
@@ -50,7 +50,8 @@ For distribution, choose and document one of these paths:
 | Gemini/xAI APIs | Connected service, per-operation approval | Record API terms, retention and pricing disclosure |
 | ComfyUI | Separate worker process | Review GPL service/bundling boundary |
 | Wan 2.2 and related weights | Worker model | Record code license, exact weight license and checksum separately |
-| Whisper and model weights | Local ASR worker | Record source and model licenses/checksums separately |
+| whisper.cpp | Separate user-managed ASR executable, MIT, pinned in `UPSTREAM_PINS.md` | Preserve its MIT notice if later bundled; this repository currently invokes it but does not copy it |
+| Whisper-compatible model weights | User-managed local ASR model | Record the exact model source/license and SHA-256 separately before release |
 
 ## Dependency security snapshot
 

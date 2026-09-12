@@ -10,6 +10,7 @@ import {
 import { VIDEO_OPERATIONS } from './mediaCapabilityRegistry';
 import { parseWriterPipelineState, type WriterPipelineState } from './writerStages';
 import { parseNarrationPlan, type NarrationPlan } from './narrationPlan';
+import { parseTranscriptionDraft, type TranscriptionDraft } from './transcription';
 
 export const AI_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -128,6 +129,7 @@ export type ProvenanceRecord = {
 export type AiProjectDocument = {
   readonly writerPipeline?: WriterPipelineState;
   readonly narrationPlan?: NarrationPlan;
+  readonly transcriptionDraft?: TranscriptionDraft;
   readonly schemaVersion: typeof AI_PROJECT_SCHEMA_VERSION;
   readonly scripts: readonly ScriptVersion[];
   readonly scenes: readonly AiScene[];
@@ -193,8 +195,9 @@ export function removeAssetFromAiProjectDocument(document: AiProjectDocument, as
   );
   const keepReference = (referenceId: string): boolean => !removedReferenceIds.has(referenceId);
   const keepAsset = (candidateAssetId: string): boolean => candidateAssetId !== assetId;
+  const { transcriptionDraft, ...withoutTranscription } = document;
   return {
-    ...document,
+    ...(transcriptionDraft?.sourceAssetId === assetId ? withoutTranscription : document),
     characters: document.characters.map((character) => ({
       ...character,
       referenceAssetIds: character.referenceAssetIds.filter(keepReference)
@@ -419,6 +422,7 @@ function relationsAreValid(document: AiProjectDocument, availableAssetIds?: Read
   const provenance = uniqueById(document.provenance);
   if (scripts === null || scenes === null || shots === null || characters === null || references === null || generations === null || provenance === null) return false;
   if (document.narrationPlan?.sourceScriptId !== undefined && !scripts.has(document.narrationPlan.sourceScriptId)) return false;
+  if (availableAssetIds !== undefined && document.transcriptionDraft !== undefined && !availableAssetIds.has(document.transcriptionDraft.sourceAssetId)) return false;
 
   for (const script of document.scripts) {
     let cursor: ScriptVersion | undefined = script;
@@ -464,11 +468,13 @@ function relationsAreValid(document: AiProjectDocument, availableAssetIds?: Read
 }
 
 export function parseAiProjectDocument(value: unknown, availableAssetIds?: ReadonlySet<string>): AiProjectDocument | null {
-  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['schemaVersion', 'scripts', 'scenes', 'shots', 'characters', 'styleBible', 'referenceAssets', 'generations', 'provenance', 'writerPipeline', 'narrationPlan']) || value.schemaVersion !== AI_PROJECT_SCHEMA_VERSION) return null;
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['schemaVersion', 'scripts', 'scenes', 'shots', 'characters', 'styleBible', 'referenceAssets', 'generations', 'provenance', 'writerPipeline', 'narrationPlan', 'transcriptionDraft']) || value.schemaVersion !== AI_PROJECT_SCHEMA_VERSION) return null;
   const writerPipeline = value.writerPipeline === undefined ? undefined : parseWriterPipelineState(value.writerPipeline);
   if (writerPipeline === null) return null;
   const narrationPlan = value.narrationPlan === undefined ? undefined : parseNarrationPlan(value.narrationPlan);
   if (narrationPlan === null) return null;
+  const transcriptionDraft = value.transcriptionDraft === undefined ? undefined : parseTranscriptionDraft(value.transcriptionDraft);
+  if (transcriptionDraft === null) return null;
   const scripts = parseCollection(value.scripts, LIMITS.scripts, parseScript);
   const scenes = parseCollection(value.scenes, LIMITS.scenes, parseScene);
   const shots = parseCollection(value.shots, LIMITS.shots, parseShot);
@@ -481,6 +487,7 @@ export function parseAiProjectDocument(value: unknown, availableAssetIds?: Reado
   const document: AiProjectDocument = {
     ...(writerPipeline === undefined ? {} : { writerPipeline }),
     ...(narrationPlan === undefined ? {} : { narrationPlan }),
+    ...(transcriptionDraft === undefined ? {} : { transcriptionDraft }),
     schemaVersion: AI_PROJECT_SCHEMA_VERSION,
     scripts: scripts.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)),
     scenes: scenes.sort((left, right) => left.scriptVersionId.localeCompare(right.scriptVersionId) || left.order - right.order || left.id.localeCompare(right.id)),
