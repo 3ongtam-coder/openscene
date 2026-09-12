@@ -151,6 +151,8 @@ describe('manual Writer pipeline', () => {
     expect(request.approvedContext?.[1]?.content).toContain('Manually revised');
     expect(compileWriterPrompt(request)).toContain('Use an awkward silent beat.');
     expect(compileWriterPrompt(request)).toContain('Manually revised');
+    expect(compileWriterPrompt(request)).not.toContain('BRIEF (source data)');
+    expect(compileWriterPrompt(request)).not.toContain(brief.sourceText);
   });
 
   it('regenerates from the saved current stage, not just the original brief', () => {
