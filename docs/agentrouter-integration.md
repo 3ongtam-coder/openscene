@@ -38,8 +38,33 @@ Primary references:
 - Claude Code runs in a fresh temporary directory with `--bare`, no tools, no
   browser, no session persistence, bounded output, and a hard timeout. The
   directory is removed after each run.
+- Claude Code's own API timeout is capped at 120 seconds with one retry; the
+  OpenScene operation has a 180-second outer deadline. This avoids the CLI's
+  much longer interactive defaults making the Writer look permanently stuck.
+- Windows cleanup retries transient locks. A remaining `EBUSY` or `EPERM` is
+  logged but never replaces a successful draft or the real provider error.
 - Mobile keeps the credential slot for compatibility but never sends an
   AgentRouter request.
+
+## Terminal diagnostics
+
+When OpenScene is started with `npm run dev`, every AgentRouter Writer request
+prints redacted phase logs under one short run ID:
+
+```text
+[OpenScene][AgentRouter Writer][12ab34cd] request.start {...}
+[OpenScene][AgentRouter Writer][12ab34cd] process.started {"pid":1234}
+[OpenScene][AgentRouter Writer][12ab34cd] process.working {"elapsedSeconds":10,...}
+[OpenScene][AgentRouter Writer][12ab34cd] api.retry {...}
+[OpenScene][AgentRouter Writer][12ab34cd] process.closed {...}
+[OpenScene][AgentRouter Writer][12ab34cd] request.complete {...}
+```
+
+The terminal receives model ID, request mode, input character counts, elapsed
+time, safe retry metadata, byte counts, process exit code, validation outcome,
+and cleanup status. It never prints API keys, source text, prior screenplay, or
+generated screenplay content. Copy all lines carrying the same run ID when
+reporting a failure.
 
 ## Model aliases
 
