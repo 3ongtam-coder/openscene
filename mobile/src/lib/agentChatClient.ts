@@ -2,6 +2,7 @@ import { getLlmProvider, type LlmProviderInfo } from '@openvideo/shared/llmProvi
 import { readSlot } from './credentials';
 import { customCredentialKey, findCustomProvider, isCustomProviderId } from './customProviders';
 import { chatGptCredentials } from './openAiSignIn';
+import { AGENT_ROUTER_PROVIDER_ID, agentRouterHeaders, agentRouterMessageText } from '@openvideo/shared/agentRouter';
 
 /**
  * A tool-calling chat turn, spoken directly from the device.
@@ -120,6 +121,7 @@ export async function sendChatTurn(input: {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        ...(input.providerId === AGENT_ROUTER_PROVIDER_ID && bearer !== null ? agentRouterHeaders(bearer) : {}),
         ...(bearer === null ? {} : { authorization: `Bearer ${bearer}` }),
         // The Codex backend routes on the account the token belongs to.
         ...(chatGpt?.accountId == null ? {} : { 'ChatGPT-Account-Id': chatGpt.accountId })
@@ -152,7 +154,9 @@ export async function sendChatTurn(input: {
     const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     return {
       ok: true,
-      text: typeof message.content === 'string' ? message.content : '',
+      text: input.providerId === AGENT_ROUTER_PROVIDER_ID
+        ? agentRouterMessageText(message.content)
+        : typeof message.content === 'string' ? message.content : '',
       proposals: rawCalls.map((call: Record<string, unknown>, index: number) => {
         const fn = (call.function ?? {}) as Record<string, unknown>;
         return {

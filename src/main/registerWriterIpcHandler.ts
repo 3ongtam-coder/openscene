@@ -1,6 +1,7 @@
 import { IPC_CHANNELS } from '../shared/ipc';
 import type { ApiResponse } from '../shared/models';
-import { requestGeminiWriter } from '../shared/writerGeneration';
+import { requestWriter } from '../shared/writerGeneration';
+import { AGENT_ROUTER_CREDENTIAL_KEY, isAgentRouterModelId } from '../shared/agentRouter';
 import {
   parseWriterGenerationInput,
   type WriterDraft,
@@ -19,15 +20,18 @@ export function registerWriterIpcHandler(dependencies: {
   dependencies.registerHandler(IPC_CHANNELS.writerGenerate, async (payload) => {
     const input = parseWriterGenerationInput(payload);
     if (input === null) return fail('INVALID_INPUT', 'The Writer request was not valid.');
-    const apiKey = (await dependencies.credentialStore.getCredentialValue('geminiApiKey'))?.trim();
-    if (!apiKey) return fail('INVALID_INPUT', 'Gemini API key is missing. Connect Google Gemini in Settings first.');
+    const agentRouter = isAgentRouterModelId(input.modelId);
+    const credentialKey = agentRouter ? AGENT_ROUTER_CREDENTIAL_KEY : 'geminiApiKey';
+    const providerLabel = agentRouter ? 'AgentRouter' : 'Google Gemini';
+    const apiKey = (await dependencies.credentialStore.getCredentialValue(credentialKey))?.trim();
+    if (!apiKey) return fail('INVALID_INPUT', `${providerLabel} API key is missing. Connect ${providerLabel} in Settings first.`);
     try {
       const draft = dependencies.generate === undefined
-        ? await requestGeminiWriter({ apiKey, modelId: input.modelId, request: input.request })
+        ? await requestWriter({ apiKey, modelId: input.modelId, request: input.request })
         : await dependencies.generate({ ...input, apiKey });
       return ok(draft);
     } catch (error) {
-      return fail('UNKNOWN_ERROR', error instanceof Error ? error.message : 'Gemini Writer failed.');
+      return fail('UNKNOWN_ERROR', error instanceof Error ? error.message : `${providerLabel} Writer failed.`);
     }
   });
 }

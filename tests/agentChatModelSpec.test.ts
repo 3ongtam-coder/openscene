@@ -41,6 +41,14 @@ describe('agent chat model provider resolution', () => {
       credentialKey: 'openrouter',
       rawModelId: 'openai/gpt-4o'
     });
+    expect(resolveAgentChatModelSpec('agentrouter/gpt-5.6-sol')).toMatchObject({
+      kind: 'cloud',
+      providerId: 'agentrouter',
+      adapter: 'openai-compatible',
+      credentialKey: 'agentRouterApiKey',
+      rawModelId: 'gpt-5.6-sol',
+      baseUrl: 'https://co.agentrouter.org/v1'
+    });
   });
 
   it('keeps local catalog models and unknown custom models on the Ollama client', () => {

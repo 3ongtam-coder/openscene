@@ -1,5 +1,6 @@
 import { LLM_CATALOG } from './llmCatalog.generated';
 import { getVideoModelCapabilities } from './mediaCapabilityRegistry';
+import { AGENT_ROUTER_MODELS, AGENT_ROUTER_PROVIDER_ID } from './agentRouter';
 
 export type AiDomain = 'writer' | 'voice-generation' | 'video-generation' | 'image-generation' | 'edit-agent';
 
@@ -11,6 +12,7 @@ export type AiDomainProvider = {
 
 export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
   { id: 'local_ollama', label: 'Ollama', executionPath: 'local' },
+  { id: AGENT_ROUTER_PROVIDER_ID, label: 'AgentRouter', executionPath: 'api' },
   { id: 'openai', label: 'OpenAI', executionPath: 'api' },
   { id: 'anthropic', label: 'Anthropic', executionPath: 'api' },
   { id: 'google_gemini', label: 'Google Gemini', executionPath: 'api' },
@@ -392,9 +394,9 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: false,
     unavailableReason: 'The xAI edit/extend adapter is not implemented in this build.'
   },
-  // ── Writer: the user's requested Gemini 3.1 lane. These IDs are kept
-  // provider-native because the Writer adapter is Gemini-only and sends them
-  // directly to generateContent with a fixed structured-output schema.
+  // ── Writer: Gemini structured output plus the user's AgentRouter aliases.
+  // AgentRouter IDs are canonical provider/model keys so the same selection
+  // also resolves through Settings and Edit Agent.
   {
     id: 'gemini-3.1-pro-preview',
     providerId: 'google_gemini',
@@ -421,6 +423,17 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     efforts: ['minimal', 'low', 'medium', 'high'],
     contextWindow: '1049k'
   },
+  ...AGENT_ROUTER_MODELS.map((model): AiDomainModelConfig => ({
+    id: `${AGENT_ROUTER_PROVIDER_ID}/${model.id}`,
+    providerId: AGENT_ROUTER_PROVIDER_ID,
+    label: model.label,
+    providerLabel: 'AgentRouter',
+    description: 'AgentRouter account model alias for scripts, rewrites, scenes, and detailed shot plans.',
+    executionPath: 'api',
+    domains: ['writer'],
+    available: true,
+    reasoning: model.reasoning
+  })),
   {
     id: 'qwen2.5-coder',
     providerId: 'local_ollama',
@@ -433,6 +446,17 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     domains: ['edit-agent'],
     available: true
   },
+  ...AGENT_ROUTER_MODELS.map((model): AiDomainModelConfig => ({
+    id: `${AGENT_ROUTER_PROVIDER_ID}/${model.id}`,
+    providerId: AGENT_ROUTER_PROVIDER_ID,
+    label: model.label,
+    providerLabel: 'AgentRouter',
+    description: 'AgentRouter account model alias for agentic timeline editing.',
+    executionPath: 'api',
+    domains: ['edit-agent'],
+    available: true,
+    reasoning: model.reasoning
+  })),
   // Every tool-calling model from the generated models.dev catalog is
   // an edit-agent candidate; the picker gates them on provider connection.
   ...LLM_CATALOG.flatMap((provider) =>

@@ -43,4 +43,20 @@ describe('Writer IPC', () => {
     await expect(handler?.({ modelId: 'gemini-3.1-pro-preview', request })).resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining('API key') } });
     expect(generate).not.toHaveBeenCalled();
   });
+
+  it('reads the AgentRouter key for an AgentRouter Writer model', async () => {
+    let handler: ((payload?: unknown) => Promise<unknown>) | undefined;
+    const getCredentialValue = vi.fn(async (slot: string) => slot === 'agentRouterApiKey' ? 'router-key' : undefined);
+    const generate = vi.fn(async (input: { apiKey: string; modelId: string }) => {
+      expect(input).toMatchObject({ apiKey: 'router-key', modelId: 'agentrouter/claude-opus-4-8' });
+      return draft;
+    });
+    registerWriterIpcHandler({
+      credentialStore: { getCredentialValue },
+      registerHandler: (_channel, value) => { handler = value; },
+      generate: generate as never
+    });
+    await expect(handler?.({ modelId: 'agentrouter/claude-opus-4-8', request })).resolves.toEqual({ ok: true, value: draft });
+    expect(getCredentialValue).toHaveBeenCalledWith('agentRouterApiKey');
+  });
 });

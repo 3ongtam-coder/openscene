@@ -13,6 +13,7 @@ import { useAiDomainModel } from './AiDomainModelContext';
 import { useLlmModel } from './LlmProviderContext';
 import { DomainModelPicker } from './DomainModelPicker';
 import { Button, StatusCard } from './ui';
+import { getLlmProvider } from '../../shared/llmProviders';
 
 type Preview = { readonly draft: WriterDraft; readonly request: WriterRequest };
 
@@ -42,7 +43,8 @@ export function WriterWorkspace({
     [document.scripts]
   );
   const selectedParent = document.scripts.find((script) => script.id === parentScriptId);
-  const geminiConnected = credentialStatus.geminiApiKey === true;
+  const provider = getLlmProvider(model.providerId);
+  const providerConnected = provider?.credentialKey !== undefined && credentialStatus[provider.credentialKey] === true;
 
   const generate = async (): Promise<void> => {
     if (!(WRITER_MODEL_IDS as readonly string[]).includes(model.id)) {
@@ -75,7 +77,7 @@ export function WriterWorkspace({
       setPreview({ draft: response.value, request });
       setMessage({ tone: 'neutral', text: 'Draft generated. Review it before saving to the project.' });
     } catch (error) {
-      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Gemini Writer failed.' });
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : `${model.providerLabel} Writer failed.` });
     } finally {
       setBusy(false);
     }
@@ -110,7 +112,7 @@ export function WriterWorkspace({
     }
   };
 
-  const canGenerate = !busy && geminiConnected && sourceText.trim().length > 0 &&
+  const canGenerate = !busy && providerConnected && sourceText.trim().length > 0 &&
     language.trim().length > 0 && audience.trim().length > 0 && tone.trim().length > 0 &&
     (mode !== 'rewrite' || selectedParent !== undefined);
 
@@ -118,7 +120,7 @@ export function WriterWorkspace({
     <section className="ai-workspace writer-workspace" aria-labelledby="writer-workspace-title">
       <header className="ai-workspace__header">
         <div>
-          <p className="section-kicker">Gemini 3.1 · structured project draft</p>
+          <p className="section-kicker">{model.providerLabel} · structured project draft</p>
           <h2 id="writer-workspace-title">Writer & Storyboard</h2>
           <p className="ai-workspace__subtitle">Create or rewrite a script, then review its scenes and shots before it changes the project.</p>
         </div>
@@ -154,7 +156,7 @@ export function WriterWorkspace({
           </div>
           <label className="studio-field"><span className="studio-field__label">Audience</span><input value={audience} onChange={(event) => setAudience(event.target.value)} /></label>
           <label className="studio-field"><span className="studio-field__label">Tone</span><input value={tone} onChange={(event) => setTone(event.target.value)} /></label>
-          {!geminiConnected && <StatusCard tone="warning">Connect Google Gemini in Settings → Providers before generating.</StatusCard>}
+          {!providerConnected && <StatusCard tone="warning">Connect {model.providerLabel} in Settings → Providers before generating.</StatusCard>}
           <Button variant="primary" disabled={!canGenerate} onClick={() => void generate()}>{busy ? 'Working…' : 'Generate draft'}</Button>
           {message !== null && <StatusCard tone={message.tone}>{message.text}</StatusCard>}
         </div>

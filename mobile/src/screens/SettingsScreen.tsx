@@ -14,6 +14,7 @@ import { ProviderConnect } from '../components/ProviderConnect';
 import { AddCustomProvider } from '../components/AddCustomProvider';
 import { customCredentialKey, removeCustomProvider, useCustomProviders } from '../lib/customProviders';
 import { LLM_PROVIDERS, POPULAR_LLM_PROVIDER_IDS, getLlmCatalogProvider } from '@openvideo/shared/llmProviders';
+import { DEFAULT_LLM_MODELS } from '@openvideo/shared/llmModels';
 import { FormScreen } from '../components/FormScreen';
 import { APP_VERSION, CONTACT_EMAIL, DEVELOPER_NAME, DEVELOPER_SITE, PRIVACY_URL, TERMS_URL } from '../lib/about';
 import { theme } from '../lib/theme';
@@ -49,7 +50,7 @@ function chatRows(): readonly Row[] {
       slot: provider.credentialKey,
       label: provider.label,
       hint: provider.keyPlaceholder ?? 'API key',
-      meta: `${getLlmCatalogProvider(provider.id)?.models.length ?? 0} chat models`
+      meta: `${getLlmCatalogProvider(provider.id)?.models.length ?? DEFAULT_LLM_MODELS.filter((model) => model.providerId === provider.id).length} chat models`
     });
   }
   return rows;
