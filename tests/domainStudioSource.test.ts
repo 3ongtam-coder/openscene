@@ -24,7 +24,7 @@ describe('domain generation studio wiring', () => {
     expect(voice).toContain('poll.value.previewUrl');
     expect(voice).toContain('<audio className="speech-result-review__player"');
     expect(voice).toContain('controls preload="metadata"');
-    expect(video).toContain('modelId: videoModel.id');
+    expect(video).toContain('modelId: targetModelId');
     expect(video).not.toContain('LlmModelSelectorBar');
     expect(voice).not.toContain('LlmModelSelectorBar');
     expect(app).toContain('editor.project !== null && (');

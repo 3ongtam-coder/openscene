@@ -15,6 +15,7 @@ import type {
 import { getDefaultDomainModelId, getDomainModel, type AiDomainModelConfig } from '../shared/aiDomainModels';
 import { estimateImageCost, estimateSpeechCost, estimateVideoCost, type CostEstimate } from '../shared/mediaGenerationPricing';
 import { getVideoOperationConstraints, getVideoProviderBinding, validateVideoRequest } from '../shared/mediaCapabilityRegistry';
+import { resolveVideoOperation, validateVideoInputSet } from '../shared/videoGeneration';
 import { GenerationSpendStore } from './generationSpendStore';
 import { discoverFfmpeg } from './ffmpegDiscovery';
 import type { CredentialStore } from './credentialStore';
@@ -51,6 +52,11 @@ let activeSpendStore: GenerationSpendStore | undefined;
 function logSpeechJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
   const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
   console[level](`[OpenScene][Speech][${jobId}] ${event}${suffix}`);
+}
+
+function logVideoJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
+  const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console[level](`[OpenScene][Video][${jobId}] ${event}${suffix}`);
 }
 
 /**
@@ -163,18 +169,28 @@ const SPEECH_MODEL_PROVIDERS: Record<string, { seam: TextToSpeechJob['provider']
 };
 
 async function invokeCloudVideoProvider(
+  jobId: string,
   model: AiDomainModelConfig,
   apiKey: string,
   request: VideoGenerationRequest & { readonly durationSeconds: number },
   outputFilePath: string
 ): Promise<CloudProviderResult> {
+  let lastProgressLogMs = -10_000;
   const synthesisInput = {
     apiKey,
     modelId: model.id,
     prompt: request.prompt,
     aspectRatio: request.aspectRatio ?? ('16:9' as const),
     durationSeconds: request.durationSeconds,
-    ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage })
+    operation: resolveVideoOperation(request),
+    ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage }),
+    ...(request.lastFrame === undefined ? {} : { lastFrame: request.lastFrame }),
+    ...(request.referenceImages === undefined ? {} : { referenceImages: request.referenceImages }),
+    onProgress: (stage: 'submitting' | 'generating' | 'ready', elapsedMs: number) => {
+      if (stage === 'generating' && elapsedMs - lastProgressLogMs < 10_000) return;
+      lastProgressLogMs = elapsedMs;
+      logVideoJob(jobId, `provider.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) });
+    }
   };
   try {
     const binding = getVideoProviderBinding(model.id);
@@ -287,7 +303,8 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   if (providerMapping === undefined) throw new Error(`Model ${model.id} has no runnable video provider binding.`);
   const provider: VideoGenerationProviderId = providerMapping.seamProviderId;
   const modelId = model.id;
-  const operation = request.referenceImage === undefined ? 'text_to_video' : 'image_to_video';
+  const resolvedInputs = validateVideoInputSet(request);
+  const operation = resolvedInputs.operation;
   const constraints = getVideoOperationConstraints(modelId, operation);
   const durationSeconds = request.durationSeconds ?? constraints?.durationSeconds[0] ?? 4;
   const aspectRatio = request.aspectRatio ?? constraints?.aspectRatios[0] ?? '16:9';
@@ -296,7 +313,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
     operation,
     durationSeconds,
     aspectRatio,
-    referenceImageCount: request.referenceImage === undefined ? 0 : 1
+    referenceImageCount: resolvedInputs.referenceImageCount
   });
   if (!validation.ok) throw new Error(validation.message);
   const estimate = estimateVideoCost({ modelId, durationSeconds });
@@ -312,6 +329,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
     mode: 'api',
     status: 'queued',
     prompt: request.prompt,
+    operation,
     aspectRatio,
     durationSeconds,
     stylePreset: request.stylePreset ?? 'Cinematic',
@@ -326,12 +344,21 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   };
 
   videoJobs.set(id, job);
+  logVideoJob(id, 'request.queued', {
+    modelId,
+    operation,
+    durationSeconds,
+    aspectRatio,
+    referenceImageCount: resolvedInputs.referenceImageCount
+  });
 
   setTimeout(async () => {
+    const startedAt = Date.now();
     try {
       job.status = 'running';
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      logVideoJob(id, 'process.started');
 
       let apiKey = request.apiKey?.trim();
       if ((!apiKey || apiKey.length === 0) && activeCredentialStore) {
@@ -343,7 +370,8 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       }
 
       await settleSpend(reservationId, 'charged');
-      const cloudResult = await invokeCloudVideoProvider(model, apiKey, normalizedRequest, join(videoDir, `${id}.mp4`));
+      logVideoJob(id, 'provider.request.started', { provider: VIDEO_PROVIDER_LABELS[provider] });
+      const cloudResult = await invokeCloudVideoProvider(id, model, apiKey, normalizedRequest, join(videoDir, `${id}.mp4`));
       if (!cloudResult.ok) {
         throw new Error(cloudResult.error);
       }
@@ -358,6 +386,10 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
 
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      logVideoJob(id, 'request.completed', {
+        elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+        providerJobId: cloudResult.providerJobId
+      });
     } catch (err) {
       // Handing the room back is safe whether or not it was already kept:
       // release only takes back a reservation that is still pending, so a
@@ -367,6 +399,10 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       job.error = err instanceof Error ? err.message : 'Video generation failed';
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      logVideoJob(id, 'request.failed', {
+        elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+        error: job.error
+      }, 'error');
     }
   }, 1000);
 

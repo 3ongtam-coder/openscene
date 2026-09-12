@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { AiProjectDocument } from '../../shared/aiProjectDomain';
 import { approvedWriterShots } from '../../shared/writerPipeline';
 
@@ -7,10 +7,24 @@ import type { ReferenceImageSelection, VideoGenerationJob } from '../../shared/p
 import { DomainModelPicker } from './DomainModelPicker';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { useProjectResultImport } from './ProjectResultImportContext';
-import { getVideoOperationConstraints, isVideoOperationImplemented } from '../../shared/mediaCapabilityRegistry';
+import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
+const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
+const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: string }[] = [
+  { id: 'text_to_video', label: 'Text' },
+  { id: 'image_to_video', label: 'First frame' },
+  { id: 'start_end', label: 'Start-End' },
+  { id: 'reference_to_video', label: 'References' }
+];
+
+type VideoInputSnapshot = {
+  readonly operation: VideoOperation;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly lastFrame?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
+};
 type VideoGenerationWorkspaceProps = {
   readonly writerDocument?: AiProjectDocument | null;
   /**
@@ -35,8 +49,11 @@ export function VideoGenerationWorkspace({
   const writerShots = approvedWriterShots(writerDocument);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [durationSeconds, setDurationSeconds] = useState<number>(5);
-  const imageInputAvailable = isVideoOperationImplemented(videoModel.id, 'image_to_video');
-  const selectedOperation = referenceImage === null ? 'text_to_video' : 'image_to_video';
+  const [selectedOperation, setSelectedOperation] = useState<VideoOperation>('text_to_video');
+  const [lastFrame, setLastFrame] = useState<ReferenceImageSelection | null>(null);
+  const [referenceImages, setReferenceImages] = useState<readonly ReferenceImageSelection[]>([]);
+  const previousReferenceImage = useRef<ReferenceImageSelection | null>(null);
+  const operationAvailable = isVideoOperationImplemented(videoModel.id, selectedOperation);
   const operationConstraints = getVideoOperationConstraints(videoModel.id, selectedOperation)
     ?? getVideoOperationConstraints(videoModel.id, 'text_to_video');
   const durationOptions = operationConstraints?.durationSeconds ?? [4, 8];
@@ -53,6 +70,8 @@ export function VideoGenerationWorkspace({
   const [selectedStyle, setSelectedStyle] = useState<string>('Cinematic');
   // Image-to-video seed: the bytes travel inline, so no path reaches here.
   const [jobs, setJobs] = useState<readonly VideoGenerationJob[]>([]);
+  const [jobInputs, setJobInputs] = useState<Readonly<Record<string, VideoInputSnapshot>>>({});
+  const pollTimers = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
 
   const [isGenerating, setIsGenerating] = useState(false);
   // Which take is being refined, and what to change about it. A note belongs to
@@ -62,6 +81,25 @@ export function VideoGenerationWorkspace({
   const [note, setNote] = useState('');
   // Nothing to report until something happens; an idle card is just noise.
   const [statusMsg, setStatusMsg] = useState<{ text: string; tone: 'neutral' | 'success' | 'warning' | 'danger' } | null>(null);
+
+  // A still handed over from Image Generation should open the first-frame path,
+  // but must not knock Start-End back to image-to-video while its first frame is picked.
+  useEffect(() => {
+    const newlyHandedOver = referenceImage !== null && referenceImage !== previousReferenceImage.current;
+    previousReferenceImage.current = referenceImage;
+    if (newlyHandedOver && selectedOperation === 'text_to_video' && isVideoOperationImplemented(videoModel.id, 'image_to_video')) {
+      setSelectedOperation('image_to_video');
+    }
+  }, [referenceImage, selectedOperation, videoModel.id]);
+
+  useEffect(() => {
+    if (!isVideoOperationImplemented(videoModel.id, selectedOperation)) setSelectedOperation('text_to_video');
+  }, [selectedOperation, videoModel.id]);
+
+  useEffect(() => () => {
+    for (const timer of pollTimers.current) clearInterval(timer);
+    pollTimers.current.clear();
+  }, []);
 
   /**
    * `overrides` is how a refined take is run: it carries the previous take's
@@ -73,10 +111,38 @@ export function VideoGenerationWorkspace({
     readonly aspectRatio: '16:9' | '9:16' | '1:1';
     readonly durationSeconds: number;
     readonly stylePreset?: string;
+    readonly inputs?: VideoInputSnapshot;
+    readonly modelId?: string;
   }): Promise<void> => {
     const promptText = overrides?.prompt ?? prompt;
     if (promptText.trim().length === 0) {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
+      return;
+    }
+
+    const inputs: VideoInputSnapshot = overrides?.inputs ?? {
+      operation: selectedOperation,
+      ...(selectedOperation === 'image_to_video' || selectedOperation === 'start_end'
+        ? referenceImage === null ? {} : { referenceImage }
+        : {}),
+      ...(selectedOperation === 'start_end' && lastFrame !== null ? { lastFrame } : {}),
+      ...(selectedOperation === 'reference_to_video' ? { referenceImages } : {})
+    };
+    const targetModelId = overrides?.modelId ?? videoModel.id;
+    if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
+      setStatusMsg({ text: `${videoModel.label} does not implement ${inputs.operation} in this build.`, tone: 'warning' });
+      return;
+    }
+    if ((inputs.operation === 'image_to_video' || inputs.operation === 'start_end') && inputs.referenceImage === undefined) {
+      setStatusMsg({ text: 'Choose the first frame before generating.', tone: 'warning' });
+      return;
+    }
+    if (inputs.operation === 'start_end' && inputs.lastFrame === undefined) {
+      setStatusMsg({ text: 'Choose the last frame before generating Start-End motion.', tone: 'warning' });
+      return;
+    }
+    if (inputs.operation === 'reference_to_video' && (inputs.referenceImages?.length ?? 0) === 0) {
+      setStatusMsg({ text: 'Choose at least one character or product reference.', tone: 'warning' });
       return;
     }
 
@@ -89,33 +155,56 @@ export function VideoGenerationWorkspace({
         aspectRatio: overrides?.aspectRatio ?? effectiveAspectRatio,
         durationSeconds: overrides?.durationSeconds ?? effectiveDuration,
         stylePreset: overrides?.stylePreset ?? selectedStyle,
-        modelId: videoModel.id,
-        ...(referenceImage === null ? {} : { referenceImage })
+        modelId: targetModelId,
+        ...inputs
       });
 
       if (response.ok && response.value) {
         const job = response.value as VideoGenerationJob;
         setJobs((prev) => [job, ...prev]);
+        setJobInputs((current) => ({ ...current, [job.id]: inputs }));
         setStatusMsg({ text: `Job started (${job.id}). Synthesizing video frames...`, tone: 'neutral' });
 
         // Poll for job completion
+        const pollingDeadline = Date.now() + VIDEO_JOB_UI_TIMEOUT_MS;
+        const stopPolling = (intervalId: ReturnType<typeof setInterval>): void => {
+          clearInterval(intervalId);
+          pollTimers.current.delete(intervalId);
+        };
         const intervalId = setInterval(async () => {
-          const pollRes = await window.videoTool.aiGetVideoJob(job.id);
-          if (pollRes.ok && pollRes.value) {
+          try {
+            if (Date.now() > pollingDeadline) {
+              stopPolling(intervalId);
+              setIsGenerating(false);
+              setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this job before retrying.', tone: 'warning' });
+              return;
+            }
+            const pollRes = await window.videoTool.aiGetVideoJob(job.id);
+            if (!pollRes.ok || !pollRes.value) {
+              stopPolling(intervalId);
+              setIsGenerating(false);
+              setStatusMsg({ text: !pollRes.ok ? pollRes.error.message : 'The video job could not be read.', tone: 'danger' });
+              return;
+            }
             const updatedJob = pollRes.value as VideoGenerationJob;
             setJobs((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
 
             if (updatedJob.status === 'completed') {
-              clearInterval(intervalId);
+              stopPolling(intervalId);
               setIsGenerating(false);
               setStatusMsg({ text: `Video generation completed! Asset ready.`, tone: 'success' });
             } else if (updatedJob.status === 'failed') {
-              clearInterval(intervalId);
+              stopPolling(intervalId);
               setIsGenerating(false);
               setStatusMsg({ text: `Generation failed: ${updatedJob.error ?? 'Unknown error'}`, tone: 'danger' });
             }
+          } catch (error) {
+            stopPolling(intervalId);
+            setIsGenerating(false);
+            setStatusMsg({ text: error instanceof Error ? error.message : 'Video job polling failed.', tone: 'danger' });
           }
         }, 1000);
+        pollTimers.current.add(intervalId);
       } else {
         setIsGenerating(false);
         setStatusMsg({ text: !response.ok ? response.error.message : 'Failed to start generation job.', tone: 'danger' });
@@ -148,17 +237,22 @@ export function VideoGenerationWorkspace({
       prompt: refined.prompt,
       aspectRatio: job.aspectRatio,
       durationSeconds: job.durationSeconds,
-      ...(job.stylePreset === undefined ? {} : { stylePreset: job.stylePreset })
+      ...(job.modelId === undefined ? {} : { modelId: job.modelId }),
+      ...(job.stylePreset === undefined ? {} : { stylePreset: job.stylePreset }),
+      inputs: jobInputs[job.id] ?? { operation: job.operation ?? 'text_to_video' }
     });
   };
 
-  const pickReferenceImage = async (): Promise<void> => {
+  const pickReferenceImage = async (target: 'first' | 'last' | 'asset'): Promise<void> => {
     const response = await window.videoTool.aiSelectReferenceImage();
     if (!response.ok) {
       setStatusMsg({ text: response.error.message, tone: 'danger' });
       return;
     }
-    if (response.value !== null) onReferenceImageChange(response.value);
+    if (response.value === null) return;
+    if (target === 'first') onReferenceImageChange(response.value);
+    else if (target === 'last') setLastFrame(response.value);
+    else setReferenceImages((current) => current.length >= 3 ? current : [...current, response.value as ReferenceImageSelection]);
   };
 
   const handleImportToProject = async (job: VideoGenerationJob): Promise<void> => {
@@ -183,6 +277,26 @@ export function VideoGenerationWorkspace({
       </header>
 
       <div className="studio-surface__body">
+        <div className="studio-field">
+          <span className="studio-field__label">Input mode</span>
+          <div className="studio-chips" role="group" aria-label="Video input mode">
+            {INPUT_MODES.map((mode) => {
+              const available = isVideoOperationImplemented(videoModel.id, mode.id);
+              return <button key={mode.id} type="button" disabled={!available}
+                title={available ? undefined : `${videoModel.label} does not implement this mode.`}
+                aria-pressed={selectedOperation === mode.id}
+                className={`studio-chip${selectedOperation === mode.id ? ' studio-chip--selected' : ''}`}
+                onClick={() => setSelectedOperation(mode.id)}>{mode.label}</button>;
+            })}
+          </div>
+          <span className="studio-reference__empty">
+            {selectedOperation === 'start_end' ? 'Veo builds the motion between two approved frames.'
+              : selectedOperation === 'reference_to_video' ? 'Attach 1-3 character or product images. This mode uses an 8-second clip.'
+                : selectedOperation === 'image_to_video' ? 'The supplied image becomes the first frame.'
+                  : 'Prompt only, without visual references.'}
+          </span>
+        </div>
+
         <div className="studio-field">
           <span className="studio-field__label">Style</span>
           <div className="studio-chips" role="group" aria-label="Style preset">
@@ -236,14 +350,14 @@ export function VideoGenerationWorkspace({
 
         {statusMsg !== null && <StatusCard tone={statusMsg.tone}>{statusMsg.text}</StatusCard>}
 
-        <div className="studio-field">
-          <span className="studio-field__label">Reference image</span>
+        {(selectedOperation === 'image_to_video' || selectedOperation === 'start_end') && <div className="studio-field">
+          <span className="studio-field__label">First frame</span>
           {referenceImage === null ? (
             <div className="studio-reference">
               <span className="studio-reference__empty">
-                {imageInputAvailable ? 'Optional — seeds image-to-video generation.' : `${videoModel.label} image-to-video is not implemented in this build.`}
+                Required. Review this image before generation.
               </span>
-              <Button variant="ghost" disabled={!imageInputAvailable} onClick={() => void pickReferenceImage()}>Add image</Button>
+              <Button variant="ghost" onClick={() => void pickReferenceImage('first')}>Choose first frame</Button>
             </div>
           ) : (
             <div className="studio-reference">
@@ -253,13 +367,37 @@ export function VideoGenerationWorkspace({
                 alt={`Reference image ${referenceImage.displayName}`}
               />
               <span className="studio-reference__name">{referenceImage.displayName}</span>
-              {!imageInputAvailable && <span className="studio-reference__empty">Remove this image or choose a model with implemented image-to-video.</span>}
-              <Button variant="ghost" onClick={() => onReferenceImageChange(null)} aria-label="Remove reference image">
+              <Button variant="ghost" onClick={() => onReferenceImageChange(null)} aria-label="Remove first frame">
                 Remove
               </Button>
             </div>
           )}
-        </div>
+        </div>}
+
+        {selectedOperation === 'start_end' && <div className="studio-field">
+          <span className="studio-field__label">Last frame</span>
+          {lastFrame === null ? <div className="studio-reference">
+            <span className="studio-reference__empty">Required. Veo interpolates motion toward this ending.</span>
+            <Button variant="ghost" onClick={() => void pickReferenceImage('last')}>Choose last frame</Button>
+          </div> : <div className="studio-reference">
+            <img className="studio-reference__thumb" src={`data:${lastFrame.mimeType};base64,${lastFrame.base64}`} alt={`Last frame ${lastFrame.displayName}`} />
+            <span className="studio-reference__name">{lastFrame.displayName}</span>
+            <Button variant="ghost" onClick={() => setLastFrame(null)} aria-label="Remove last frame">Remove</Button>
+          </div>}
+        </div>}
+
+        {selectedOperation === 'reference_to_video' && <div className="studio-field">
+          <span className="studio-field__label">Character / product references ({referenceImages.length}/3)</span>
+          {referenceImages.map((image, index) => <div className="studio-reference" key={`${image.displayName}-${index}`}>
+            <img className="studio-reference__thumb" src={`data:${image.mimeType};base64,${image.base64}`} alt={`Asset reference ${image.displayName}`} />
+            <span className="studio-reference__name">{image.displayName}</span>
+            <Button variant="ghost" onClick={() => setReferenceImages((current) => current.filter((_, position) => position !== index))} aria-label={`Remove asset reference ${index + 1}`}>Remove</Button>
+          </div>)}
+          <div className="studio-reference">
+            <span className="studio-reference__empty">Order references deliberately; nothing is attached automatically.</span>
+            <Button variant="ghost" disabled={referenceImages.length >= 3} onClick={() => void pickReferenceImage('asset')}>Add reference</Button>
+          </div>
+        </div>}
 
         <div className="studio-field">
           <span className="studio-field__label">Jobs</span>
@@ -272,6 +410,7 @@ export function VideoGenerationWorkspace({
                   <div className="studio-job__row">
                     <span className={`studio-job__status studio-job__status--${job.status}`}>{job.status}</span>
                     <span className="studio-job__provider">{job.provider}</span>
+                    <span className="studio-job__provider">{job.operation ?? 'text_to_video'}</span>
                   </div>
                   <p className="studio-job__prompt">{originalOf(job.prompt)}</p>
                   {revisionsOf(job.prompt).length > 0 && (
@@ -349,9 +488,12 @@ export function VideoGenerationWorkspace({
         />
         <div className="studio-composer__toolbar">
           <span className="studio-composer__hint">
-            {effectiveDuration}s · {effectiveAspectRatio} · {selectedStyle}{referenceImage === null ? '' : ' · image'}
+            {effectiveDuration}s · {effectiveAspectRatio} · {selectedStyle} · {selectedOperation}
           </span>
-          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || prompt.trim().length === 0 || (referenceImage !== null && !imageInputAvailable)}>
+          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || prompt.trim().length === 0 || !operationAvailable
+            || ((selectedOperation === 'image_to_video' || selectedOperation === 'start_end') && referenceImage === null)
+            || (selectedOperation === 'start_end' && lastFrame === null)
+            || (selectedOperation === 'reference_to_video' && referenceImages.length === 0)}>
             {isGenerating ? 'Generating…' : 'Generate'}
           </Button>
         </div>

@@ -2,9 +2,9 @@
 
 **Status:** Implemented by Issue #6
 
-**Registry schema:** v1
+**Registry schema:** v2
 
-**Capability snapshot:** 2026-09-02
+**Capability snapshot:** 2026-09-05
 
 ## Decision
 
@@ -14,7 +14,7 @@ OpenScene keeps one shared model-level registry in `src/shared/mediaCapabilityRe
 official provider capability
           |
           v
-VideoModelCapabilities v1
+VideoModelCapabilities v2
   - documented operations and constraints
   - implemented operations in this build
   - adapter / credential / persisted seam binding
@@ -27,27 +27,27 @@ VideoModelCapabilities v1
 
 ## Provider support versus implementation
 
-An operation can be documented but disabled. For example, Veo 3.1 documents reference images, first/last-frame interpolation, and extension, while this build currently sends only text-to-video and one starting image. Grok Imagine is recorded so later adapters use the same contract, but every xAI operation remains unavailable until a separately reviewed adapter exists.
+An operation can be documented but disabled. Veo 3.1 text-to-video, first-frame image-to-video, 1-3 asset references, and first/last-frame interpolation are implemented. Veo extension remains documented but disabled. Grok Imagine is recorded so later adapters use the same contract, but every xAI operation remains unavailable until a separately reviewed adapter exists.
 
 This distinction prevents the UI from offering a control that the adapter silently drops. Unsupported duration, aspect ratio, reference count, or request path fails before credential lookup, spending reservation, and provider execution.
 
 ## Current generated controls
 
-- Desktop video duration, aspect ratio, and image-input availability come from the selected model and operation.
-- Mobile storyboard duration and continuity eligibility use the same model record.
+- Desktop video duration, aspect ratio, input-mode availability, and reference counts come from the selected model and operation.
+- Mobile uses the same four input modes and native image picker. Start-End and asset-reference renders are deliberately single-shot/manual; sequential storyboard continuity still carries the prior shot's extracted last frame.
 - Planning accepts a legacy provider ID for compatibility, but current desktop/mobile/MCP callers pass the exact model ID.
 - Adapters validate again at their shared network boundary. They no longer coerce square output to landscape or snap an illegal duration after the user approved a different job.
 
 ## Sources and update policy
 
-Google entries are based on the official [Gemini video generation guide](https://ai.google.dev/gemini-api/docs/video) and [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models). xAI entries are based on its official [video generation](https://docs.x.ai/developers/model-capabilities/video/generation), [editing](https://docs.x.ai/developers/model-capabilities/video/editing), and [extension](https://docs.x.ai/developers/model-capabilities/video/extension) guides.
+Google entries are based on the official [Veo generation guide](https://ai.google.dev/gemini-api/docs/veo) and [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models). xAI entries are based on its official [video generation](https://docs.x.ai/developers/model-capabilities/video/generation), [editing](https://docs.x.ai/developers/model-capabilities/video/editing), and [extension](https://docs.x.ai/developers/model-capabilities/video/extension) guides.
 
 Capability records carry a date and source URLs because preview models and constraints change. Updating a model requires contract tests and a new recorded snapshot date; business/UI code must not add an independent capability literal.
 
 ## Deferred
 
 - xAI API and Grok browser adapters;
-- Veo/Grok reference-to-video, Start-End, edit, and extend execution;
+- Veo/Grok edit and extend execution, and every Grok generation path;
 - ComfyUI motion control;
 - provider discovery over live APIs;
 - Writer/content model registry and structured-output prompts.

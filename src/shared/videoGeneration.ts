@@ -3,7 +3,8 @@ import {
   VIDEO_MODEL_CAPABILITIES,
   getVideoModelCapabilities,
   validateVideoRequest,
-  type VideoAspectRatio
+  type VideoAspectRatio,
+  type VideoOperation
 } from './mediaCapabilityRegistry';
 
 /**
@@ -25,6 +26,8 @@ import {
 const REQUEST_TIMEOUT_MS = 60_000;
 const VIDEO_POLL_INTERVAL_MS = 5_000;
 const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000;
+/** Matches the desktop picker and protects mobile/MCP callers before spend. */
+export const MAX_VIDEO_REFERENCE_BYTES = 8 * 1024 * 1024;
 
 /** Runway pins API behaviour to a dated version rather than a semver. */
 const RUNWAY_API_VERSION = '2024-11-06';
@@ -49,22 +52,79 @@ export type VideoRequestInput = {
   readonly prompt: string;
   readonly aspectRatio: VideoAspectRatio;
   readonly durationSeconds: number;
-  /** Optional image-to-video seed; only Veo accepts one in this build. */
+  /** Explicit operation; omitted requests retain legacy text/first-frame inference. */
+  readonly operation?: VideoOperation;
+  /** First frame for image-to-video or Start-End generation. */
   readonly referenceImage?: { readonly mimeType: string; readonly base64: string };
+  /** Ending frame for Start-End generation. */
+  readonly lastFrame?: { readonly mimeType: string; readonly base64: string };
+  /** Character/product references for reference-to-video. */
+  readonly referenceImages?: readonly { readonly mimeType: string; readonly base64: string }[];
   readonly fetchImpl?: typeof fetch;
   readonly pollIntervalMs?: number;
   readonly pollTimeoutMs?: number;
   readonly onProgress?: (stage: VideoProgressStage, elapsedMs: number) => void;
 };
 
-export function assertImplementedVideoRequest(input: Pick<VideoRequestInput, 'modelId' | 'durationSeconds' | 'aspectRatio' | 'referenceImage'>): void {
-  const operation = input.referenceImage === undefined ? 'text_to_video' : 'image_to_video';
+type VideoInputSet = Pick<VideoRequestInput, 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages'>;
+
+/** Resolve old callers safely while allowing advanced inputs to be explicit. */
+export function resolveVideoOperation(input: VideoInputSet): VideoOperation {
+  if (input.operation !== undefined) return input.operation;
+  if (input.lastFrame !== undefined) return 'start_end';
+  if ((input.referenceImages?.length ?? 0) > 0) return 'reference_to_video';
+  return input.referenceImage === undefined ? 'text_to_video' : 'image_to_video';
+}
+
+function usableImage(image: { readonly mimeType: string; readonly base64: string } | undefined): boolean {
+  return image !== undefined && image.mimeType.startsWith('image/') && image.base64.trim().length > 0;
+}
+
+function approximateBase64Bytes(base64: string): number {
+  const value = base64.trim();
+  return Math.floor((value.length * 3) / 4) - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+}
+
+/** Validate mutually exclusive frame/reference fields before cost or network work. */
+export function validateVideoInputSet(input: VideoInputSet): { readonly operation: VideoOperation; readonly referenceImageCount: number } {
+  const operation = resolveVideoOperation(input);
+  const assets = input.referenceImages ?? [];
+  if (assets.some((image) => !usableImage(image))) throw new Error('Every video reference must contain valid image bytes.');
+  if (input.referenceImage !== undefined && !usableImage(input.referenceImage)) throw new Error('The first frame does not contain valid image bytes.');
+  if (input.lastFrame !== undefined && !usableImage(input.lastFrame)) throw new Error('The last frame does not contain valid image bytes.');
+  if ([input.referenceImage, input.lastFrame, ...assets].some((image) => image !== undefined && approximateBase64Bytes(image.base64) > MAX_VIDEO_REFERENCE_BYTES)) {
+    throw new Error('Each video reference image must be 8 MB or smaller.');
+  }
+
+  if (operation === 'text_to_video' && (input.referenceImage !== undefined || input.lastFrame !== undefined || assets.length > 0)) {
+    throw new Error('Text-to-video cannot include frame or asset references.');
+  }
+  if (operation === 'image_to_video' && (input.referenceImage === undefined || input.lastFrame !== undefined || assets.length > 0)) {
+    throw new Error('Image-to-video requires exactly one first frame.');
+  }
+  if (operation === 'start_end' && (input.referenceImage === undefined || input.lastFrame === undefined || assets.length > 0)) {
+    throw new Error('Start-End requires both a first frame and a last frame, without asset references.');
+  }
+  if (operation === 'reference_to_video' && (input.referenceImage !== undefined || input.lastFrame !== undefined || assets.length === 0)) {
+    throw new Error('Reference-to-video requires asset references and cannot include first or last frames.');
+  }
+  if (!['text_to_video', 'image_to_video', 'start_end', 'reference_to_video'].includes(operation)) {
+    throw new Error(`${operation} is not implemented by the generation request contract yet.`);
+  }
+  return {
+    operation,
+    referenceImageCount: operation === 'start_end' ? 2 : operation === 'reference_to_video' ? assets.length : operation === 'image_to_video' ? 1 : 0
+  };
+}
+
+export function assertImplementedVideoRequest(input: Pick<VideoRequestInput, 'modelId' | 'durationSeconds' | 'aspectRatio' | 'operation' | 'referenceImage' | 'lastFrame' | 'referenceImages'>): void {
+  const resolved = validateVideoInputSet(input);
   const validation = validateVideoRequest({
     modelId: input.modelId,
-    operation,
+    operation: resolved.operation,
     durationSeconds: input.durationSeconds,
     aspectRatio: input.aspectRatio,
-    referenceImageCount: input.referenceImage === undefined ? 0 : 1
+    referenceImageCount: resolved.referenceImageCount
   });
   if (!validation.ok) throw new Error(validation.message);
 }
@@ -130,6 +190,7 @@ export function snapSoraSeconds(requested: number): number {
  */
 export async function requestVeoVideo(input: VideoRequestInput): Promise<VideoDownload> {
   assertImplementedVideoRequest(input);
+  const operationId = resolveVideoOperation(input);
   const fetchImpl = input.fetchImpl ?? fetch;
   const pollIntervalMs = input.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS;
   const pollTimeoutMs = input.pollTimeoutMs ?? VIDEO_POLL_TIMEOUT_MS;
@@ -144,9 +205,18 @@ export async function requestVeoVideo(input: VideoRequestInput): Promise<VideoDo
     body: JSON.stringify({
       instances: [{
         prompt: input.prompt,
-        ...(input.referenceImage === undefined
-          ? {}
-          : { image: { bytesBase64Encoded: input.referenceImage.base64, mimeType: input.referenceImage.mimeType } })
+        ...(input.referenceImage === undefined ? {} : {
+          image: { inlineData: { mimeType: input.referenceImage.mimeType, data: input.referenceImage.base64 } }
+        }),
+        ...(input.lastFrame === undefined ? {} : {
+          lastFrame: { inlineData: { mimeType: input.lastFrame.mimeType, data: input.lastFrame.base64 } }
+        }),
+        ...(operationId !== 'reference_to_video' ? {} : {
+          referenceImages: (input.referenceImages ?? []).map((image) => ({
+            image: { inlineData: { mimeType: image.mimeType, data: image.base64 } },
+            referenceType: 'asset'
+          }))
+        })
       }],
       parameters: { aspectRatio: input.aspectRatio, durationSeconds: input.durationSeconds }
     })

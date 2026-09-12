@@ -352,10 +352,15 @@ export class OpenVideoMcpServer {
       durationSeconds: z.number().min(1).max(MAX_SUPPORTED_SHOT_SECONDS).optional(),
       stylePreset: z.string().optional().default('Cinematic'),
       modelId: z.string().optional(),
+      operation: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']).optional(),
       referenceImageJobId: z
         .string()
         .optional()
-        .describe('A completed createImageJob id. Seeds image-to-video so the shot matches its still.'),
+        .describe('Legacy alias for firstFrameImageJobId.'),
+      firstFrameImageJobId: z.string().optional().describe('Completed createImageJob id used as the first frame.'),
+      lastFrameImageJobId: z.string().optional().describe('Completed createImageJob id used as the ending frame. Requires the first frame.'),
+      referenceImageJobIds: z.array(z.string()).min(1).max(3).optional()
+        .describe('One to three completed createImageJob ids used as Veo asset/character references.'),
       apiKey: z.string().optional()
     })
   })
@@ -365,21 +370,42 @@ export class OpenVideoMcpServer {
     durationSeconds?: number;
     stylePreset?: string;
     modelId?: string;
+    operation?: 'text_to_video' | 'image_to_video' | 'reference_to_video' | 'start_end';
     referenceImageJobId?: string;
+    firstFrameImageJobId?: string;
+    lastFrameImageJobId?: string;
+    referenceImageJobIds?: readonly string[];
     apiKey?: string;
   }) {
     // The still crosses as inline bytes, exactly as a picked file would, so
     // image-to-video does not care that this seed was generated.
+    const firstFrameJobId = params.firstFrameImageJobId ?? params.referenceImageJobId;
+    if (params.firstFrameImageJobId !== undefined && params.referenceImageJobId !== undefined) {
+      return { success: false, error: 'Use firstFrameImageJobId or its legacy alias referenceImageJobId, not both.' };
+    }
     let referenceImage: { displayName: string; mimeType: string; base64: string } | undefined;
-    if (params.referenceImageJobId !== undefined) {
-      const resolved = getGeneratedImageAsReference(params.referenceImageJobId);
+    if (firstFrameJobId !== undefined) {
+      const resolved = getGeneratedImageAsReference(firstFrameJobId);
       if (resolved === null) {
         return {
           success: false,
-          error: `Image job ${params.referenceImageJobId} has no completed image to use as a reference.`
+          error: `Image job ${firstFrameJobId} has no completed image to use as a first frame.`
         };
       }
       referenceImage = { ...resolved };
+    }
+
+    let lastFrame: { displayName: string; mimeType: string; base64: string } | undefined;
+    if (params.lastFrameImageJobId !== undefined) {
+      const resolved = getGeneratedImageAsReference(params.lastFrameImageJobId);
+      if (resolved === null) return { success: false, error: `Image job ${params.lastFrameImageJobId} has no completed image to use as a last frame.` };
+      lastFrame = { ...resolved };
+    }
+    const referenceImages: { displayName: string; mimeType: string; base64: string }[] = [];
+    for (const jobId of params.referenceImageJobIds ?? []) {
+      const resolved = getGeneratedImageAsReference(jobId);
+      if (resolved === null) return { success: false, error: `Image job ${jobId} has no completed image to use as an asset reference.` };
+      referenceImages.push({ ...resolved });
     }
 
     const job = await createVideoGenerationJob({
@@ -388,7 +414,10 @@ export class OpenVideoMcpServer {
       ...(params.durationSeconds === undefined ? {} : { durationSeconds: params.durationSeconds }),
       stylePreset: params.stylePreset ?? 'Cinematic',
       ...(params.modelId === undefined ? {} : { modelId: params.modelId }),
-      ...(referenceImage === undefined ? {} : { referenceImage })
+      ...(params.operation === undefined ? {} : { operation: params.operation }),
+      ...(referenceImage === undefined ? {} : { referenceImage }),
+      ...(lastFrame === undefined ? {} : { lastFrame }),
+      ...(referenceImages.length === 0 ? {} : { referenceImages })
     });
 
     return {

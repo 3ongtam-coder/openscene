@@ -17,8 +17,13 @@ describe('media capability surface parity', () => {
     expect(desktop).toContain('aspectRatioOptions.map');
     expect(mobileScreen).toContain('modelId: model.id');
     expect(mobileScreen).toContain('supportsReferenceImage(model?.id');
-    expect(mobileScreen).toContain("getVideoOperationConstraints(model.id, 'text_to_video')");
+    expect(mobileScreen).toContain('getVideoOperationConstraints(model.id, operation)');
     expect(mobileScreen).toContain('aspectRatioOptions.map');
+    expect(desktop).toContain("{ id: 'start_end', label: 'Start-End' }");
+    expect(desktop).toContain("{ id: 'reference_to_video', label: 'References' }");
+    expect(mobileScreen).toContain("{ id: 'start_end', label: 'Start-End' }");
+    expect(mobileScreen).toContain("base64: true");
+    expect(mobileScreen).toContain('accessibilityLabel={`Reference image ${value.displayName}`}');
     expect(mobileExecution).toContain('validateVideoRequest({');
     expect(planner).toContain("from './mediaCapabilityRegistry'");
     expect(jobs.indexOf('validateVideoRequest({')).toBeLessThan(jobs.indexOf('await reserveSpend('));
