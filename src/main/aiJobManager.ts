@@ -40,6 +40,7 @@ import { tmpdir } from 'node:os';
 import { speechPreviewUrl } from '../shared/mediaPlaybackUrls';
 import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
 import { isInsideDirectory } from './projectStoreSupport';
+import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from '../shared/voiceDelivery';
 
 const videoJobs = new Map<string, VideoGenerationJob>();
 const speechJobs = new Map<string, TextToSpeechJob>();
@@ -212,11 +213,11 @@ async function invokeSpeechProvider(
   try {
     let bytes: Buffer;
     if (model.providerId === 'vieneu_local') {
-      bytes = await generateVieNeuSpeech({ voiceId: request.voiceId ?? '', script: request.script });
+      bytes = await generateVieNeuSpeech({ voiceId: request.voiceId ?? '', script: request.script, ...(request.delivery === undefined ? {} : { delivery: request.delivery }) });
     } else if (model.providerId === 'elevenlabs' && apiKey !== undefined) {
-      bytes = await generateElevenLabsSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script });
+      bytes = await generateElevenLabsSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script, ...(request.delivery === undefined ? {} : { delivery: request.delivery }) });
     } else if (model.providerId === 'openai' && apiKey !== undefined) {
-      bytes = await generateOpenAiSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script });
+      bytes = await generateOpenAiSpeech({ apiKey, modelId: model.id, voiceId: request.voiceId ?? '', script: request.script, ...(request.delivery === undefined ? {} : { delivery: request.delivery }) });
     } else {
       return {
         ok: false,
@@ -477,6 +478,18 @@ export function getGeneratedImageAsReference(
 }
 
 export async function createSpeechGenerationJob(request: TextToSpeechRequest): Promise<TextToSpeechJob> {
+  let delivery: VoiceDeliverySettings | undefined;
+  if (request.delivery !== undefined) {
+    const parsedDelivery = parseVoiceDeliverySettings(request.delivery);
+    if (parsedDelivery === null) {
+      throw new Error('Voice delivery settings are invalid. Review the performance script and controls before retrying.');
+    }
+    delivery = parsedDelivery;
+  }
+  const providerRequest: TextToSpeechRequest = {
+    ...request,
+    ...(delivery === undefined ? {} : { delivery })
+  };
   const model = resolveGenerationModel('voice-generation', request.modelId);
   const speechMapping = SPEECH_MODEL_PROVIDERS[model.providerId];
   if (speechMapping === undefined) throw new Error(`Model ${model.id} has no runnable speech provider binding.`);
@@ -508,6 +521,8 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
     executionPath: model.executionPath,
     model: modelId,
     scriptCharacters: request.script.length,
+    performanceScriptCharacters: delivery?.performanceScript.length ?? request.script.length,
+    expressiveDelivery: delivery !== undefined,
     voiceConfigured: Boolean(request.voiceId?.trim())
   });
 
@@ -535,7 +550,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       }, 10_000);
       let result: CloudProviderResult;
       try {
-        result = await invokeSpeechProvider(model, apiKey, request, join(speechDir, `${id}.${extension}`));
+        result = await invokeSpeechProvider(model, apiKey, providerRequest, join(speechDir, `${id}.${extension}`));
       } finally {
         clearInterval(heartbeat);
       }

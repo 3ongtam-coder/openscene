@@ -10,6 +10,7 @@ import {
   repairStreamingWavHeader,
   resolveVieNeuBaseUrl
 } from '../src/main/mediaGenerationAdapters';
+import { createVoiceDeliverySettings } from '../src/shared/voiceDelivery';
 
 const AUDIO_BYTES = new Uint8Array([1, 2, 3]).buffer;
 const VIDEO_BYTES = new Uint8Array([9, 8, 7, 6]).buffer;
@@ -53,6 +54,40 @@ describe('media generation adapters', () => {
     });
 
     expect([...bytes]).toEqual([1, 2, 3]);
+  });
+
+  it('sends Eleven v3 audio tags and only its supported stability setting', async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(JSON.parse(init.body as string)).toEqual({
+        text: '[whispers] Keep this quiet.',
+        model_id: 'eleven_v3',
+        voice_settings: { stability: 0.3 }
+      });
+      return new Response(AUDIO_BYTES, { status: 200 });
+    });
+
+    await generateElevenLabsSpeech({
+      apiKey: 'xi-test-key', modelId: 'eleven_v3', voiceId: 'voice-123', script: 'Keep this quiet.',
+      delivery: createVoiceDeliverySettings('[whispers] Keep this quiet.', { stability: 0.3, similarityBoost: 0.1, style: 0.9, speed: 1.2, speakerBoost: false }),
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+  });
+
+  it('sends supported advanced voice settings to ElevenLabs v2 models', async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(JSON.parse(init.body as string)).toEqual({
+        text: 'Wait. <break time="0.5s" /> Continue.',
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.4, similarity_boost: 0.8, style: 0.35, use_speaker_boost: false, speed: 0.9 }
+      });
+      return new Response(AUDIO_BYTES, { status: 200 });
+    });
+
+    await generateElevenLabsSpeech({
+      apiKey: 'xi-test-key', modelId: 'eleven_multilingual_v2', voiceId: 'voice-123', script: 'Wait. Continue.',
+      delivery: createVoiceDeliverySettings('Wait. <break time="0.5s" /> Continue.', { stability: 0.4, similarityBoost: 0.8, style: 0.35, speed: 0.9, speakerBoost: false }),
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
   });
 
   it('sends OpenAI speech with a bearer key and falls back to a valid voice', async () => {
@@ -104,6 +139,19 @@ describe('media generation adapters', () => {
 
     expect(bytes.readUInt32LE(4)).toBe(bytes.length - 8);
     expect(bytes.readUInt32LE(40)).toBe(bytes.length - 44);
+  });
+
+  it('sends VieNeu supported inline cues as text without invented style fields', async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(JSON.parse(init.body as string)).toEqual({ text: '[cười] Xin chào', voice_id: 'voice-south' });
+      return new Response(new Uint8Array(streamingWavBytes()), { status: 200, headers: { 'Content-Type': 'audio/wav' } });
+    });
+
+    await generateVieNeuSpeech({
+      voiceId: 'voice-south', script: 'Xin chào',
+      delivery: createVoiceDeliverySettings('[cười] Xin chào', { stability: 0.1, style: 1 }),
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
   });
 
   it('rejects non-loopback VieNeu endpoints and malformed WAV responses', () => {

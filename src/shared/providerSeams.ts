@@ -87,6 +87,8 @@ export interface VideoGenerationProvider {
 
 export interface TextToSpeechRequest {
   script: string;
+  /** Provider-facing delivery text/settings; subtitles continue to use script. */
+  delivery?: import('./voiceDelivery').VoiceDeliverySettings;
   voiceId: string;
   modelId?: string;
   language?: string;
