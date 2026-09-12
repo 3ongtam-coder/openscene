@@ -95,7 +95,16 @@ export function buildGoogleFlowStateProbeScript(): string {
     const viewH = window.innerHeight;
 
     const inputs = visible('[contenteditable]:not([contenteditable="false"]), textarea, [role="textbox"]');
-    const promptEntry = inputs.find(({ rectangle }) => rectangle.width > 100 && rectangle.y > viewH * 0.45);
+    // The unified Flow editor uses a ProseMirror contenteditable while the
+    // visible "What do you want to create?" text is only a non-editable span.
+    // Prefer that concrete editor so a project title/search textbox cannot win
+    // the broad geometry fallback.
+    const explicitPromptEntry = visible([
+      'flow-rich-text-editor .ProseMirror[contenteditable="true"]',
+      '.prompt-input .ProseMirror[contenteditable="true"]'
+    ].join(',')).find(({ rectangle }) => rectangle.width > 100 && rectangle.y > viewH * 0.45);
+    const promptEntry = explicitPromptEntry
+      || inputs.find(({ rectangle }) => rectangle.width > 100 && rectangle.y > viewH * 0.45);
     const input = promptEntry?.rectangle;
 
     const projectLink = visible('a[href*="/fx/tools/flow/project/"], a[href*="/project/"]')
@@ -230,6 +239,7 @@ export function buildGoogleFlowStateProbeScript(): string {
       if (!(element instanceof HTMLImageElement)) return [];
       const src = element.currentSrc || element.src || '';
       const providerMedia = src.includes('labs.google/fx/api/')
+        || src.includes('flow-content.google/image/')
         || src.includes('googleusercontent.com')
         || src.includes('lh3.google')
         || src.includes('gstatic.com')
@@ -505,6 +515,15 @@ function targetModelLabel(model: GoogleFlowImageModel): string {
   return model === 'nano-banana-pro' ? 'Nano Banana Pro' : 'Nano Banana 2';
 }
 
+export function flowConfigurationHasExactModel(configuration: string, expectedModel: string): boolean {
+  const current = normalizedLabel(configuration).replace(/\s+/g, ' ').trim();
+  const expected = normalizedLabel(expectedModel).replace(/\s+/g, ' ').trim();
+  if (expected === 'nano banana 2') {
+    return current.includes(expected) && !current.includes(`${expected} lite`);
+  }
+  return current.includes(expected);
+}
+
 export function flowOrientationForAspectRatio(aspectRatio: string): 'Landscape' | 'Portrait' | 'Square' {
   const [width, height] = aspectRatio.split(':').map(Number);
   if (Number.isFinite(width) && Number.isFinite(height) && width === height) return 'Square';
@@ -571,9 +590,9 @@ async function configureGeneration(
     expectedModel,
     currentConfigFound: state.configButton !== undefined,
     modelControlFound: state.modelDropdown !== undefined,
-    expectedModelSelected: normalizedLabel(currentConfiguration).includes(normalizedLabel(expectedModel))
+    expectedModelSelected: flowConfigurationHasExactModel(currentConfiguration, expectedModel)
   });
-  if (!normalizedLabel(currentConfiguration).includes(normalizedLabel(expectedModel))) {
+  if (!flowConfigurationHasExactModel(currentConfiguration, expectedModel)) {
     if (state.modelDropdown === undefined) {
       throw new Error(`Google Flow loaded, but the image model selector was not found. OpenScene cannot guarantee ${expectedModel}.`);
     }
@@ -596,18 +615,25 @@ async function configureGeneration(
 }
 
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
+  let promptInserted = false;
   while (Date.now() < deadline) {
     const state = await readState(webContents);
     throwForAction(state);
-    if (state.input !== undefined && state.submit !== undefined) {
+    // Flow deliberately disables Create while the prompt is empty. Waiting for
+    // both controls before typing therefore deadlocks on the live page. Fill
+    // the ProseMirror editor first, then return only after a fresh DOM probe
+    // observes the newly enabled Create button.
+    if (!promptInserted && state.input !== undefined) {
       clickAt(webContents, state.input);
       await delay(150);
       pressKey(webContents, 'A', ['control']);
       await delay(100);
       await webContents.insertText(prompt);
       await delay(300);
-      return state;
+      promptInserted = true;
+      continue;
     }
+    if (promptInserted && state.submit !== undefined) return state;
     await delay(POLL_INTERVAL_MS);
   }
   throw new Error('Google Flow loaded, but OpenScene could not find its prompt and Create controls. The Flow UI may have changed.');
