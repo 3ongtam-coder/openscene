@@ -35,6 +35,8 @@ export const IPC_CHANNELS = {
   aiGenerateVideo: 'ai:generate-video',
   aiGetComfyUiMotionStatus: 'ai:comfyui-motion-status',
   aiSelectReferenceImage: 'ai:select-reference-image',
+  aiExtractContinuationFrame: 'ai:extract-continuation-frame',
+  aiGetProjectImageReference: 'ai:get-project-image-reference',
   aiGetVideoJob: 'ai:get-video-job',
   aiGenerateSpeech: 'ai:generate-speech',
   aiListSpeechVoices: 'ai:list-speech-voices',

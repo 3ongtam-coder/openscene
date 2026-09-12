@@ -40,4 +40,21 @@ describe('reviewed video candidate parity', () => {
     expect(protocol).toContain("url.hostname === 'video-preview'");
     expect(studio).not.toContain('src={job.outputFilePath}');
   });
+
+  it('chains an approved desktop tail frame while mobile retains native sequential chaining', async () => {
+    const [desktop, mobile, preload] = await Promise.all([
+      readRepo('src/renderer/src/VideoGenerationWorkspace.tsx'),
+      readRepo('mobile/src/screens/PlanScreen.tsx'),
+      readRepo('src/preload/index.ts')
+    ]);
+    expect(desktop).toContain('chainContinuationFrame(document');
+    expect(desktop).toContain("referenceAssetIds: inputs.referenceImage === undefined");
+    expect(desktop).toContain('Writer Style Bible locked:');
+    expect(desktop).toContain('aiExtractContinuationFrame({ projectId, assetId: sourceAssetId })');
+    expect(desktop).toContain('Load saved continuity frame');
+    expect(desktop).toContain('Writer Style Bible locked');
+    expect(preload).toContain('aiGetProjectImageReference(input: ProjectAssetReferenceInput)');
+    expect(mobile).toContain('carriedFrame = continuity ? result.tailFrame : undefined');
+    expect(mobile).toContain("continuity: plan.shots.length === 1 ? 'none' : carriedFrame === undefined ? 'restate' : 'from-frame'");
+  });
 });

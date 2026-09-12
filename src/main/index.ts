@@ -54,6 +54,8 @@ import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHa
 import { TranscriptionService } from './transcriptionService';
 import { registerTranscriptionIpcHandlers } from './transcriptionIpcHandlers';
 import { ManagedVieNeuRuntime } from './managedVieNeuRuntime';
+import { ContinuityFrameService } from './continuityFrameService';
+import { registerContinuityFrameIpcHandlers } from './continuityFrameIpcHandlers';
 
 try {
   // Node loads the developer's local .env without bundling its secrets into
@@ -74,6 +76,7 @@ const projectLocations = new ProjectLocationRegistry(join(app.getPath('userData'
 const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'), projectLocations);
 const assetLibraryStore = new AssetLibraryStore(join(app.getPath('userData'), 'projects'), projectStore);
 const audioDetachService = new AudioDetachService({ projects: projectStore, assets: assetLibraryStore });
+const continuityFrameService = new ContinuityFrameService({ projects: projectStore, assets: assetLibraryStore });
 const exportJobStore = new ExportJobStore();
 const credentialStore = new CredentialStore(app.getPath('userData'));
 const browserSessionService = new BrowserSessionService(new BrowserSessionVault(app.getPath('userData')));
@@ -327,6 +330,7 @@ async function installIpcHandlers(): Promise<void> {
   });
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
   registerAudioDetachIpcHandler(ipcMain, audioDetachService);
+  registerContinuityFrameIpcHandlers(ipcMain, continuityFrameService);
   registerTranscriptionIpcHandlers(ipcMain, transcriptionService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
   registerUpdaterIpcHandlers(ipcMain, {
