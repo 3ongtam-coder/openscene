@@ -337,6 +337,14 @@ export function importAsset(
   };
 }
 
+/** Saves a generated video in the project library without changing the edit. */
+export function saveGeneratedVideoCandidate(project: MobileProject, asset: MobileAsset): MobileProject {
+  const known = project.assets.some((entry) => entry.id === asset.id);
+  const updated = { ...project, assets: known ? project.assets : [...project.assets, asset] };
+  writeProject(updated);
+  return updated;
+}
+
 /**
  * Appends a stored asset to the project's timeline and saves it.
  *

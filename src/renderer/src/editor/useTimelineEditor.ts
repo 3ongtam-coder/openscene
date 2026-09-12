@@ -341,6 +341,22 @@ export function useTimelineEditor() {
     setSelectedClipId(placement.clip.id);
   }, [playback, project, replaceTimeline, selectedAsset]);
 
+  const placeAssetOnTimeline = useCallback((assetId: string): boolean => {
+    if (project === null) return false;
+    const asset = project.assets.find((candidate) => candidate.id === assetId);
+    if (asset === undefined || asset.metadata === null) return false;
+    const track = findFirstCompatibleTrack(project.timeline, asset.kind);
+    if (track === null) return false;
+    const placement = placeReadyAssetOnTimeline(project.timeline, asset, track.id, createOpaqueId('clip'), insertionStartForTrack(track));
+    if (placement === null) return false;
+    const timeline = replaceTimeline(() => placement.timeline, `Placed approved candidate ${asset.displayName} on ${track.name}.`);
+    if (timeline === null) return false;
+    playback.setPlayheadMs(placement.playheadMs, timeline);
+    setSelectedAssetId(asset.id);
+    setSelectedClipId(placement.clip.id);
+    return true;
+  }, [playback, project, replaceTimeline]);
+
   const placeAssetOnTrack = useCallback((assetId: string, trackId: string, timelineStartMs: number) => {
     if (project === null) return;
     const asset = project.assets.find((candidate) => candidate.id === assetId) ?? null;
@@ -679,7 +695,7 @@ export function useTimelineEditor() {
       updatedAt: response.value.updatedAt
     });
     await refreshProjects();
-    setStatusMessage({ tone: 'success', text: 'Writer draft saved to the project.' });
+    setStatusMessage({ tone: 'success', text: 'AI project data saved locally.' });
     return true;
   }, [project, refreshProjects]);
 
@@ -688,7 +704,7 @@ export function useTimelineEditor() {
     importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
     cutAtPlayhead, transitionAtPlayhead, setTransitionAtPlayhead, removeTransitionAtPlayhead,
     addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead, applyNarrationSubtitles, applyTranscriptionSubtitles,
-    openProject, openProjectFolder, renameProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
+    openProject, openProjectFolder, renameProject, placeSelectedAsset, placeAssetOnTimeline, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,
     splitSelectedClip, statusMessage, trimSelectedClip, updateAssetMetadata, updateSelectedClipEffects, detachSelectedClipAudio,

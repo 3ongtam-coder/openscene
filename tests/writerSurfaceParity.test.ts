@@ -51,7 +51,7 @@ describe('Writer surface parity', () => {
       readRepo('src/renderer/src/VideoGenerationWorkspace.tsx'), readRepo('mobile/src/screens/PlanScreen.tsx')
     ]);
     expect(desktop).toContain('approvedWriterShots(writerDocument)');
-    expect(mobile).toContain('approvedWriterShots(projectId');
+    expect(mobile).toContain('approvedWriterShots(activeProject?.ai)');
     expect(desktop).toContain('durationOptions.includes(shot.durationSeconds)');
     expect(mobile).toContain('supportedShotSeconds(model.id).includes(shot.durationSeconds)');
     expect(desktop).toContain('setPrompt(shot.prompt)');
