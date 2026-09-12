@@ -10,7 +10,15 @@ import { Tabs } from './ui';
 import { closeProjectTab, openProjectTab, pruneProjectTabs, type ProjectTab } from './projectTabs';
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
 import { NarrationPanel } from './NarrationPanel';
-import type { ReferenceImageSelection } from '../../shared/providerSeams';
+import type { ImageAspectRatio, ReferenceImageSelection } from '../../shared/providerSeams';
+import {
+  attachGeneratedProductionImage,
+  buildCharacterReferenceImageBrief,
+  buildStoryboardImageBrief,
+  type ProductionImageHandoff,
+  type ProductionImageTarget
+} from '../../shared/productionWorkflow';
+import type { StatusMessage } from './appTypes';
 import { timelineDurationMs } from '../../shared/timelineLogic';
 import { ImageGenerationWorkspace } from './ImageGenerationWorkspace';
 import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
@@ -263,6 +271,14 @@ export function App(): ReactElement {
   // Lives here because both studios touch it: the image studio produces a still
   // and the video studio consumes it as an image-to-video seed.
   const [videoReferenceImage, setVideoReferenceImage] = useState<ReferenceImageSelection | null>(null);
+  // A generated image must remember the exact Character or Shot that requested
+  // it. Composer state alone is not enough once several image jobs overlap.
+  const [productionImageHandoff, setProductionImageHandoff] = useState<ProductionImageHandoff | null>(null);
+
+  useEffect(() => {
+    const projectId = editor.project?.id;
+    setProductionImageHandoff((current) => current !== null && current.projectId !== projectId ? null : current);
+  }, [editor.project?.id]);
 
   const selectWorkspaceTab = (tabId: WorkspaceTabId): void => {
     setWorkspaceTabId(tabId);
@@ -271,6 +287,53 @@ export function App(): ReactElement {
     } catch {
       // The in-memory choice stays usable when local storage is unavailable.
     }
+  };
+
+  const openProductionImageBrief = (
+    target: ProductionImageTarget,
+    aspectRatio?: ImageAspectRatio
+  ): string | null => {
+    const project = editor.project;
+    if (project === null) return 'Open a local project before creating production images.';
+    const result = target.kind === 'character_reference'
+      ? buildCharacterReferenceImageBrief(project.ai, target.characterId)
+      : buildStoryboardImageBrief(project.ai, target.shotId, aspectRatio ?? '16:9');
+    if (!result.ok) return result.reason;
+    setProductionImageHandoff({
+      ...result.brief,
+      requestId: crypto.randomUUID(),
+      projectId: project.id
+    });
+    selectWorkspaceTab('image');
+    return null;
+  };
+
+  const attachProductionImage = async (
+    jobId: string,
+    handoff: ProductionImageHandoff
+  ): Promise<StatusMessage> => {
+    const project = editor.project;
+    if (project === null || project.id !== handoff.projectId) {
+      return { tone: 'warning', text: 'Reopen the project that requested this image before attaching it.' };
+    }
+    const imported = await editor.importAiResult(jobId);
+    if (imported.importedAssetId === undefined) return imported;
+    const mutation = attachGeneratedProductionImage(project.ai, {
+      target: handoff.target,
+      assetId: imported.importedAssetId,
+      referenceId: `generated-production-reference-${crypto.randomUUID()}`
+    });
+    if (!mutation.ok) return { tone: 'warning', text: mutation.reason };
+    const saved = await editor.saveAiProjectDocument(mutation.document);
+    if (!saved) {
+      return {
+        tone: 'danger',
+        text: 'The image was imported safely, but its Character/Storyboard assignment could not be saved. It remains in the project library.'
+      };
+    }
+    setProductionImageHandoff((current) => current?.requestId === handoff.requestId ? null : current);
+    selectWorkspaceTab('video');
+    return { tone: 'success', text: `${handoff.targetLabel} was imported and attached to the production board.` };
   };
 
   return (
@@ -407,6 +470,7 @@ export function App(): ReactElement {
                   projectAssets={editor.project?.assets ?? []}
                   referenceImage={videoReferenceImage}
                   onReferenceImageChange={setVideoReferenceImage}
+                  onGenerateProductionImage={openProductionImageBrief}
                 />
               </section>
               <section
@@ -418,7 +482,10 @@ export function App(): ReactElement {
                 tabIndex={-1}
               >
                 <ImageGenerationWorkspace
+                  key={editor.project?.id ?? 'no-project'}
                   projectName={editor.projects.find((item) => item.id === editor.project?.id)?.folderName ?? editor.project?.name}
+                  productionHandoff={productionImageHandoff}
+                  onAttachToProduction={attachProductionImage}
                   onUseForVideo={(reference) => {
                     setVideoReferenceImage(reference);
                     selectWorkspaceTab('video');

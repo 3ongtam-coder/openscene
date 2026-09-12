@@ -18,6 +18,9 @@ describe('production board surface parity', () => {
     expect(desktop).toContain('assignStoryboardReference(document');
     expect(desktop).toContain('addCharacterReference(document');
     expect(desktop).toContain('This board never starts a provider job.');
+    expect(desktop).toContain('Generate reference');
+    expect(desktop).toContain('Generate storyboard');
+    expect(desktop).toContain('Open shot for video');
     expect(desktopEditor).toContain('buildApprovedProductionAssemblyPlan(project.ai');
     expect(desktopEditor).toContain('assembleApprovedProductionCut({');
     expect(mobile).toContain('productionShotRows(activeProject?.ai)');

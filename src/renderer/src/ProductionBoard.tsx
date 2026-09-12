@@ -18,12 +18,15 @@ const STATE_LABELS = {
   needs_review: 'Needs review', approved: 'Approved', failed: 'Failed'
 } as const;
 
-export function ProductionBoard({ document, assets, busy, onSave, onOpenShot, onAssemble }: {
+export function ProductionBoard({ document, assets, busy, onSave, onOpenShot, onGenerateCharacterImage, onGenerateStoryboardImage, onAssemble }: {
   readonly document: AiProjectDocument;
   readonly assets: readonly MediaAsset[];
   readonly busy: boolean;
   readonly onSave: (document: AiProjectDocument) => Promise<boolean>;
   readonly onOpenShot: (shotId: string) => Promise<void>;
+  /** Returns an actionable reason when the image brief cannot be opened. */
+  readonly onGenerateCharacterImage: (characterId: string) => string | null;
+  readonly onGenerateStoryboardImage: (shotId: string) => string | null;
   readonly onAssemble: () => boolean;
 }): ReactElement | null {
   const [saving, setSaving] = useState(false);
@@ -65,7 +68,7 @@ export function ProductionBoard({ document, assets, busy, onSave, onOpenShot, on
       <header className="production-board__header">
         <div>
           <h3 id="production-board-title">Storyboard production board</h3>
-          <p>Map reviewed project images, then open and generate one shot at a time. This board never starts a provider job. Current provider modes send either the storyboard first frame or the character-reference set, not both.</p>
+          <p>Generate or map reviewed project images, then open one shot at a time. This board never starts a provider job. Each generated-image brief opens for review in Image Generation first. Current video modes send either the storyboard first frame or the character-reference set, not both.</p>
         </div>
         <StatusCard tone={assembly.ok ? 'success' : 'neutral'}>{rows.filter((row) => row.state === 'approved').length}/{rows.length} shots approved</StatusCard>
       </header>
@@ -97,6 +100,14 @@ export function ProductionBoard({ document, assets, busy, onSave, onOpenShot, on
                 <option value="">{images.length === 0 ? 'Import images in Editing first' : 'Add project image…'}</option>
                 {images.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}</option>)}
               </select>
+              <Button
+                variant="ghost"
+                disabled={busy || saving || assigned.length >= 3}
+                onClick={() => {
+                  const reason = onGenerateCharacterImage(character.id);
+                  if (reason !== null) setMessage({ tone: 'warning', text: reason });
+                }}
+              >Generate reference</Button>
             </div>
           </div>;
         })}
@@ -125,7 +136,13 @@ export function ProductionBoard({ document, assets, busy, onSave, onOpenShot, on
               {images.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}</option>)}
             </select>
           </label>
-          <Button variant="ghost" disabled={busy || saving} onClick={() => void onOpenShot(row.shotId)}>Open shot for generation</Button>
+          <div className="production-board__shot-actions">
+            <Button variant="ghost" disabled={busy || saving} onClick={() => {
+              const reason = onGenerateStoryboardImage(row.shotId);
+              if (reason !== null) setMessage({ tone: 'warning', text: reason });
+            }}>Generate storyboard</Button>
+            <Button variant="ghost" disabled={busy || saving} onClick={() => void onOpenShot(row.shotId)}>Open shot for video</Button>
+          </div>
         </li>)}
       </ol>
 

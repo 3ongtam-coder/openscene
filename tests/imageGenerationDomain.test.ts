@@ -91,3 +91,22 @@ describe('still-to-video handoff', () => {
     expect(imageStudio).toContain('onUseForVideo(response.value);');
   });
 });
+
+describe('Writer production-image handoff', () => {
+  const app = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.tsx'), 'utf8');
+  const imageStudio = readFileSync(resolve(process.cwd(), 'src/renderer/src/ImageGenerationWorkspace.tsx'), 'utf8');
+
+  it('imports a reviewed generated still before attaching it to the exact Writer target', () => {
+    expect(app).toContain('const [productionImageHandoff, setProductionImageHandoff]');
+    expect(app).toContain('editor.importAiResult(jobId)');
+    expect(app).toContain('attachGeneratedProductionImage(project.ai');
+    expect(app).toContain("project.id !== handoff.projectId");
+  });
+
+  it('snapshots each paid image job target and requires an explicit attach action', () => {
+    expect(imageStudio).toContain('[job.id]: productionHandoff');
+    expect(imageStudio).toContain('nothing is attached until you approve a completed image');
+    expect(imageStudio).toContain('handleAttachToProduction(job)');
+    expect(imageStudio).toContain('Attach to ${productionTargetByJob[job.id]!.targetLabel}');
+  });
+});

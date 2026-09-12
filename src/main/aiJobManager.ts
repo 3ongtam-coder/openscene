@@ -882,7 +882,7 @@ export async function listSpeechVoices(modelId: string): Promise<readonly VoiceC
   }
 }
 
-export function getCompletedAiSource(jobId: string): { sourcePath: string; displayName: string; kind: 'video' | 'audio'; mimeType: string } | null {
+export function getCompletedAiSource(jobId: string): { sourcePath: string; displayName: string; kind: 'video' | 'audio' | 'image'; mimeType: string } | null {
   const videoJob = videoJobs.get(jobId);
   if (videoJob && videoJob.status === 'completed' && videoJob.outputFilePath) {
     return {
@@ -901,6 +901,17 @@ export function getCompletedAiSource(jobId: string): { sourcePath: string; displ
       displayName: `AI_Voice_${speechJob.id.slice(-6)}.${isWav ? 'wav' : 'mp3'}`,
       kind: 'audio',
       mimeType: isWav ? 'audio/wav' : 'audio/mpeg'
+    };
+  }
+
+  const imageJob = imageJobs.get(jobId);
+  if (imageJob && imageJob.status === 'completed' && imageJob.outputFilePath) {
+    const mimeType = imageJob.previewMimeType ?? 'image/png';
+    return {
+      sourcePath: imageJob.outputFilePath,
+      displayName: `AI_Image_${imageJob.id.slice(-6)}.${imageExtensionFor(mimeType)}`,
+      kind: 'image',
+      mimeType
     };
   }
 

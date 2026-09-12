@@ -152,6 +152,11 @@ describe('AI Job Manager and cloud provider seams', () => {
         previewMimeType: 'image/png',
         previewBase64: generatedPng.toString('base64')
       });
+      expect(getCompletedAiSource(job.id)).toMatchObject({
+        kind: 'image',
+        mimeType: 'image/png'
+      });
+      expect(getCompletedAiSource(job.id)?.displayName).toMatch(/\.png$/);
     } finally {
       setAiJobManagerBrowserImageGenerator(undefined);
     }

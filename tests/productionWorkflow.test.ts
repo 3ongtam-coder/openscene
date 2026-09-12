@@ -7,8 +7,11 @@ import type { WriterStageArtifact } from '../src/shared/writerStages';
 import {
   addCharacterReference,
   assembleApprovedProductionCut,
+  attachGeneratedProductionImage,
   assignStoryboardReference,
+  buildCharacterReferenceImageBrief,
   buildApprovedProductionAssemblyPlan,
+  buildStoryboardImageBrief,
   clearStoryboardReference,
   productionShotRows,
   removeCharacterReference
@@ -48,6 +51,67 @@ function approvedProject() {
 }
 
 describe('production storyboard workflow', () => {
+  it('compiles editable Character and Storyboard image briefs from approved Writer data', () => {
+    const base = project();
+    const [character] = base.characters;
+    const [shot] = base.shots;
+    if (!character || !shot) throw new Error('fixture missing');
+
+    const characterBrief = buildCharacterReferenceImageBrief(base, character.id);
+    expect(characterBrief).toMatchObject({
+      ok: true,
+      brief: {
+        target: { kind: 'character_reference', characterId: character.id },
+        targetLabel: 'Character reference for Ari',
+        aspectRatio: '3:4',
+        stylePreset: 'Cinematic'
+      }
+    });
+    if (characterBrief.ok) {
+      expect(characterBrief.brief.prompt).toContain('Red coat');
+      expect(characterBrief.brief.prompt).toContain('Palette: blue');
+      expect(characterBrief.brief.negativePrompt).toContain('watermark');
+    }
+
+    const storyboardBrief = buildStoryboardImageBrief(base, shot.id, '9:16');
+    expect(storyboardBrief).toMatchObject({
+      ok: true,
+      brief: {
+        target: { kind: 'storyboard', shotId: shot.id },
+        aspectRatio: '9:16'
+      }
+    });
+    if (storyboardBrief.ok) {
+      expect(storyboardBrief.brief.prompt).toContain('Ari: Red coat');
+      expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
+      expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
+    }
+  });
+
+  it('attaches a reviewed generated image to its snapshotted production target', () => {
+    const base = project();
+    const [character] = base.characters;
+    const [shot] = base.shots;
+    if (!character || !shot) throw new Error('fixture missing');
+
+    const characterResult = attachGeneratedProductionImage(base, {
+      target: { kind: 'character_reference', characterId: character.id },
+      assetId: 'generated-character-image',
+      referenceId: 'generated-character-reference'
+    });
+    expect(characterResult.ok).toBe(true);
+    if (!characterResult.ok) return;
+    const storyboardResult = attachGeneratedProductionImage(characterResult.document, {
+      target: { kind: 'storyboard', shotId: shot.id },
+      assetId: 'generated-storyboard-image',
+      referenceId: 'generated-storyboard-reference'
+    });
+    expect(storyboardResult.ok).toBe(true);
+    if (!storyboardResult.ok) return;
+    expect(storyboardResult.document.characters[0]?.referenceAssetIds).toContain('generated-character-reference');
+    expect(productionShotRows(storyboardResult.document)[0]?.storyboardReference?.assetId).toBe('generated-storyboard-image');
+  });
+
   it('derives ordered rows and maps storyboard plus character references without a second manifest', () => {
     const base = project();
     const [first] = base.shots;
