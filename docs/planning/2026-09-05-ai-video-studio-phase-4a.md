@@ -16,7 +16,7 @@
 - require a current approved plan before speech synthesis or timeline mutation;
 - replace only prior automatic captions while preserving manually authored titles;
 - expose provider-aware OpenAI and ElevenLabs voice choices plus the live preset catalog from VieNeu-TTS v3 Turbo;
-- synthesize VieNeu speech through a user-managed loopback server, repair its streaming WAV header, and never reserve cloud spend;
+- synthesize VieNeu speech through a local loopback server, repair its streaming WAV header, and never reserve cloud spend (Phase 6B later manages that process automatically);
 - use one shared narration/subtitle contract on desktop and mobile;
 - log the desktop speech lifecycle to the terminal without logging API keys or narration text.
 
@@ -36,11 +36,11 @@ Changing Writer dialogue makes a linked narration plan stale. Editing the narrat
 
 ## Platform boundary
 
-Desktop can call OpenAI or ElevenLabs and can also call a user-managed VieNeu-TTS v3 Turbo server on loopback. VieNeu requires no API key, its voices are discovered from the running server, and its output is stored as a corrected WAV. Mobile can edit and approve the same narration plan and apply captions with the shared core, but VieNeu selection and all speech synthesis remain visibly desktop-only because mobile has neither the local server nor binary result transport.
+Desktop can call OpenAI or ElevenLabs and can also call a local VieNeu-TTS v3 Turbo server on loopback. VieNeu requires no API key, its voices are discovered from the running server, and its output is stored as a corrected WAV. Phase 6B later adds automatic process lifecycle management for a sibling VieNeu checkout. Mobile can edit and approve the same narration plan and apply captions with the shared core, but VieNeu selection and all speech synthesis remain visibly desktop-only because mobile has neither the local server nor binary result transport.
 
 ## VieNeu local runtime
 
-OpenScene does not install Python packages or download model weights. In the official VieNeu-TTS checkout, run `uv sync`, then `uv run python -m apps.web_stream`. The default endpoint is `http://127.0.0.1:8001`; a different loopback port can be set with `OPENSCENE_VIENEU_BASE_URL`. Arbitrary remote hosts, credentials in URLs, paths, queries, and fragments are rejected.
+Run `npm run setup:local-ai` once to synchronize the official sibling VieNeu-TTS checkout. OpenScene then starts `.venv` automatically on launch, waits for `http://127.0.0.1:8001`, reuses an existing healthy server, and stops only the process it owns. `OPENSCENE_VIENEU_PROJECT_DIR` supports a different checkout; `OPENSCENE_VIENEU_AUTOSTART=false` opts out. Arbitrary remote hosts, credentials in URLs, paths, queries, and fragments remain rejected.
 
 ## Timing accuracy
 

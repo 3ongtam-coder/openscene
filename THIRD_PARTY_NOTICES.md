@@ -50,8 +50,9 @@ For distribution, choose and document one of these paths:
 | Gemini/xAI APIs | Connected service, per-operation approval | Record API terms, retention and pricing disclosure |
 | ComfyUI | Separate worker process | Review GPL service/bundling boundary |
 | Wan 2.2 and related weights | Worker model | Record code license, exact weight license and checksum separately |
-| whisper.cpp | Separate user-managed ASR executable, MIT, pinned in `UPSTREAM_PINS.md` | Preserve its MIT notice if later bundled; this repository currently invokes it but does not copy it |
-| Whisper-compatible model weights | User-managed local ASR model | Record the exact model source/license and SHA-256 separately before release |
+| whisper.cpp | Installer-fetched ASR executable, MIT, pinned in `UPSTREAM_PINS.md` | The setup script downloads it to ignored local storage and verifies the official release digest; preserve its MIT notice in any redistributed installer/bundle |
+| ggml-small.bin | Installer-fetched multilingual ASR model, MIT metadata, pinned in `UPSTREAM_PINS.md` | The setup script downloads it to ignored local storage and verifies the exact SHA-256; review redistribution terms again before bundling |
+| VieNeu-TTS v3 Turbo | Separate Apache-2.0 checkout and local process | OpenScene does not copy its source or weights; its included voice notice says non-commercial use only and requires attribution, so do not redistribute or enable commercial use without a separate rights review |
 
 ## Dependency security snapshot
 
