@@ -29,6 +29,7 @@ export type GoogleFlowImageGenerationInput = {
   readonly aspectRatio: string;
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
+  readonly showBrowserWindow?: boolean;
 };
 
 export type BrowserSessionGeneratedImage = {
@@ -238,8 +239,8 @@ export class BrowserSessionService {
   }
 
   /**
-   * Generate through the normal Google Labs Flow application in a real, hidden
-   * Chromium renderer. Cookie material remains inside the isolated Electron
+   * Generate through the normal Google Labs Flow application in a real
+   * Chromium renderer which can be visible for observability. Cookie material remains inside the isolated Electron
    * session; automation sees only DOM geometry and the downloaded image.
    */
   async generateGoogleFlowImage(input: GoogleFlowImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
@@ -255,6 +256,7 @@ export class BrowserSessionService {
       console.info(`[OpenScene][Google Flow Image][${requestId}] ${event}${suffix}`);
     };
     const prompt = buildGoogleFlowImagePrompt(input);
+    const showBrowserWindow = input.showBrowserWindow !== false;
     const temporaryPath = join(this.temporaryDirectory, `openscene-flow-image-${requestId}.download`);
     let isolatedSession: Electron.Session | undefined;
     let automationWindow: BrowserWindow | undefined;
@@ -262,13 +264,15 @@ export class BrowserSessionService {
     let downloadListener: ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void) | undefined;
     let downloadTimer: ReturnType<typeof setTimeout> | undefined;
     let downloadArmed = false;
+    let operationSettled = false;
+    let windowClosed: Promise<never> | undefined;
 
     this.activeProviders.add(providerId);
     log('request.start', {
       promptCharacters: prompt.length,
       aspectRatio: input.aspectRatio,
       timeoutSeconds: GOOGLE_FLOW_IMAGE_TIMEOUT_MS / 1_000,
-      visible: false
+      visible: showBrowserWindow
     });
 
     try {
@@ -280,9 +284,11 @@ export class BrowserSessionService {
       automationWindow = new BrowserWindow({
         width: 1280,
         height: 900,
-        show: false,
-        skipTaskbar: true,
+        show: showBrowserWindow,
+        skipTaskbar: !showBrowserWindow,
         title: 'OpenScene Google Flow image worker',
+        backgroundColor: '#101010',
+        autoHideMenuBar: true,
         webPreferences: {
           partition: partitionFor(providerId),
           contextIsolation: true,
@@ -293,6 +299,14 @@ export class BrowserSessionService {
           backgroundThrottling: false
         }
       });
+      windowClosed = new Promise<never>((_resolve, reject) => {
+        automationWindow!.once('closed', () => {
+          if (operationSettled) return;
+          log('browser.closed');
+          reject(new Error('The Google Flow window was closed before image generation completed.'));
+        });
+      });
+      void windowClosed.catch(() => undefined);
 
       const guardNavigation = (event: Electron.Event, url: string): void => {
         if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault();
@@ -346,18 +360,24 @@ export class BrowserSessionService {
       void download.catch(() => undefined);
 
       log('browser.loading', { origin: policy.applicationOrigin });
-      await withTimeout(
-        automationWindow.loadURL(policy.loginUrl),
-        GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS,
-        'Google Flow did not finish loading within 60 seconds.'
-      );
-      const generatedImageUrl = await automateGoogleFlowImageGeneration(automationWindow.webContents, {
-        prompt,
-        model: googleFlowImageModelFor(input.modelId),
-        aspectRatio: input.aspectRatio,
-        timeoutMs: GOOGLE_FLOW_IMAGE_TIMEOUT_MS,
-        onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
-      });
+      await Promise.race([
+        withTimeout(
+          automationWindow.loadURL(policy.loginUrl),
+          GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS,
+          'Google Flow did not finish loading within 60 seconds.'
+        ),
+        windowClosed
+      ]);
+      const generatedImageUrl = await Promise.race([
+        automateGoogleFlowImageGeneration(automationWindow.webContents, {
+          prompt,
+          model: googleFlowImageModelFor(input.modelId),
+          aspectRatio: input.aspectRatio,
+          timeoutMs: GOOGLE_FLOW_IMAGE_TIMEOUT_MS,
+          onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
+        }),
+        windowClosed
+      ]);
       downloadArmed = true;
       automationWindow.webContents.downloadURL(generatedImageUrl);
       const downloadTimeout = new Promise<never>((_resolve, reject) => {
@@ -366,13 +386,15 @@ export class BrowserSessionService {
           GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS
         );
       });
-      const result = await Promise.race([download, downloadTimeout]);
+      const result = await Promise.race([download, downloadTimeout, windowClosed]);
+      operationSettled = true;
       log('request.completed');
       return result;
     } catch (error) {
       log('request.failed', { error: error instanceof Error ? error.message : 'unknown error' });
       throw error;
     } finally {
+      operationSettled = true;
       if (downloadTimer !== undefined) clearTimeout(downloadTimer);
       if (isolatedSession !== undefined && downloadListener !== undefined) {
         isolatedSession.removeListener('will-download', downloadListener);

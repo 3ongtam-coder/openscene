@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react';
 
 import {
   BROWSER_SESSION_PROVIDERS,
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
   getBrowserSessionProviderPolicy,
+  parseGoogleFlowPreferences,
+  serializeGoogleFlowPreferences,
+  type GoogleFlowPreferences,
   type BrowserSessionProviderId,
   type BrowserSessionStatus
 } from '../../shared/browserSession';
@@ -12,6 +17,14 @@ type BrowserSessionViewState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ready'; readonly statuses: readonly BrowserSessionStatus[] }
   | { readonly kind: 'error'; readonly message: string };
+
+function readFlowPreferences(): GoogleFlowPreferences {
+  try {
+    return parseGoogleFlowPreferences(window.localStorage.getItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY));
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES;
+  }
+}
 
 function statusLabel(status: BrowserSessionStatus): string {
   switch (status.kind) {
@@ -25,6 +38,7 @@ function statusLabel(status: BrowserSessionStatus): string {
 export function BrowserSessionSettings(): ReactElement {
   const [state, setState] = useState<BrowserSessionViewState>({ kind: 'loading' });
   const [busyProvider, setBusyProvider] = useState<BrowserSessionProviderId | null>(null);
+  const [flowPreferences, setFlowPreferences] = useState<GoogleFlowPreferences>(readFlowPreferences);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -59,6 +73,19 @@ export function BrowserSessionSettings(): ReactElement {
     }
   };
 
+  const toggleFlowWindow = (): void => {
+    const next: GoogleFlowPreferences = {
+      schemaVersion: 1,
+      showWindowDuringGeneration: !flowPreferences.showWindowDuringGeneration
+    };
+    setFlowPreferences(next);
+    try {
+      window.localStorage.setItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY, serializeGoogleFlowPreferences(next));
+    } catch {
+      // The preference remains active for this run if browser storage is unavailable.
+    }
+  };
+
   return (
     <div className="settings-group">
       <h3 className="settings-subheading">Browser sessions (experimental)</h3>
@@ -69,6 +96,21 @@ export function BrowserSessionSettings(): ReactElement {
       {state.kind === 'loading' && <StatusCard tone="neutral">Reading encrypted session status.</StatusCard>}
       {state.kind === 'error' && <StatusCard tone="danger">{state.message}</StatusCard>}
       <div className="settings-list">
+        <div className="settings-list__row">
+          <div className="settings-list__main settings-list__main--stacked">
+            <span className="settings-list__name">Show Google Flow while generating</span>
+            <span className="settings-list__note">
+              Recommended during beta. Closing the Flow window cancels the current image job.
+            </span>
+          </div>
+          <Button
+            variant="default"
+            aria-pressed={flowPreferences.showWindowDuringGeneration}
+            onClick={toggleFlowWindow}
+          >
+            {flowPreferences.showWindowDuringGeneration ? 'Visible' : 'Hidden'}
+          </Button>
+        </div>
         {BROWSER_SESSION_PROVIDERS.map((providerId) => {
           const policy = getBrowserSessionProviderPolicy(providerId);
           const status = state.kind === 'ready'

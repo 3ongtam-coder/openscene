@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 
-import type { BrowserSessionStatus } from '../../shared/browserSession';
+import {
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
+  parseGoogleFlowPreferences,
+  type BrowserSessionStatus
+} from '../../shared/browserSession';
 import type { ImageAspectRatio, ImageGenerationJob, ReferenceImageSelection } from '../../shared/providerSeams';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { DomainModelPicker } from './DomainModelPicker';
@@ -17,6 +22,16 @@ type ImageGenerationWorkspaceProps = {
   /** Hands a finished still to the video studio and switches to it. */
   readonly onUseForVideo: (reference: ReferenceImageSelection) => void;
 };
+
+function showGoogleFlowWindow(): boolean {
+  try {
+    return parseGoogleFlowPreferences(
+      window.localStorage.getItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY)
+    ).showWindowDuringGeneration;
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES.showWindowDuringGeneration;
+  }
+}
 
 export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
@@ -61,10 +76,13 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       return;
     }
 
+    const flowWindowVisible = generationMode === 'browser_session' && showGoogleFlowWindow();
     setIsGenerating(true);
     setStatusMsg({
       text: generationMode === 'browser_session'
-        ? 'Starting the hidden signed-in Google Flow image worker…'
+        ? flowWindowVisible
+          ? 'Opening the signed-in Google Flow window…'
+          : 'Starting the hidden signed-in Google Flow image worker…'
         : `Submitting ${imageModel.providerLabel} image job…`,
       tone: 'neutral'
     });
@@ -78,6 +96,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
         stylePreset: selectedStyle,
         modelId: imageModel.id,
         mode: generationMode,
+        ...(generationMode === 'browser_session' ? { showBrowserWindow: flowWindowVisible } : {}),
         ...(negativePrompt.trim().length === 0 ? {} : { negativePrompt: negativePrompt.trim() })
       });
 
@@ -91,7 +110,9 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       setJobs((prev) => [job, ...prev]);
       if (job.mode === 'browser_session') {
         setStatusMsg({
-          text: 'Google Flow is generating in the background. OpenScene will download and verify the result automatically.',
+          text: flowWindowVisible
+            ? 'Google Flow is generating in the visible window. OpenScene will import the result automatically.'
+            : 'Google Flow is generating in the background. OpenScene will download and verify the result automatically.',
           tone: 'neutral'
         });
       }
@@ -326,7 +347,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <span className="studio-composer__hint">
             {aspectRatio} · {selectedStyle}
             {negativePrompt.trim().length === 0 ? '' : ' · avoid set'}
-            {generationMode === 'browser_session' ? ' · hidden Google Flow session' : ''}
+            {generationMode === 'browser_session' ? ' · Google Flow session' : ''}
           </span>
           <Button
             variant="primary"

@@ -154,6 +154,8 @@ export interface ImageGenerationRequest {
   stylePreset?: string;
   negativePrompt?: string;
   mode?: ProviderExecutionMode;
+  /** Desktop-only observability control for signed-in Google Flow jobs. */
+  showBrowserWindow?: boolean;
   provider?: ImageGenerationProviderId;
   modelId?: string;
   apiKey?: string;

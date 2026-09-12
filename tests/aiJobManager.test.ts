@@ -119,7 +119,7 @@ describe('AI Job Manager and cloud provider seams', () => {
     }
   }, 10_000);
 
-  it('runs Gemini images through the injected browser session without an API key', async () => {
+  it('runs Flow images through the injected browser session without an API key and defaults its window visible', async () => {
     const generatedPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const generate = vi.fn(async () => ({
       bytes: generatedPng,
@@ -142,6 +142,7 @@ describe('AI Job Manager and cloud provider seams', () => {
         modelId: 'gemini-3.1-flash-image',
         prompt: 'A cinematic apple',
         aspectRatio: '16:9',
+        showBrowserWindow: true,
         stylePreset: 'Cinematic',
         negativePrompt: 'text'
       });
