@@ -43,6 +43,7 @@ const GROK_DIAGNOSTIC_REQUEST_FILTER: WebRequestFilter = {
     'https://x.ai/*',
     'https://accounts.x.ai/*',
     'https://auth.x.ai/*',
+    'https://auth.grok.com/*',
     'https://api.x.ai/*',
     'https://challenges.cloudflare.com/*'
   ]

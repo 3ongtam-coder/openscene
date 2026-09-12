@@ -174,15 +174,17 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
     // Start at xAI's account surface rather than relying on grok.com to
     // discover and redirect to the current sign-in flow.
     loginUrl: 'https://accounts.x.ai/sign-in?redirect=grok-com',
-    // Keep this exact. auth.x.ai is an official hand-off used after the
-    // account challenge; omitting it leaves the submit button spinning while
-    // the main-frame navigation guard silently cancels the callback.
+    // Keep these exact. xAI currently hands the account challenge through
+    // auth.grok.com before returning to Grok; omitting either authentication
+    // origin leaves the submit button spinning while the main-frame navigation
+    // guard cancels the callback.
     allowedNavigationOrigins: [
       'https://grok.com',
       'https://x.com',
       'https://x.ai',
       'https://accounts.x.ai',
-      'https://auth.x.ai'
+      'https://auth.x.ai',
+      'https://auth.grok.com'
     ]
   }
 };
