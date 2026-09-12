@@ -42,8 +42,10 @@ describe('browser session shared boundary', () => {
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.x.ai/oauth/callback?code=secret')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.grok.com/oauth/callback?code=secret')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.grokusercontent.com/oauth/callback?code=secret')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.x.ai.evil.example/callback')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.grok.com.evil.example/callback')).toBe(false);
+    expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.grokusercontent.com.evil.example/callback')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com.evil.example')).toBe(false);
   });
 
@@ -55,6 +57,8 @@ describe('browser session shared boundary', () => {
     expect(isBrowserSessionCookieDomainAllowed('grok', '.x.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('grok', '.grok.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('grok', 'auth.grok.com')).toBe(true);
+    expect(isBrowserSessionCookieDomainAllowed('grok', '.grokusercontent.com')).toBe(true);
+    expect(isBrowserSessionCookieDomainAllowed('grok', 'auth.grokusercontent.com')).toBe(true);
     expect(isBrowserSessionCookieDomainAllowed('grok', 'ads.x.com')).toBe(false);
   });
 
@@ -66,6 +70,7 @@ describe('browser session shared boundary', () => {
     expect(getBrowserSessionProviderPolicy('grok').loginUrl).toBe('https://accounts.x.ai/sign-in?redirect=grok-com');
     expect(getBrowserSessionProviderPolicy('grok').allowedNavigationOrigins).toContain('https://auth.x.ai');
     expect(getBrowserSessionProviderPolicy('grok').allowedNavigationOrigins).toContain('https://auth.grok.com');
+    expect(getBrowserSessionProviderPolicy('grok').allowedNavigationOrigins).toContain('https://auth.grokusercontent.com');
   });
 
   it('redacts paths, queries and provider text from browser-session diagnostics', () => {
