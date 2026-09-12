@@ -52,6 +52,41 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message:
   }
 }
 
+function isAbortedNavigation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const navigationError = error as Error & { readonly code?: unknown; readonly errno?: unknown };
+  return navigationError.code === 'ERR_ABORTED'
+    || navigationError.errno === -3
+    || /ERR_ABORTED\s*\(-3\)/i.test(navigationError.message);
+}
+
+async function loadAllowedProviderPage(
+  webContents: WebContents,
+  providerId: BrowserSessionProviderId,
+  url: string,
+  onRedirectSettled?: (url: string) => void
+): Promise<void> {
+  try {
+    await webContents.loadURL(url);
+  } catch (error) {
+    if (!isAbortedNavigation(error)) throw error;
+
+    // Electron rejects loadURL with ERR_ABORTED when an allowed provider page
+    // replaces the initial navigation. The navigation guard still blocks every
+    // origin outside the exact provider allowlist. Give the replacement URL a
+    // short window to appear, then let the Flow DOM readiness loop take over.
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const currentUrl = webContents.getURL();
+      if (isBrowserSessionNavigationAllowed(providerId, currentUrl)) {
+        onRedirectSettled?.(currentUrl);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw error;
+  }
+}
+
 async function removeTemporaryDownload(filePath: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -210,7 +245,7 @@ export class BrowserSessionService {
         return { action: 'deny' };
       });
 
-      await loginWindow.loadURL(policy.loginUrl);
+      await loadAllowedProviderPage(loginWindow.webContents, providerId, policy.loginUrl);
       await new Promise<void>((resolve) => loginWindow.once('closed', resolve));
 
       const collected = new Map<string, BrowserSessionStoredCookie>();
@@ -370,7 +405,12 @@ export class BrowserSessionService {
       log('browser.loading', { origin: policy.applicationOrigin });
       await Promise.race([
         withTimeout(
-          automationWindow.loadURL(policy.loginUrl),
+          loadAllowedProviderPage(
+            automationWindow.webContents,
+            providerId,
+            policy.loginUrl,
+            (settledUrl) => log('browser.redirect.accepted', { origin: new URL(settledUrl).origin })
+          ),
           GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS,
           'Google Flow did not finish loading within 60 seconds.'
         ),

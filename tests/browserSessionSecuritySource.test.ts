@@ -56,7 +56,12 @@ describe('browser session security wiring', () => {
     expect(automation).toContain('flowNewProject');
     expect(automation).toContain("'[contenteditable=\"true\"], textarea'");
     expect(automation).toContain("'iframe[src*=\"recaptcha\"]'");
+    expect(automation).toContain('const challengeElement = visible([');
+    expect(automation).toContain("style.opacity !== '0'");
+    expect(automation).not.toContain("'[data-sitekey]'");
     expect(automation).not.toContain("/captcha|verify it");
+    expect(service).toContain("navigationError.code === 'ERR_ABORTED'");
+    expect(service).toContain('isBrowserSessionNavigationAllowed(providerId, currentUrl)');
     expect(automation).toContain('webContents.insertText(prompt)');
     expect(automation).toContain("'Nano Banana 2'");
     expect(service).toContain('webContents.downloadURL(generatedImageUrl)');

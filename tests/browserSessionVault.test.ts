@@ -50,7 +50,7 @@ describe('BrowserSessionVault', () => {
     expect(status).toEqual({
       providerId: 'gemini',
       kind: 'stored',
-      origin: 'https://labs.google',
+      origin: 'https://flow.google.com',
       storedAt: '2026-09-02T10:00:00.000Z',
       expiresAt: '2027-01-15T08:00:00.000Z'
     });
@@ -80,7 +80,7 @@ describe('BrowserSessionVault', () => {
     await expect(vault.getStatus('gemini')).resolves.toEqual({
       providerId: 'gemini',
       kind: 'disconnected',
-      origin: 'https://labs.google'
+      origin: 'https://flow.google.com'
     });
   });
 

@@ -46,9 +46,10 @@ describe('browser session shared boundary', () => {
     expect(isBrowserSessionCookieDomainAllowed('grok', 'ads.x.com')).toBe(false);
   });
 
-  it('keeps the official application origin separate from login redirect origins', () => {
-    expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://labs.google');
-    expect(getBrowserSessionProviderPolicy('gemini').loginUrl).toBe('https://labs.google/fx/tools/flow');
+  it('uses the canonical Flow entry while retaining exact provider redirect origins', () => {
+    expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://flow.google.com');
+    expect(getBrowserSessionProviderPolicy('gemini').loginUrl).toBe('https://flow.google.com/');
+    expect(getBrowserSessionProviderPolicy('gemini').allowedNavigationOrigins).toContain('https://labs.google');
     expect(getBrowserSessionProviderPolicy('grok').applicationOrigin).toBe('https://grok.com');
   });
 
