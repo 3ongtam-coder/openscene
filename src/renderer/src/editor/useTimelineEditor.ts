@@ -34,6 +34,8 @@ import type {
 } from '../../../shared/timelineTypes';
 import { clipDurationMs, clipTimelineEndMs } from '../../../shared/timelineClipGeometry';
 import { addTitle, removeTitle, titleAt, updateTitle } from '../../../shared/timelineTitleLogic';
+import { applySubtitleCues } from '../../../shared/subtitleWorkflow';
+import type { NarrationPlan } from '../../../shared/narrationPlan';
 import { errorMessage, type StatusMessage } from '../appTypes';
 import { createTimelineHistory, pushTimelineHistory, redoTimelineHistory, undoTimelineHistory, type TimelineHistory } from './editorTimelineHistory';
 import { clampPlayheadMs, findClipSelection, findFirstCompatibleTrack, insertionStartForTrack, nextTrackName, placeReadyAssetOnTimeline } from './editorTimelineView';
@@ -283,6 +285,15 @@ export function useTimelineEditor() {
     },
     [replaceTimeline]
   );
+
+  const applyNarrationSubtitles = useCallback((plan: NarrationPlan): boolean => {
+    if (project === null) return false;
+    try {
+      return replaceTimeline(() => applySubtitleCues(project.timeline, plan), `Applied ${plan.cues.length} reviewed subtitle cue(s).`) !== null;
+    } catch {
+      return false;
+    }
+  }, [project, replaceTimeline]);
 
   /** The title under the playhead, which is the one an inspector should be showing. */
   const titleAtPlayhead = useMemo(
@@ -584,7 +595,7 @@ export function useTimelineEditor() {
     addTimelineTrack, removeTimelineTrack, renameTimelineTrack, insertTimelineTrack, createProject, deleteCurrentProject, deleteSelectedClip, duplicateSelectedClip, hasUnsavedTimeline, importAssets,
     importRecordingResult, importAiResult, isBusy, metadataProbeFailuresByAssetId, metadataProbeRetryRevisionsByAssetId, moveSelectedClip, newProjectName,
     cutAtPlayhead, transitionAtPlayhead, setTransitionAtPlayhead, removeTransitionAtPlayhead,
-    addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead,
+    addTitleAtPlayhead, editTitle, deleteTitle, titleAtPlayhead, applyNarrationSubtitles,
     openProject, openProjectFolder, renameProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,

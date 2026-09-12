@@ -350,7 +350,7 @@ function Shell() {
           <PlanScreen topInset={0} keyboardOffset={bodyTop} projectId={route.projectId} connectionsVersion={connectionsVersion} />
         )}
         {tab === 'voice' && (
-          <VoiceScreen topInset={0} keyboardOffset={bodyTop} targetSeconds={pictureSeconds} connectionsVersion={connectionsVersion} />
+          <VoiceScreen topInset={0} keyboardOffset={bodyTop} targetSeconds={pictureSeconds} connectionsVersion={connectionsVersion} projectId={route.projectId} />
         )}
         {tab === 'image' && (
           <ImageScreen

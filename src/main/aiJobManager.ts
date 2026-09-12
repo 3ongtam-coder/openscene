@@ -40,6 +40,11 @@ const imageJobs = new Map<string, ImageGenerationJob>();
 let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
 
+function logSpeechJob(jobId: string, event: string, details: Readonly<Record<string, unknown>> = {}, level: 'info' | 'error' = 'info'): void {
+  const suffix = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console[level](`[OpenScene][Speech][${jobId}] ${event}${suffix}`);
+}
+
 /**
  * A charge refused before it was made.
  *
@@ -471,6 +476,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
   const reservationId = await reserveSpend(estimate, request.acceptUnknownCost);
   const { speechDir } = await ensureAiDirectories();
   const id = `speech-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const startedAt = Date.now();
   const now = new Date().toISOString();
 
   const job: TextToSpeechJob = {
@@ -486,12 +492,19 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
   };
 
   speechJobs.set(id, job);
+  logSpeechJob(id, 'request.queued', {
+    provider: speechMapping?.label ?? model.providerLabel,
+    model: modelId,
+    scriptCharacters: request.script.length,
+    voiceConfigured: Boolean(request.voiceId?.trim())
+  });
 
   setTimeout(async () => {
     try {
       job.status = 'running';
       job.updatedAt = new Date().toISOString();
       speechJobs.set(id, job);
+      logSpeechJob(id, 'process.started');
 
       let apiKey = request.apiKey?.trim();
       if ((!apiKey || apiKey.length === 0) && activeCredentialStore) {
@@ -503,6 +516,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       }
 
       await settleSpend(reservationId, 'charged');
+      logSpeechJob(id, 'provider.request.started');
       const cloudResult = await invokeCloudSpeechProvider(model, apiKey, request, join(speechDir, `${id}.mp3`));
       if (!cloudResult.ok) {
         throw new Error(cloudResult.error);
@@ -515,6 +529,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
 
       job.updatedAt = new Date().toISOString();
       speechJobs.set(id, job);
+      logSpeechJob(id, 'request.completed', { elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10 });
     } catch (err) {
       // Handing the room back is safe whether or not it was already kept:
       // release only takes back a reservation that is still pending, so a
@@ -524,6 +539,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
       job.error = err instanceof Error ? err.message : 'Speech synthesis failed';
       job.updatedAt = new Date().toISOString();
       speechJobs.set(id, job);
+      logSpeechJob(id, 'request.failed', { elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10, error: job.error }, 'error');
     }
   }, 1000);
 
