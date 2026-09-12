@@ -44,6 +44,9 @@ import { registerChatGptOAuthIpcHandlers } from './registerChatGptOAuthIpcHandle
 import { ChatGptCodexAdapter } from './chatGptCodexAdapter';
 import { LlmPromptRouter } from './llmPromptRouter';
 import { registerLlmPromptIpcHandler } from './registerLlmPromptIpcHandler';
+import { BrowserSessionVault } from './browserSessionVault';
+import { BrowserSessionService } from './browserSessionService';
+import { registerBrowserSessionIpcHandlers } from './registerBrowserSessionIpcHandlers';
 
 registerTimelineAssetScheme();
 
@@ -54,6 +57,7 @@ const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'),
 const assetLibraryStore = new AssetLibraryStore(join(app.getPath('userData'), 'projects'), projectStore);
 const exportJobStore = new ExportJobStore();
 const credentialStore = new CredentialStore(app.getPath('userData'));
+const browserSessionService = new BrowserSessionService(new BrowserSessionVault(app.getPath('userData')));
 const updaterController = setupUpdater();
 const updaterPromptIo = {
   showMessageBox: (input: Parameters<typeof dialog.showMessageBox>[0]) => dialog.showMessageBox(input),
@@ -285,6 +289,10 @@ async function installIpcHandlers(): Promise<void> {
   registerChatGptOAuthIpcHandlers({
     service: chatGptOAuthService,
     registerHandler: (channel, handler) => ipcMain.handle(channel, (_event, payload: unknown) => handler(payload))
+  });
+  registerBrowserSessionIpcHandlers({
+    service: browserSessionService,
+    registerHandler: (channel, handler) => ipcMain.handle(channel, handler)
   });
   registerLlmPromptIpcHandler({
     router: llmPromptRouter,
