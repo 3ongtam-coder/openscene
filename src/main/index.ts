@@ -188,6 +188,25 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event) => {
     event.preventDefault();
   });
+  mainWindow.webContents.on('console-message', (details) => {
+    if (details.level !== 'warning' && details.level !== 'error') return;
+    const log = details.level === 'error' ? console.error : console.warn;
+    log(`[OpenScene][Renderer] console.${details.level} ${JSON.stringify({
+      message: details.message,
+      source: details.sourceId,
+      line: details.lineNumber
+    })}`);
+  });
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error(`[OpenScene][Renderer] preload.failed ${JSON.stringify({ preloadPath, error: error.message })}`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    console.error(`[OpenScene][Renderer] load.failed ${JSON.stringify({ errorCode, errorDescription, url: validatedURL })}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[OpenScene][Renderer] process.gone ${JSON.stringify({ reason: details.reason, exitCode: details.exitCode })}`);
+  });
 
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
   if (typeof devServerUrl === 'string' && devServerUrl.length > 0) {
