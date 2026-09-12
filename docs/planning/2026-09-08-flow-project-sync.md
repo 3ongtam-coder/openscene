@@ -20,3 +20,8 @@ the same generation flow:
 
 This remains DOM automation, so a Flow UI change must be handled by updating
 selectors and rerunning the focused suite plus a real signed-in smoke test.
+
+The Flow entry point currently redirects from `labs.google` to the exact
+`flow.google.com` origin. Both origins are explicitly allowlisted, and the
+session vault collects cookies from both; wildcard Google navigation remains
+blocked.
