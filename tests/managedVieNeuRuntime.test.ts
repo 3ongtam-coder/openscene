@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -16,8 +16,9 @@ afterEach(async () => {
 async function createVieNeuFixture(): Promise<{ workingDirectory: string; projectDirectory: string; pythonPath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'openscene-vieneu-runtime-'));
   temporaryDirectories.push(root);
-  const workingDirectory = join(root, 'OpenScene');
-  const projectDirectory = join(root, 'VieNeu-TTS');
+  const canonicalRoot = await realpath(root);
+  const workingDirectory = join(canonicalRoot, 'OpenScene');
+  const projectDirectory = join(canonicalRoot, 'VieNeu-TTS');
   const pythonPath = process.platform === 'win32'
     ? join(projectDirectory, '.venv', 'Scripts', 'python.exe')
     : join(projectDirectory, '.venv', 'bin', 'python3');
