@@ -14,6 +14,7 @@ import {
   type ContinuityReviewValue
 } from '@openvideo/shared/aiProjectDomain';
 import { candidateApprovalBlockReason, emptyContinuityReview } from '@openvideo/shared/generationReview';
+import { productionShotRows } from '@openvideo/shared/productionWorkflow';
 import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
 import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
@@ -21,7 +22,7 @@ import { isFrameExtractionAvailable } from '../../modules/video-export';
 import { readProviderConnections } from '../lib/mediaProviders';
 import { useSpendPermissions, type Decision } from '../lib/permissions';
 import { generateShot } from '../lib/videoGeneration';
-import { appendAssetToTimeline, assetUri, clipIdForAsset, readProject, replaceTakeInTimeline, saveGeneratedVideoCandidate, type MobileAsset } from '../lib/projectStore';
+import { appendAssetToTimeline, assembleApprovedWriterShots, assetUri, clipIdForAsset, readProject, replaceTakeInTimeline, saveGeneratedVideoCandidate, type MobileAsset } from '../lib/projectStore';
 import { SpendPrompt } from '../components/SpendPrompt';
 import { FormScreen } from '../components/FormScreen';
 import { useRevealOnFocus } from '../components/KeyboardAwareScroll';
@@ -97,6 +98,7 @@ export function PlanScreen({
   const [writerMessage, setWriterMessage] = useState('');
   const activeProject = projectId === null ? null : readProject(projectId);
   const writerShots = approvedWriterShots(activeProject?.ai);
+  const productionRows = productionShotRows(activeProject?.ai);
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
   const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
   // Keyed by shot index, because the plan can change under them and an array
@@ -418,6 +420,26 @@ export function PlanScreen({
 
   return (
     <FormScreen topInset={topInset} keyboardOffset={keyboardOffset}>
+      {productionRows.length > 0 && <View style={styles.reviewCard}>
+        <Text style={styles.label}>Storyboard production board</Text>
+        <Text style={styles.body}>{productionRows.filter((row) => row.state === 'approved').length}/{productionRows.length} Writer shots approved. Opening and generation remain manual.</Text>
+        {productionRows.map((row, index) => <View style={styles.shot} key={row.shotId}>
+          <Text style={styles.shotIndex}>{String(index + 1).padStart(2, '0')}</Text>
+          <Text style={styles.shotBody}>{row.label}</Text>
+          <Text style={styles.shotLen}>{row.state.replace('_', ' ')}</Text>
+        </View>)}
+        <Pressable accessibilityRole="button" disabled={running || activeProject === null}
+          onPress={() => {
+            if (activeProject === null) return;
+            const result = assembleApprovedWriterShots(activeProject);
+            setWriterMessage(result.ok
+              ? `Placed ${productionRows.length} approved shots on the timeline in Writer order.`
+              : result.reason);
+          }} style={press([styles.approve, (running || activeProject === null) && styles.approveOff])}>
+          <Text style={styles.approveText}>Assemble approved Writer cut</Text>
+        </Pressable>
+        <Text style={styles.footnote}>Assigning imported storyboard and character images is currently done in the desktop production board; mobile reads the same saved mapping and assembly rules.</Text>
+      </View>}
       {writerShots.length > 0 && <View>
         <Text style={styles.label}>Approved Writer shots — choose one to load, not generate</Text>
         {writerShots.map((shot) => <Pressable key={shot.id} accessibilityRole="button" disabled={running || redoing !== null || asking}

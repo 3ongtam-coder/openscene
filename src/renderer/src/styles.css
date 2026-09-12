@@ -6488,3 +6488,113 @@ button {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
   user-select: none;
 }
+
+.production-board {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+}
+
+.production-board__header,
+.production-board__shot-heading,
+.production-board__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.production-board__header h3,
+.production-board__characters h4 {
+  margin: 0;
+}
+
+.production-board__header p,
+.production-board__actions > span,
+.production-board__character > span,
+.production-board__shot-heading div > span {
+  margin: 0;
+  color: var(--text-weak);
+  font-size: var(--text-caption);
+}
+
+.production-board__characters,
+.production-board__shots {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+}
+
+.production-board__character,
+.production-board__shot {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.production-board__reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.production-board__reference {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-inset);
+  font-size: var(--text-caption);
+}
+
+.production-board__reference button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.production-board__number,
+.production-board__state {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+}
+
+.production-board__shot-heading > div {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.production-board__state--approved {
+  color: var(--color-success);
+}
+
+.production-board__state--needs_review,
+.production-board__state--needs_import,
+.production-board__state--generating {
+  color: var(--color-warning);
+}
+
+.production-board__state--failed {
+  color: var(--color-danger);
+}
+
+@media (max-width: 820px) {
+  .production-board__header,
+  .production-board__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
