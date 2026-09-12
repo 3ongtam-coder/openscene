@@ -1,4 +1,5 @@
 import { LLM_CATALOG } from './llmCatalog.generated';
+import { getVideoModelCapabilities } from './mediaCapabilityRegistry';
 
 export type AiDomain = 'voice-generation' | 'video-generation' | 'image-generation' | 'edit-agent';
 
@@ -13,6 +14,7 @@ export const AI_DOMAIN_PROVIDERS: readonly AiDomainProvider[] = [
   { id: 'openai', label: 'OpenAI', executionPath: 'api' },
   { id: 'anthropic', label: 'Anthropic', executionPath: 'api' },
   { id: 'google_gemini', label: 'Google Gemini', executionPath: 'api' },
+  { id: 'xai', label: 'xAI', executionPath: 'api' },
   { id: 'deepseek', label: 'DeepSeek', executionPath: 'api' },
   { id: 'gemini', label: 'Google Gemini', executionPath: 'api' },
   { id: 'elevenlabs', label: 'ElevenLabs', executionPath: 'api' },
@@ -369,6 +371,28 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     unavailableReason: 'MiniMax adapter is not implemented in this build.'
   },
   {
+    id: 'grok-imagine-video-1.5',
+    providerId: 'xai',
+    label: 'Grok Imagine Video 1.5',
+    providerLabel: 'xAI Grok Imagine',
+    description: 'xAI text, image, and reference-to-video generation.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: false,
+    unavailableReason: 'The xAI API adapter is deferred; Grok browser-session testing is tracked separately.'
+  },
+  {
+    id: 'grok-imagine-video',
+    providerId: 'xai',
+    label: 'Grok Imagine Video Edit/Extend',
+    providerLabel: 'xAI Grok Imagine',
+    description: 'xAI video editing and extension.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: false,
+    unavailableReason: 'The xAI edit/extend adapter is not implemented in this build.'
+  },
+  {
     id: 'qwen2.5-coder',
     providerId: 'local_ollama',
     label: 'Qwen 2.5 Coder 14B',
@@ -538,7 +562,20 @@ export function formatAiModelOptionLabel(model: AiDomainModelConfig): string {
 }
 
 export function getDomainModels(domain: AiDomain): readonly AiDomainModelConfig[] {
-  return AI_DOMAIN_MODEL_CATALOG.filter((model) => model.domains.includes(domain));
+  const models = AI_DOMAIN_MODEL_CATALOG.filter((model) => model.domains.includes(domain));
+  if (domain !== 'video-generation') return models;
+  return models.map((model) => {
+    const capabilities = getVideoModelCapabilities(model.id);
+    const available = model.available && capabilities?.implemented.includes('text_to_video') === true;
+    return {
+      ...model,
+      ...(capabilities === undefined ? {} : { description: capabilities.description }),
+      available,
+      ...(available
+        ? {}
+        : { unavailableReason: model.unavailableReason ?? capabilities?.unavailableReason ?? 'No runnable video adapter is registered.' })
+    };
+  });
 }
 
 export function getAvailableDomainModels(domain: AiDomain): readonly AiDomainModelConfig[] {

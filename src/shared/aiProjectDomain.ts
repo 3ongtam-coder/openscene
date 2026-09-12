@@ -7,6 +7,7 @@ import {
   isPlainRecord,
   isUnknownArray
 } from './timelineValidationPrimitives';
+import { VIDEO_OPERATIONS } from './mediaCapabilityRegistry';
 
 export const AI_PROJECT_SCHEMA_VERSION = 1 as const;
 
@@ -21,15 +22,7 @@ export const REFERENCE_ASSET_ROLES = [
   'end_frame',
   'driving_video'
 ] as const;
-export const GENERATION_CAPABILITIES = [
-  'text_to_video',
-  'image_to_video',
-  'reference_to_video',
-  'start_end',
-  'video_edit',
-  'video_extend',
-  'motion_control'
-] as const;
+export const GENERATION_CAPABILITIES = VIDEO_OPERATIONS;
 export const GENERATION_STATUSES = ['draft', 'queued', 'running', 'needs_user_action', 'completed', 'failed', 'cancelled'] as const;
 export const PROVENANCE_SOURCES = ['user', 'provider', 'import', 'local_model'] as const;
 
