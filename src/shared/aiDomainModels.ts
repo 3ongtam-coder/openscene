@@ -1,7 +1,7 @@
 import { LLM_CATALOG } from './llmCatalog.generated';
 import { getVideoModelCapabilities } from './mediaCapabilityRegistry';
 
-export type AiDomain = 'voice-generation' | 'video-generation' | 'image-generation' | 'edit-agent';
+export type AiDomain = 'writer' | 'voice-generation' | 'video-generation' | 'image-generation' | 'edit-agent';
 
 export type AiDomainProvider = {
   readonly id: string;
@@ -392,6 +392,35 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     available: false,
     unavailableReason: 'The xAI edit/extend adapter is not implemented in this build.'
   },
+  // ── Writer: the user's requested Gemini 3.1 lane. These IDs are kept
+  // provider-native because the Writer adapter is Gemini-only and sends them
+  // directly to generateContent with a fixed structured-output schema.
+  {
+    id: 'gemini-3.1-pro-preview',
+    providerId: 'google_gemini',
+    label: 'Gemini 3.1 Pro Preview',
+    providerLabel: 'Google Gemini',
+    description: 'Quality Writer for scripts, rewrites, scenes, and detailed shot plans.',
+    executionPath: 'api',
+    domains: ['writer'],
+    available: true,
+    reasoning: true,
+    efforts: ['low', 'medium', 'high'],
+    contextWindow: '1049k'
+  },
+  {
+    id: 'gemini-3.1-flash-lite',
+    providerId: 'google_gemini',
+    label: 'Gemini 3.1 Flash Lite',
+    providerLabel: 'Google Gemini',
+    description: 'Economy Writer for faster drafts and batch content adaptation.',
+    executionPath: 'api',
+    domains: ['writer'],
+    available: true,
+    reasoning: true,
+    efforts: ['minimal', 'low', 'medium', 'high'],
+    contextWindow: '1049k'
+  },
   {
     id: 'qwen2.5-coder',
     providerId: 'local_ollama',
@@ -552,7 +581,7 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   }
 ];
 
-const AI_DOMAINS: readonly AiDomain[] = ['voice-generation', 'video-generation', 'image-generation', 'edit-agent'];
+const AI_DOMAINS: readonly AiDomain[] = ['writer', 'voice-generation', 'video-generation', 'image-generation', 'edit-agent'];
 
 export function formatAiModelOptionLabel(model: AiDomainModelConfig): string {
   const isZen = model.id === 'qwen2.5-coder';

@@ -28,6 +28,10 @@ describe('AI domain model catalog', () => {
     expect(ids).toContain('openai/gpt-5');
     expect(ids).toContain('anthropic/claude-sonnet-5');
     expect(ids).toContain('deepseek/deepseek-chat');
+    expect(getAvailableDomainModels('writer').map((model) => model.id)).toEqual([
+      'gemini-3.1-pro-preview',
+      'gemini-3.1-flash-lite'
+    ]);
   });
 
   it('keeps the local model as the edit-agent default ahead of cloud providers', () => {
@@ -50,6 +54,7 @@ describe('AI domain model catalog', () => {
       'voice-generation': 'eleven_v3',
       'video-generation': 'veo-3.1-generate-preview',
       'image-generation': 'gpt-image-1',
+      writer: 'gemini-3.1-pro-preview',
       'edit-agent': 'qwen2.5-coder'
     });
   });
@@ -68,6 +73,7 @@ describe('AI domain model catalog', () => {
     // Media domains default to their first available cloud model; the Edit
     // Agent keeps the local Ollama engine.
     expect(parseAiDomainModelPreferences(null)).toEqual({
+      writer: 'gemini-3.1-pro-preview',
       'voice-generation': 'eleven_v3',
       'video-generation': 'veo-3.1-generate-preview',
       'image-generation': 'gpt-image-1',
