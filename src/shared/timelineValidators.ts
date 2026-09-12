@@ -13,6 +13,7 @@ import {
 } from './timelineValidationPrimitives';
 import type {
   CreateProjectInput,
+  DetachVideoAudioInput,
   DeleteProjectInput,
   GetAssetPlaybackUrlInput,
   ImportRecordingResultAssetInput,
@@ -138,6 +139,15 @@ export function parseSaveTimelineInput(value: unknown): SaveTimelineInput | null
 }
 
 export function parseGetAssetPlaybackUrlInput(value: unknown): GetAssetPlaybackUrlInput | null {
+  if (!isPlainRecord(value) || !hasAllowedKeys(value, ['projectId', 'assetId'])) {
+    return null;
+  }
+  const projectId = getOpaqueId(value, 'projectId');
+  const assetId = getOpaqueId(value, 'assetId');
+  return projectId === null || assetId === null ? null : { projectId, assetId };
+}
+
+export function parseDetachVideoAudioInput(value: unknown): DetachVideoAudioInput | null {
   if (!isPlainRecord(value) || !hasAllowedKeys(value, ['projectId', 'assetId'])) {
     return null;
   }

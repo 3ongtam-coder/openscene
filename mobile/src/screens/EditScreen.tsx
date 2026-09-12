@@ -420,6 +420,7 @@ export function EditScreen({
   };
 
   const selected = editor.selectedClip;
+  const selectedAsset = selected === null ? null : editor.assetFor(selected.clip.assetId);
 
   /** How many clips reference each asset, so the library can say what is in use. */
   const usage = useMemo(() => {
@@ -542,6 +543,14 @@ export function EditScreen({
         <Tool label="Import" onPress={() => void importMedia()} disabled={projectId === null} />
         <Tool label="Split" onPress={editor.splitAtPlayhead} disabled={selected === null} />
         <Tool label="Adjust" onPress={() => setInspecting((open) => !open)} disabled={selected === null} />
+        {selectedAsset?.kind === 'video' && (
+          <Tool
+            label="Detach audio"
+            onPress={() => undefined}
+            disabled
+            hint="Desktop only until the mobile native compositor exposes audio extraction"
+          />
+        )}
         <Tool label="Delete" tone="danger" onPress={editor.deleteSelected} disabled={selected === null} />
         {/*
           Transition earns a place in the toolbar rather than the More sheet: it
@@ -988,6 +997,11 @@ export function EditScreen({
             onDown={() => editor.setSelectedEffects({ volume: Math.max(0, selected.clip.effects.volume - 0.1) })}
             onUp={() => editor.setSelectedEffects({ volume: Math.min(2, selected.clip.effects.volume + 0.1) })}
           />
+          {selectedAsset?.kind === 'video' && (
+            <Text style={styles.panelNote}>
+              Detach audio is currently desktop-only. Mobile keeps the video's embedded sound during preview and export.
+            </Text>
+          )}
         </ScrollView>
       )}
     </View>
@@ -1201,16 +1215,19 @@ function Tool({
   label,
   onPress,
   disabled,
-  tone
+  tone,
+  hint
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
   tone?: 'danger';
+  hint?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityHint={hint}
       disabled={disabled === true}
       onPress={onPress}
       style={press([styles.tool, disabled === true && styles.toolOff, tone === 'danger' && styles.toolDanger])}

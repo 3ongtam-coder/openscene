@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addTrack,
@@ -43,6 +43,7 @@ import { metadataProbeFailureMessage } from './mediaLoadFailures';
 import { useProjectAssetImports } from './useProjectAssetImports';
 import { useTimelinePlayback } from './useTimelinePlayback';
 import type { AiProjectDocument } from '../../../shared/aiProjectDomain';
+import { detachVideoAudioOnTimeline } from '../../../shared/detachVideoAudio';
 
 type TimelineUpdate = (timeline: TimelineDocument) => TimelineDocument | null;
 
@@ -65,6 +66,11 @@ export function useTimelineEditor() {
   const [metadataProbeFailuresByAssetId, setMetadataProbeFailuresByAssetId] = useState<Readonly<Record<string, string>>>({});
   const [metadataProbeRetryRevisionsByAssetId, setMetadataProbeRetryRevisionsByAssetId] = useState<Readonly<Record<string, number>>>({});
   const [statusMessage, setStatusMessage] = useState<StatusMessage>({ tone: 'neutral', text: 'Create or open a project to start editing locally.' });
+  const projectRef = useRef<LocalProjectSnapshot | null>(null);
+
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
 
   const selectedAsset = useMemo(
     () => project?.assets.find((asset) => asset.id === selectedAssetId) ?? null,
@@ -476,6 +482,68 @@ export function useTimelineEditor() {
     );
   }, [replaceTimeline, selectedClip]);
 
+  const detachSelectedClipAudio = useCallback(async (): Promise<void> => {
+    const sourceProject = projectRef.current;
+    const sourceSelection = selectedClip;
+    if (sourceProject === null || sourceSelection?.asset?.kind !== 'video') return;
+
+    setIsBusy(true);
+    setStatusMessage({ tone: 'neutral', text: 'Extracting the selected video audio with FFmpeg…' });
+    const response = await window.videoTool.detachVideoAudio({
+      projectId: sourceProject.id,
+      assetId: sourceSelection.asset.id
+    });
+    setIsBusy(false);
+    if (!response.ok) {
+      setStatusMessage({ tone: 'danger', text: errorMessage(response.error) });
+      return;
+    }
+
+    const current = projectRef.current;
+    if (current === null || current.id !== sourceProject.id) {
+      setStatusMessage({
+        tone: 'warning',
+        text: 'Audio was extracted into the project library, but the project changed before it could be placed.'
+      });
+      return;
+    }
+    const transaction = detachVideoAudioOnTimeline(current.timeline, {
+      sourceClipId: sourceSelection.clip.id,
+      audioAsset: response.value.asset,
+      audioClipId: createOpaqueId('detached-audio'),
+      fallbackAudioTrackId: createOpaqueId('audio-track'),
+      fallbackAudioTrackName: nextTrackName(current.timeline, 'audio')
+    });
+    const assets = current.assets.some((asset) => asset.id === response.value.asset.id)
+      ? current.assets
+      : [...current.assets, response.value.asset];
+    if (transaction === null) {
+      setProject({ ...current, assets });
+      setSelectedAssetId(response.value.asset.id);
+      setStatusMessage({
+        tone: 'warning',
+        text: 'Audio was extracted into the project library, but its synchronized timeline placement was rejected.'
+      });
+      return;
+    }
+
+    const nextProject = { ...current, assets, timeline: transaction.timeline };
+    projectRef.current = nextProject;
+    setProject(nextProject);
+    setTimelineHistory((history) => history === null
+      ? createTimelineHistory(transaction.timeline)
+      : pushTimelineHistory(history, transaction.timeline));
+    playback.clampToTimeline(transaction.timeline);
+    setSelectedAssetId(response.value.asset.id);
+    setSelectedClipId(transaction.audioClip.id);
+    setSelectedClipIds([transaction.audioClip.id]);
+    setHasUnsavedTimeline(true);
+    setStatusMessage({
+      tone: 'success',
+      text: `Detached audio to ${transaction.audioTrackId}. The source video clip is muted to prevent duplicate sound.`
+    });
+  }, [playback, selectedClip]);
+
   const undoTimeline = useCallback(() => {
     if (timelineHistory === null) return;
     const next = undoTimelineHistory(timelineHistory);
@@ -599,7 +667,7 @@ export function useTimelineEditor() {
     openProject, openProjectFolder, renameProject, placeSelectedAsset, project, projects, refreshProjects, reportMetadataProbeFailure, retryAssetMetadataProbe, saveTimeline, saveAiProjectDocument,
     clearSelection, goToTimelineEnd, goToTimelineStart, selectAllClips, selectedAsset, selectedAssetId, selectedClip, selectedClipId, selectedClipIds,
     setNewProjectName, setSelectedAssetId, setSelectedClipId: selectClip,
-    splitSelectedClip, statusMessage, trimSelectedClip, updateAssetMetadata, updateSelectedClipEffects,
+    splitSelectedClip, statusMessage, trimSelectedClip, updateAssetMetadata, updateSelectedClipEffects, detachSelectedClipAudio,
     activePlaybackClip: playback.activePlaybackClip, canRedoTimeline: (timelineHistory?.future.length ?? 0) > 0,
     canUndoTimeline: (timelineHistory?.past.length ?? 0) > 0, isPlaying: playback.isPlaying, moveClipToTrack,
     placeAssetOnTrack, playheadMs: playback.playheadMs, redoTimeline, setIsPlaying: playback.setIsPlaying,

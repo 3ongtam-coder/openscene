@@ -4,6 +4,8 @@ import { copyFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 
 import { AssetLibraryStore } from './assetLibraryStore';
+import { AudioDetachService } from './audioDetachService';
+import { registerAudioDetachIpcHandler } from './audioDetachIpcHandlers';
 import type { AppSettings, CaptureSource } from '../shared/models';
 import type { MediaKind } from '../shared/timelineTypes';
 import { SourceCatalog, type RawCaptureSource } from '../shared/sourceCatalog';
@@ -56,6 +58,7 @@ const recordingStore = new RecordingFileStore(resolveRecordingsDirectory());
 const projectLocations = new ProjectLocationRegistry(join(app.getPath('userData'), 'project-locations.json'));
 const projectStore = new ProjectStore(join(app.getPath('userData'), 'projects'), projectLocations);
 const assetLibraryStore = new AssetLibraryStore(join(app.getPath('userData'), 'projects'), projectStore);
+const audioDetachService = new AudioDetachService({ projects: projectStore, assets: assetLibraryStore });
 const exportJobStore = new ExportJobStore();
 const credentialStore = new CredentialStore(app.getPath('userData'));
 const browserSessionService = new BrowserSessionService(new BrowserSessionVault(app.getPath('userData')));
@@ -291,6 +294,7 @@ async function installIpcHandlers(): Promise<void> {
     isSourceStillAvailable
   });
   registerTimelineIpcHandlers(ipcMain, timelineIpcService);
+  registerAudioDetachIpcHandler(ipcMain, audioDetachService);
   registerResultAssetImportHandlers(ipcMain, resultAssetImportService);
   registerUpdaterIpcHandlers(ipcMain, {
     controller: updaterController,
