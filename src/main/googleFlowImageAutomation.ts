@@ -202,8 +202,21 @@ async function waitForProjectEditor(
   onProject: () => void
 ): Promise<AutomationState> {
   let enteredProject = false;
+  let lastHeartbeat = Date.now();
   while (Date.now() < deadline) {
-    const state = await readState(webContents);
+    let state: AutomationState;
+    try {
+      state = await readState(webContents);
+    } catch {
+      // Flow replaces its renderer frame while entering a project. A DOM read
+      // during that hand-off can reject even though navigation is healthy.
+      if (Date.now() - lastHeartbeat >= 10_000) {
+        lastHeartbeat = Date.now();
+        onProject();
+      }
+      await delay(POLL_INTERVAL_MS);
+      continue;
+    }
     throwForAction(state);
     if (state.input !== undefined && state.configButton !== undefined) return state;
     if (!enteredProject && state.dismiss !== undefined) {
@@ -215,7 +228,12 @@ async function waitForProjectEditor(
     if (!enteredProject && projectTarget !== undefined) {
       enteredProject = true;
       onProject();
+      lastHeartbeat = Date.now();
       clickAt(webContents, projectTarget);
+    }
+    if (Date.now() - lastHeartbeat >= 10_000) {
+      lastHeartbeat = Date.now();
+      onProject();
     }
     await delay(POLL_INTERVAL_MS);
   }
