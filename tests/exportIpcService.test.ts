@@ -10,6 +10,7 @@ import type { FfmpegExecution, StartFfmpegExportProcessInput } from '../src/main
 import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, TIMELINE_SCHEMA_VERSION } from '../src/shared/timelineTypes';
 import type { LocalProjectSnapshot } from '../src/shared/timelineTypes';
 import { createEmptyAiProjectDocument } from '../src/shared/aiProjectDomain';
+import { PERSONAL_CONTAINER_METADATA_FIELDS } from '../src/shared/metadataPrivacy';
 
 const SNAPSHOT: LocalProjectSnapshot = {
   schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -60,6 +61,7 @@ async function openSource(sourcePath: string) {
 }
 
 describe('export IPC service', () => {
+  const authorField = PERSONAL_CONTAINER_METADATA_FIELDS.find((field) => field.key === 'author')!;
   it('reports FFmpeg readiness without exposing executable paths or arguments', async () => {
     const root = await mkdtemp(join(tmpdir(), 'export-service-'));
     const service = new ExportIpcService({
@@ -147,7 +149,11 @@ describe('export IPC service', () => {
         return { completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined };
       },
       runInBackground: (task) => backgroundTasks.push(task()),
-      now: () => new Date('2026-09-10T03:00:00.000Z')
+      now: () => new Date('2026-09-10T03:00:00.000Z'),
+      inspectContainerMetadata: async ({ filePath }) => ({
+        checked: true,
+        fields: filePath.endsWith('.mp4') ? [] : [authorField]
+      })
     });
 
     await service.startExportJob({ projectId: SNAPSHOT.id, metadataPrivacyMode: 'privacy_clean' });
@@ -157,10 +163,86 @@ describe('export IPC service', () => {
     expect(processInputs[0]?.args).toContain('author=');
     expect(processInputs[0]?.args).not.toContain('copyright=');
     const manifest = JSON.parse(await readFile(join(root, 'exports', 'export_private.provenance.json'), 'utf8')) as {
-      delivery: { exportedAt: string; removedContainerMetadataKeys: string[] };
+      delivery: {
+        exportedAt: string;
+        requestedContainerMetadataKeys: string[];
+        metadataPrivacyVerification: { checked: boolean; beforeFields: Array<{ key: string }>; afterFields: Array<{ key: string }> };
+      };
     };
     expect(manifest.delivery.exportedAt).toBe('2026-09-10T03:00:00.000Z');
-    expect(manifest.delivery.removedContainerMetadataKeys).toContain('location');
+    expect(manifest.delivery.requestedContainerMetadataKeys).toContain('location');
+    expect(manifest.delivery.metadataPrivacyVerification).toMatchObject({
+      checked: true,
+      beforeFields: [{ key: 'author' }],
+      afterFields: []
+    });
+    await expect(service.getExportJob({ jobId: 'export_private' })).resolves.toMatchObject({
+      ok: true,
+      value: { state: { kind: 'completed', metadataPrivacyVerification: { checked: true, ok: true } } }
+    });
+  });
+
+  it('fails closed and removes every new delivery file when Privacy Clean cannot verify a clean output', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const exportsRoot = join(root, 'exports');
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const jobs = new ExportJobStore({ createId: () => 'export_private_failed' });
+    const service = new ExportIpcService({
+      projects: { open: async () => SNAPSHOT },
+      assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs,
+      exportsRoot,
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input) => ({ completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined }),
+      runInBackground: (task) => backgroundTasks.push(task()),
+      inspectContainerMetadata: async ({ filePath }) => ({
+        checked: true,
+        fields: filePath.endsWith('.mp4') ? [authorField] : []
+      })
+    });
+
+    await service.startExportJob({ projectId: SNAPSHOT.id, metadataPrivacyMode: 'privacy_clean' });
+    await Promise.all(backgroundTasks);
+
+    expect(jobs.get('export_private_failed')?.state).toMatchObject({
+      kind: 'failed',
+      reason: expect.stringContaining('Author name')
+    });
+    await expect(access(join(exportsRoot, 'export_private_failed.mp4'))).rejects.toThrow();
+    await expect(access(join(exportsRoot, 'export_private_failed.provenance.json'))).rejects.toThrow();
+  });
+
+  it('fails closed when Privacy Clean cannot complete the FFprobe inventory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'export-service-'));
+    const exportsRoot = join(root, 'exports');
+    const sourcePath = join(root, 'source.webm');
+    await writeFile(sourcePath, 'clip');
+    const backgroundTasks: Promise<void>[] = [];
+    const jobs = new ExportJobStore({ createId: () => 'export_private_unchecked' });
+    const service = new ExportIpcService({
+      projects: { open: async () => SNAPSHOT },
+      assets: { openPlaybackSource: async () => openSource(sourcePath) },
+      jobs,
+      exportsRoot,
+      discoverFfmpeg: async () => ({ kind: 'system', executablePath: process.execPath }),
+      startProcess: (input) => ({ completion: writeFile(input.args.at(-1)!, 'mp4'), cancel: () => undefined }),
+      runInBackground: (task) => backgroundTasks.push(task()),
+      inspectContainerMetadata: async () => {
+        throw new Error('C:\\private\\probe failure must not cross IPC');
+      }
+    });
+
+    await service.startExportJob({ projectId: SNAPSHOT.id, metadataPrivacyMode: 'privacy_clean' });
+    await Promise.all(backgroundTasks);
+
+    expect(jobs.get('export_private_unchecked')?.state).toMatchObject({
+      kind: 'failed',
+      reason: expect.stringContaining('could not verify container metadata with FFprobe')
+    });
+    expect(JSON.stringify(jobs.get('export_private_unchecked'))).not.toContain('C:\\private');
+    await expect(access(join(exportsRoot, 'export_private_unchecked.mp4'))).rejects.toThrow();
   });
 
   it('writes a selected sidecar after the MP4 while leaving automatic captions out of burn-in', async () => {

@@ -815,7 +815,7 @@ export function EditScreen({
           <Pressable accessibilityRole="button" disabled style={press(styles.sheetRow)}>
             <Text style={[styles.sheetRowText, styles.sheetDisabled]}>Metadata privacy and provenance: desktop-only</Text>
           </Pressable>
-          <Text style={styles.panelNote}>Mobile does not claim to sanitize metadata or write provenance.json. Finish this delivery in the desktop app. {DESKTOP_PRIVACY_CLEAN_SUMMARY}</Text>
+          <Text style={styles.panelNote}>Mobile does not claim to sanitize or verify metadata, or write provenance.json. Finish this delivery in the desktop app. {DESKTOP_PRIVACY_CLEAN_SUMMARY}</Text>
           <Pressable accessibilityRole="button" onPress={() => setMoreOpen(false)} style={press(styles.sheetRow)}>
             <Text style={styles.sheetRowText}>Close</Text>
           </Pressable>

@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { createEmptyAiProjectDocument } from '../src/shared/aiProjectDomain';
 import { createDeliveryProvenance, timelineRevisionFingerprint } from '../src/shared/exportProvenance';
-import { metadataPrivacyPlan, PERSONAL_CONTAINER_METADATA_FIELDS } from '../src/shared/metadataPrivacy';
+import {
+  mergeMetadataTagInventories,
+  metadataPrivacyPlan,
+  metadataPrivacyVerificationSummary,
+  PERSONAL_CONTAINER_METADATA_FIELDS,
+  personalMetadataFieldsForKeys,
+  verifyMetadataPrivacy
+} from '../src/shared/metadataPrivacy';
 import { DEFAULT_CLIP_EFFECTS, PROJECT_SCHEMA_VERSION, TIMELINE_SCHEMA_VERSION, type LocalProjectSnapshot } from '../src/shared/timelineTypes';
 
 const project: LocalProjectSnapshot = {
@@ -40,6 +47,13 @@ const project: LocalProjectSnapshot = {
   }
 };
 
+const locationField = PERSONAL_CONTAINER_METADATA_FIELDS.find((field) => field.key === 'location')!;
+const verifiedClean = verifyMetadataPrivacy(
+  'privacy_clean',
+  { checked: true, fields: [locationField] },
+  { checked: true, fields: [] }
+);
+
 describe('metadata privacy and delivery provenance', () => {
   it('uses a closed personal-field allowlist and never targets mandatory provenance classes', () => {
     const clean = metadataPrivacyPlan('privacy_clean');
@@ -59,11 +73,33 @@ describe('metadata privacy and delivery provenance', () => {
     expect(changed).not.toBe(first);
   });
 
+  it('normalizes only allowlisted names and compares actual before/after inventories', () => {
+    const fields = personalMetadataFieldsForKeys(['AUTHOR', 'copyright', 'Com.Apple.QuickTime.Location.ISO6709', 'author']);
+    expect(fields.map((field) => field.key)).toEqual(['com.apple.quicktime.location.ISO6709', 'author']);
+    expect(mergeMetadataTagInventories([
+      { checked: true, fields: [fields[1]!] },
+      { checked: false, fields: [fields[0]!] }
+    ])).toEqual({ checked: false, fields });
+    expect(verifiedClean).toMatchObject({ checked: true, ok: true, beforeFields: [locationField], afterFields: [] });
+    expect(metadataPrivacyVerificationSummary(verifiedClean)).toContain('after: none');
+    expect(verifyMetadataPrivacy(
+      'privacy_clean',
+      { checked: true, fields: [locationField] },
+      { checked: true, fields: [locationField] }
+    )).toMatchObject({ checked: true, ok: false, afterFields: [locationField] });
+    expect(verifyMetadataPrivacy(
+      'privacy_clean',
+      { checked: false, fields: [] },
+      { checked: true, fields: [] }
+    )).toMatchObject({ checked: false, why: expect.stringContaining('FFprobe') });
+  });
+
   it('exports lineage without prompts, rights text, credentials, display names or local paths', () => {
     const provenance = createDeliveryProvenance({
       project,
       exportedAt: '2026-09-10T02:00:00.000Z', width: 640, height: 360, frameRate: 30, durationMs: 1_000,
       subtitleDelivery: { burnAutomaticCaptions: true, sidecarFormat: 'none' }, metadataPrivacyMode: 'privacy_clean',
+      metadataPrivacyVerification: verifiedClean,
       output: { fileName: 'export_01.mp4', fileSizeBytes: 100, sha256: 'a'.repeat(64) }
     });
     const serialized = JSON.stringify(provenance);
@@ -92,6 +128,11 @@ describe('metadata privacy and delivery provenance', () => {
       project: credentialProject,
       exportedAt: '2026-09-10T02:00:00.000Z', width: 640, height: 360, frameRate: 30, durationMs: 1_000,
       subtitleDelivery: { burnAutomaticCaptions: true, sidecarFormat: 'none' }, metadataPrivacyMode: 'preserve_provenance',
+      metadataPrivacyVerification: verifyMetadataPrivacy(
+        'preserve_provenance',
+        { checked: true, fields: [] },
+        { checked: true, fields: [] }
+      ),
       output: { fileName: 'export_01.mp4', fileSizeBytes: 100, sha256: 'a'.repeat(64) }
     });
     expect(provenance.lineage[0]).not.toHaveProperty('providerId');

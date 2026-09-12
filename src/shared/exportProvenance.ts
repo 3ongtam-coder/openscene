@@ -1,9 +1,9 @@
 import type { ProvenanceRecord } from './aiProjectDomain';
-import { metadataPrivacyPlan, type MetadataPrivacyMode } from './metadataPrivacy';
+import { metadataPrivacyPlan, type MetadataPrivacyMode, type MetadataPrivacyVerification } from './metadataPrivacy';
 import type { SubtitleDelivery } from './subtitleDelivery';
 import type { LocalProjectSnapshot, TimelineDocument } from './timelineTypes';
 
-export const DELIVERY_PROVENANCE_SCHEMA_VERSION = 1 as const;
+export const DELIVERY_PROVENANCE_SCHEMA_VERSION = 2 as const;
 
 const PUBLIC_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CREDENTIAL_SHAPED_ID = /^(?:AIza|sk-(?:proj-)?|xai-|gh[pousr]_|A(?:KI|SI)A)|(?:api[_-]?key|access[_-]?token|credential|secret)/i;
@@ -39,7 +39,9 @@ export type DeliveryProvenance = {
     readonly durationMs: number;
     readonly subtitleDelivery: SubtitleDelivery;
     readonly metadataPrivacyMode: MetadataPrivacyMode;
-    readonly removedContainerMetadataKeys: readonly string[];
+    /** Closed allowlist requested from FFmpeg; actual observations are kept separately. */
+    readonly requestedContainerMetadataKeys: readonly string[];
+    readonly metadataPrivacyVerification: MetadataPrivacyVerification;
     /** Signal classes not explicitly targeted by the sanitizer; not a survival guarantee across transcoding. */
     readonly untargetedSignalClasses: readonly string[];
     readonly output: {
@@ -130,6 +132,7 @@ export function createDeliveryProvenance(input: {
   readonly durationMs: number;
   readonly subtitleDelivery: SubtitleDelivery;
   readonly metadataPrivacyMode: MetadataPrivacyMode;
+  readonly metadataPrivacyVerification: MetadataPrivacyVerification;
   readonly output: { readonly fileName: string; readonly fileSizeBytes: number; readonly sha256: string };
 }): DeliveryProvenance {
   const plan = metadataPrivacyPlan(input.metadataPrivacyMode);
@@ -151,7 +154,8 @@ export function createDeliveryProvenance(input: {
       durationMs: input.durationMs,
       subtitleDelivery: input.subtitleDelivery,
       metadataPrivacyMode: input.metadataPrivacyMode,
-      removedContainerMetadataKeys: plan.removedFields.map((field) => field.key),
+      requestedContainerMetadataKeys: plan.removedFields.map((field) => field.key),
+      metadataPrivacyVerification: input.metadataPrivacyVerification,
       untargetedSignalClasses: plan.untargetedSignals,
       output: input.output
     },

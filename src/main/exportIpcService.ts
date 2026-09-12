@@ -6,7 +6,14 @@ import { FILTER_LIST_ARGS, escapeFontPath, fontCandidates, supportsDrawtext } fr
 import type { ApiResponse } from '../shared/models';
 import { EXPORT_DEFAULTS, type LocalExportJob, type LocalFfmpegRuntimeStatus, type StartExportJobInput } from '../shared/exportTypes';
 import { createDeliveryProvenance } from '../shared/exportProvenance';
-import { DEFAULT_METADATA_PRIVACY_MODE, type MetadataPrivacyMode } from '../shared/metadataPrivacy';
+import {
+  DEFAULT_METADATA_PRIVACY_MODE,
+  mergeMetadataTagInventories,
+  verifyMetadataPrivacy,
+  type MetadataPrivacyMode,
+  type MetadataPrivacyVerification,
+  type MetadataTagInventory
+} from '../shared/metadataPrivacy';
 import { createSubtitleSidecar, DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleDelivery, type SubtitleSidecar } from '../shared/subtitleDelivery';
 import { resolvedTitleStyle } from '../shared/captionStyle';
 import { parseExportJobActionInput, parseStartExportJobInput } from '../shared/exportValidators';
@@ -21,6 +28,7 @@ import { startFfmpegExportProcess, type FfmpegExecution, type StartFfmpegExportP
 import { compileFfmpegTimeline, FfmpegTimelineError } from './ffmpegTimelineCompiler';
 import { ExportJobStore } from './exportJobStore';
 import { ExportOutputError, hashExportOutput, prepareExportOutputPath, removeExportOutput, validateExportOutput, writeExportProvenanceSidecar, writeExportSubtitleSidecar } from './exportOutputFiles';
+import { inspectContainerMetadata, type InspectContainerMetadataInput } from './containerMetadataInspection';
 import { fail, ok } from './ipcResponses';
 
 type ProjectReader = {
@@ -42,6 +50,7 @@ type ExportIpcServiceDependencies = {
   readonly openPath?: (path: string) => Promise<string>;
   readonly revealPath?: (path: string) => void;
   readonly now?: () => Date;
+  readonly inspectContainerMetadata?: (input: InspectContainerMetadataInput) => Promise<MetadataTagInventory>;
 };
 
 type PreparedExport = {
@@ -50,6 +59,7 @@ type PreparedExport = {
   readonly args: readonly string[];
   readonly durationMs: number;
   readonly stagingDirectory: string;
+  readonly stagedAssetPaths: ReadonlyMap<string, string>;
   /** What this run promises the file will be, to be checked against it after. */
   readonly promise: ExportPromise;
   readonly sidecar?: SubtitleSidecar;
@@ -57,6 +67,10 @@ type PreparedExport = {
   readonly subtitleDelivery: SubtitleDelivery;
   readonly metadataPrivacyMode: MetadataPrivacyMode;
 };
+
+class MetadataPrivacyVerificationError extends Error {
+  override readonly name = 'MetadataPrivacyVerificationError';
+}
 
 type PrepareExportInput = {
   readonly jobId: string;
@@ -75,6 +89,9 @@ function exportFailureReason(error: unknown): string {
   if (error instanceof ExportAssetStagingError) {
     return error.message;
   }
+  if (error instanceof MetadataPrivacyVerificationError) {
+    return error.message;
+  }
   return 'The local FFmpeg export failed.';
 }
 
@@ -87,6 +104,7 @@ export class ExportIpcService {
   private readonly openPath: (path: string) => Promise<string>;
   private readonly revealPath: (path: string) => void;
   private readonly now: () => Date;
+  private readonly inspectMetadata: (input: InspectContainerMetadataInput) => Promise<MetadataTagInventory>;
 
   constructor(private readonly dependencies: ExportIpcServiceDependencies) {
     this.discover = dependencies.discoverFfmpeg ?? discoverFfmpeg;
@@ -95,6 +113,7 @@ export class ExportIpcService {
     this.openPath = dependencies.openPath ?? (async () => '');
     this.revealPath = dependencies.revealPath ?? (() => undefined);
     this.now = dependencies.now ?? (() => new Date());
+    this.inspectMetadata = dependencies.inspectContainerMetadata ?? inspectContainerMetadata;
   }
 
   async startExportJob(payload: unknown): Promise<ApiResponse<LocalExportJob>> {
@@ -327,6 +346,7 @@ export class ExportIpcService {
         executablePath: input.executablePath,
         outputPath,
         stagingDirectory: staged.directory,
+        stagedAssetPaths: staged.assetPaths,
         args: compiled.args,
         durationMs: compiled.durationMs,
         project: input.project,
@@ -370,6 +390,41 @@ export class ExportIpcService {
     return bounded - bounded % 2;
   }
 
+  private async verifyDeliveryMetadata(prepared: PreparedExport): Promise<MetadataPrivacyVerification> {
+    try {
+      const [sourceInventories, outputInventory] = await Promise.all([
+        Promise.all([...prepared.stagedAssetPaths.values()].map((filePath) => this.inspectMetadata({
+          ffmpegPath: prepared.executablePath,
+          filePath
+        }))),
+        this.inspectMetadata({ ffmpegPath: prepared.executablePath, filePath: prepared.outputPath })
+      ]);
+      return verifyMetadataPrivacy(
+        prepared.metadataPrivacyMode,
+        mergeMetadataTagInventories(sourceInventories),
+        outputInventory
+      );
+    } catch {
+      const unchecked = { checked: false, fields: [] } as const;
+      return verifyMetadataPrivacy(prepared.metadataPrivacyMode, unchecked, unchecked);
+    }
+  }
+
+  private assertPrivacyCleanVerified(verification: MetadataPrivacyVerification): void {
+    if (verification.mode !== 'privacy_clean') return;
+    if (!verification.checked) {
+      throw new MetadataPrivacyVerificationError(
+        'Privacy Clean could not verify container metadata with FFprobe, so no delivery was kept.'
+      );
+    }
+    if (!verification.ok) {
+      const remaining = verification.afterFields.map((field) => field.label).join(', ');
+      throw new MetadataPrivacyVerificationError(
+        `Privacy Clean found personal container metadata remaining in the output: ${remaining}. No delivery was kept.`
+      );
+    }
+  }
+
   private async runExport(jobId: string, prepared: PreparedExport): Promise<void> {
     if (this.dependencies.jobs.get(jobId)?.state.kind !== 'queued') {
       await Promise.all([removeExportOutput(prepared.outputPath), removeExportStaging(prepared.stagingDirectory)]);
@@ -395,6 +450,11 @@ export class ExportIpcService {
         return;
       }
       const output = await validateExportOutput(this.dependencies.exportsRoot, prepared.outputPath);
+      const [measurement, metadataPrivacyVerification] = await Promise.all([
+        measureExportedFile({ ffmpegPath: prepared.executablePath, filePath: prepared.outputPath }),
+        this.verifyDeliveryMetadata(prepared)
+      ]);
+      this.assertPrivacyCleanVerified(metadataPrivacyVerification);
       const subtitleOutput = prepared.sidecar === undefined
         ? undefined
         : await writeExportSubtitleSidecar(this.dependencies.exportsRoot, jobId, prepared.sidecar);
@@ -409,7 +469,7 @@ export class ExportIpcService {
       */
       const review = reviewExport(
         prepared.promise,
-        await measureExportedFile({ ffmpegPath: prepared.executablePath, filePath: prepared.outputPath })
+        measurement
       );
       const checksum = await hashExportOutput(prepared.outputPath);
       if (checksum.fileSizeBytes !== output.fileSizeBytes) {
@@ -427,11 +487,20 @@ export class ExportIpcService {
           durationMs: prepared.promise.durationMs,
           subtitleDelivery: prepared.subtitleDelivery,
           metadataPrivacyMode: prepared.metadataPrivacyMode,
+          metadataPrivacyVerification,
           output: { fileName: output.fileName, fileSizeBytes: output.fileSizeBytes, sha256: checksum.sha256 }
         })
       );
       provenanceOutputPath = provenanceOutput.outputPath;
-      this.dependencies.jobs.markCompleted(jobId, output.fileName, output.fileSizeBytes, review, subtitleOutput?.fileName, provenanceOutput.fileName);
+      this.dependencies.jobs.markCompleted(
+        jobId,
+        output.fileName,
+        output.fileSizeBytes,
+        review,
+        subtitleOutput?.fileName,
+        provenanceOutput.fileName,
+        metadataPrivacyVerification
+      );
       this.completedOutputs.set(jobId, prepared.outputPath);
     } catch (error: unknown) {
       if (this.dependencies.jobs.get(jobId)?.state.kind === 'running') {

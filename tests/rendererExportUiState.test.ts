@@ -100,10 +100,14 @@ describe('renderer export UI state', () => {
         fileName: 'safe-name.mp4',
         fileSizeBytes: 5_242_880,
         subtitleFileName: 'safe-name.vtt',
-        provenanceFileName: 'safe-name.provenance.json'
+        provenanceFileName: 'safe-name.provenance.json',
+        metadataPrivacyVerification: {
+          mode: 'privacy_clean', checked: true, ok: true,
+          beforeFields: [{ key: 'author', label: 'Author name', category: 'identity' }], afterFields: []
+        }
       }),
       isStarting: false
-    }).detail).toContain('Subtitle: safe-name.vtt.');
+    }).detail).toContain('Privacy Clean verified');
     expect(getExportStatusView({
       hasProject: true,
       hasUnsavedTimeline: false,

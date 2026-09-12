@@ -1,5 +1,5 @@
 import type { ExportReview } from './exportReview';
-import type { MetadataPrivacyMode } from './metadataPrivacy';
+import type { MetadataPrivacyMode, MetadataPrivacyVerification } from './metadataPrivacy';
 import type { SubtitleDelivery } from './subtitleDelivery';
 
 export const EXPORT_DEFAULTS = {
@@ -44,6 +44,8 @@ export type ExportJobState =
       readonly fileSizeBytes: number;
       readonly subtitleFileName?: string;
       readonly provenanceFileName?: string;
+      /** Actual allowlisted tag-name inventory; never contains metadata values or paths. */
+      readonly metadataPrivacyVerification?: MetadataPrivacyVerification;
       /**
        * What the finished file turned out to be, read back off the file.
        *
