@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
-const readRepo = (path: string): Promise<string> => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+const readRepo = async (path: string): Promise<string> => (
+  await readFile(new URL(`../${path}`, import.meta.url), 'utf8')
+).replace(/\r\n/g, '\n');
 
 describe('reviewed video candidate parity', () => {
   it('uses the shared approval gate on desktop and mobile', async () => {

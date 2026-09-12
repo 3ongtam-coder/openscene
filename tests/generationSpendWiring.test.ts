@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
  * feature until the month someone generated through the wrong screen.
  */
 
-const readRepo = (path: string) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+const readRepo = async (path: string): Promise<string> => (
+  await readFile(new URL(`../${path}`, import.meta.url), 'utf8')
+).replace(/\r\n/g, '\n');
 
 describe('the desktop', () => {
   it('checks the ceiling at every one of its generation seams', async () => {
