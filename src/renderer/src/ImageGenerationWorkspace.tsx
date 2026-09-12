@@ -1,30 +1,98 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
+import {
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
+  parseGoogleFlowPreferences,
+  type BrowserSessionStatus
+} from '../../shared/browserSession';
 import type { ImageAspectRatio, ImageGenerationJob, ReferenceImageSelection } from '../../shared/providerSeams';
+import type { ProductionImageHandoff } from '../../shared/productionWorkflow';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { DomainModelPicker } from './DomainModelPicker';
 import { Button, StatusCard } from './ui';
 
 const STYLE_PRESETS = ['Photographic', 'Illustration', 'Anime', '3D Render', 'Cinematic', 'Flat Vector'] as const;
 const ASPECT_RATIOS: readonly ImageAspectRatio[] = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+const IMAGE_JOB_UI_TIMEOUT_MS = 12 * 60_000;
 
 type StatusMessage = { readonly text: string; readonly tone: 'neutral' | 'success' | 'warning' | 'danger' };
+type ImageGenerationMode = 'api' | 'browser_session';
 
 type ImageGenerationWorkspaceProps = {
   /** Hands a finished still to the video studio and switches to it. */
   readonly onUseForVideo: (reference: ReferenceImageSelection) => void;
+  /** Local project folder/name mirrored to the signed-in Flow workspace. */
+  readonly projectName?: string | undefined;
+  /** Writer/Production Board target whose generated still is being reviewed. */
+  readonly productionHandoff: ProductionImageHandoff | null;
+  /** Imports a reviewed job and persists its exact Character/Shot assignment. */
+  readonly onAttachToProduction: (jobId: string, handoff: ProductionImageHandoff) => Promise<StatusMessage>;
 };
 
-export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorkspaceProps): ReactElement {
+function showGoogleFlowWindow(): boolean {
+  try {
+    return parseGoogleFlowPreferences(
+      window.localStorage.getItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY)
+    ).showWindowDuringGeneration;
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES.showWindowDuringGeneration;
+  }
+}
+
+export function ImageGenerationWorkspace({ onUseForVideo, projectName, productionHandoff, onAttachToProduction }: ImageGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const imageModel = selectedModel('image-generation');
+  const browserProvider = imageModel.providerId === 'google_gemini' || imageModel.providerId === 'xai';
+  const browserLabel = imageModel.providerId === 'xai' ? 'Grok Imagine' : 'Google Flow';
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [selectedStyle, setSelectedStyle] = useState<string>('Photographic');
+  const [generationMode, setGenerationMode] = useState<ImageGenerationMode>(
+    browserProvider ? 'browser_session' : 'api'
+  );
+  const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
+  const [productionTargetByJob, setProductionTargetByJob] = useState<Readonly<Record<string, ProductionImageHandoff>>>({});
+  const [attachingJobId, setAttachingJobId] = useState<string | null>(null);
+  const [attachedJobIds, setAttachedJobIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StatusMessage | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollInFlightRef = useRef(false);
+  const pollGenerationRef = useRef(0);
+  const previousProviderRef = useRef(imageModel.providerId);
+
+  useEffect(() => {
+    if (previousProviderRef.current === imageModel.providerId) return;
+    previousProviderRef.current = imageModel.providerId;
+    setGenerationMode(imageModel.providerId === 'google_gemini' || imageModel.providerId === 'xai' ? 'browser_session' : 'api');
+  }, [imageModel.providerId]);
+
+  useEffect(() => {
+    void window.videoTool.getBrowserSessionStatuses().then((response) => {
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === (imageModel.providerId === 'xai' ? 'grok' : 'gemini')) ?? null);
+    });
+  }, [imageModel.providerId]);
+
+  useEffect(() => () => {
+    pollGenerationRef.current += 1;
+    if (pollTimerRef.current !== null) clearInterval(pollTimerRef.current);
+    pollInFlightRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    if (productionHandoff === null) return;
+    setPrompt(productionHandoff.prompt);
+    setNegativePrompt(productionHandoff.negativePrompt);
+    setAspectRatio(productionHandoff.aspectRatio);
+    setSelectedStyle(productionHandoff.stylePreset);
+    setStatusMsg({
+      tone: 'neutral',
+      text: `${productionHandoff.targetLabel} loaded from Writer. Review or edit the prompt, then generate; nothing is attached until you approve a completed image.`
+    });
+  }, [productionHandoff?.requestId]);
 
   const handleGenerate = async (): Promise<void> => {
     if (prompt.trim().length === 0) {
@@ -32,8 +100,16 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       return;
     }
 
+    const flowWindowVisible = generationMode === 'browser_session' && showGoogleFlowWindow();
     setIsGenerating(true);
-    setStatusMsg({ text: `Submitting ${imageModel.providerLabel} image job…`, tone: 'neutral' });
+    setStatusMsg({
+      text: generationMode === 'browser_session'
+        ? flowWindowVisible
+          ? `Opening the signed-in ${browserLabel} window…`
+          : `Starting the hidden signed-in ${browserLabel} image worker…`
+        : `Submitting ${imageModel.providerLabel} image job…`,
+      tone: 'neutral'
+    });
 
     try {
       const response = await window.videoTool.aiGenerateImage({
@@ -43,6 +119,10 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
         aspectRatio,
         stylePreset: selectedStyle,
         modelId: imageModel.id,
+        mode: generationMode,
+        ...(generationMode === 'browser_session'
+          ? { showBrowserWindow: flowWindowVisible, ...(projectName === undefined ? {} : { flowProjectName: projectName }) }
+          : {}),
         ...(negativePrompt.trim().length === 0 ? {} : { negativePrompt: negativePrompt.trim() })
       });
 
@@ -54,23 +134,68 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
 
       const job = response.value;
       setJobs((prev) => [job, ...prev]);
+      if (productionHandoff !== null) {
+        // Snapshot the target at submit time. Opening another Character/Shot
+        // while this job runs must not retarget a paid result.
+        setProductionTargetByJob((current) => ({ ...current, [job.id]: productionHandoff }));
+      }
+      if (job.mode === 'browser_session') {
+        setStatusMsg({
+          text: flowWindowVisible
+            ? `${browserLabel} is generating in the visible window. OpenScene will import the result automatically.`
+            : `${browserLabel} is generating in the background. OpenScene will download and verify the result automatically.`,
+          tone: 'neutral'
+        });
+      }
 
+      const pollingDeadline = Date.now() + IMAGE_JOB_UI_TIMEOUT_MS;
+      const pollGeneration = ++pollGenerationRef.current;
+      const stopPolling = (): void => {
+        clearInterval(intervalId);
+        if (pollTimerRef.current === intervalId) pollTimerRef.current = null;
+        pollInFlightRef.current = false;
+        if (pollGenerationRef.current === pollGeneration) {
+          pollGenerationRef.current += 1;
+          setIsGenerating(false);
+        }
+      };
       const intervalId = setInterval(async () => {
-        const pollRes = await window.videoTool.aiGetImageJob(job.id);
-        if (!pollRes.ok) return;
-        const updated = pollRes.value;
-        setJobs((prev) => prev.map((existing) => (existing.id === updated.id ? updated : existing)));
+        if (pollGenerationRef.current !== pollGeneration) return;
+        // Check the wall-clock deadline before the in-flight guard. If an IPC
+        // promise itself never settles, later ticks must still release the UI.
+        if (Date.now() >= pollingDeadline) {
+          stopPolling();
+          setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this image job before retrying.', tone: 'warning' });
+          return;
+        }
+        if (pollInFlightRef.current) return;
+        try {
+          pollInFlightRef.current = true;
+          const pollRes = await window.videoTool.aiGetImageJob(job.id);
+          if (pollGenerationRef.current !== pollGeneration) return;
+          if (!pollRes.ok) {
+            stopPolling();
+            setStatusMsg({ text: pollRes.error.message, tone: 'danger' });
+            return;
+          }
+          const updated = pollRes.value;
+          setJobs((prev) => prev.map((existing) => (existing.id === updated.id ? updated : existing)));
 
-        if (updated.status === 'completed') {
-          clearInterval(intervalId);
-          setIsGenerating(false);
-          setStatusMsg({ text: 'Image ready.', tone: 'success' });
-        } else if (updated.status === 'failed') {
-          clearInterval(intervalId);
-          setIsGenerating(false);
-          setStatusMsg({ text: updated.error ?? 'Image generation failed.', tone: 'danger' });
+          if (updated.status === 'completed') {
+            stopPolling();
+            setStatusMsg({ text: 'Image ready.', tone: 'success' });
+          } else if (updated.status === 'failed') {
+            stopPolling();
+            setStatusMsg({ text: updated.error ?? 'Image generation failed.', tone: 'danger' });
+          }
+        } catch (error: unknown) {
+          stopPolling();
+          setStatusMsg({ text: error instanceof Error ? error.message : 'Image job polling failed.', tone: 'danger' });
+        } finally {
+          pollInFlightRef.current = false;
         }
       }, 800);
+      pollTimerRef.current = intervalId;
     } catch (err) {
       setIsGenerating(false);
       setStatusMsg({ text: err instanceof Error ? err.message : 'Unexpected error during generation.', tone: 'danger' });
@@ -98,6 +223,29 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
     onUseForVideo(response.value);
   };
 
+  const handleAttachToProduction = async (job: ImageGenerationJob): Promise<void> => {
+    const handoff = productionTargetByJob[job.id];
+    if (handoff === undefined) {
+      setStatusMsg({ text: 'This image job has no Writer Character/Shot target.', tone: 'warning' });
+      return;
+    }
+    setAttachingJobId(job.id);
+    try {
+      const result = await onAttachToProduction(job.id, handoff);
+      setStatusMsg(result);
+      if (result.tone === 'success') {
+        setAttachedJobIds((current) => new Set([...current, job.id]));
+      }
+    } catch (error: unknown) {
+      setStatusMsg({
+        text: error instanceof Error ? error.message : 'The generated image could not be attached to production.',
+        tone: 'danger'
+      });
+    } finally {
+      setAttachingJobId(null);
+    }
+  };
+
   return (
     <section className="studio-surface" aria-labelledby="image-generation-title">
       <header className="studio-surface__header">
@@ -105,12 +253,56 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <h2 className="studio-surface__title-label" id="image-generation-title">
             Image Generation
           </h2>
-          <span className="studio-surface__title-meta">Cloud image generation</span>
+          <span className="studio-surface__title-meta">
+            {generationMode === 'browser_session' ? `Signed-in ${browserLabel} worker` : 'Cloud image generation'}
+          </span>
         </div>
-        <DomainModelPicker domain="image-generation" ariaLabel="Image model" />
+        <DomainModelPicker
+          domain="image-generation"
+          ariaLabel="Image model"
+          linkedProviderIds={flowSession?.kind === 'stored' ? [imageModel.providerId] : []}
+        />
       </header>
 
       <div className="studio-surface__body">
+        {productionHandoff !== null && (
+          <StatusCard tone="neutral">
+            <strong>{productionHandoff.targetLabel}</strong><br />
+            This is a reviewed production handoff. Generate an image, inspect it, then explicitly attach it to return to the production board.
+          </StatusCard>
+        )}
+        {browserProvider && (
+          <div className="studio-field">
+            <span className="studio-field__label">Connection</span>
+            <div className="studio-chips" role="group" aria-label={`${browserLabel} connection mode`}>
+              <button
+                type="button"
+                aria-pressed={generationMode === 'browser_session'}
+                className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('browser_session')}
+              >
+                {browserLabel} session
+              </button>
+              <button
+                type="button"
+                aria-pressed={generationMode === 'api'}
+                disabled={imageModel.providerId === 'xai'}
+                className={`studio-chip${generationMode === 'api' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('api')}
+              >
+                API key
+              </button>
+            </div>
+            {generationMode === 'browser_session' && (
+              <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
+                {flowSession?.kind === 'stored'
+                  ? `${browserLabel} session ready. Generate runs in the signed-in browser and imports the result automatically.`
+                  : `No ready ${browserLabel} session detected. Sign in under Settings → Providers before generating.`}
+              </StatusCard>
+            )}
+          </div>
+        )}
+
         <div className="studio-field">
           <span className="studio-field__label">Style</span>
           <div className="studio-chips" role="group" aria-label="Style preset">
@@ -171,7 +363,9 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
                 <li key={job.id} className="studio-job">
                   <div className="studio-job__row">
                     <span className={`studio-job__status studio-job__status--${job.status}`}>{job.status}</span>
-                    <span className="studio-job__provider">{job.provider}</span>
+                    <span className="studio-job__provider">
+                      {job.provider}{job.mode === 'browser_session' ? ' · signed-in session' : ''}
+                    </span>
                   </div>
                   {job.previewBase64 !== undefined && (
                     <img
@@ -186,6 +380,19 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
                   )}
                   {job.status === 'completed' && (
                     <div className="studio-job__actions">
+                      {productionTargetByJob[job.id] !== undefined && (
+                        <Button
+                          variant="primary"
+                          disabled={attachingJobId !== null || attachedJobIds.has(job.id)}
+                          onClick={() => void handleAttachToProduction(job)}
+                        >
+                          {attachedJobIds.has(job.id)
+                            ? 'Attached to production'
+                            : attachingJobId === job.id
+                              ? 'Importing and attachingâ€¦'
+                              : `Attach to ${productionTargetByJob[job.id]!.targetLabel}`}
+                        </Button>
+                      )}
                       <Button variant="primary" onClick={() => void handleUseForVideo(job)}>
                         Use for video
                       </Button>
@@ -214,6 +421,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <span className="studio-composer__hint">
             {aspectRatio} · {selectedStyle}
             {negativePrompt.trim().length === 0 ? '' : ' · avoid set'}
+            {generationMode === 'browser_session' ? ` · ${browserLabel} session` : ''}
           </span>
           <Button
             variant="primary"
