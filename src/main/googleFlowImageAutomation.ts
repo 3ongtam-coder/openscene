@@ -140,11 +140,21 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
     });
 
     const body = (document.body?.innerText || '').toLowerCase();
+    const challengeElement = document.querySelector([
+      'iframe[src*="recaptcha"]',
+      'iframe[src*="hcaptcha"]',
+      'iframe[title*="captcha" i]',
+      '[data-sitekey]',
+      'input[name*="captcha" i]',
+      'input[autocomplete="one-time-code"]'
+    ].join(','));
+    const accountChallengePath = location.hostname === 'accounts.google.com'
+      && /\/challenge(?:\/|$)|\/signin\/v2\/challenge(?:\/|$)/i.test(location.pathname);
     let actionRequired;
-    if (location.hostname === 'accounts.google.com' || (/sign in|đăng nhập/.test(body) && !input && !projectLink)) {
-      actionRequired = 'sign_in';
-    } else if (/captcha|verify it'?s you|verify your identity|unusual traffic|xác minh/.test(body)) {
+    if (challengeElement || accountChallengePath) {
       actionRequired = 'verification';
+    } else if (location.hostname === 'accounts.google.com' || (/sign in|đăng nhập/.test(body) && !input && !projectLink)) {
+      actionRequired = 'sign_in';
     } else if (/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)) {
       actionRequired = 'rate_limit';
     } else if (/flow is not available|isn't available in your country|not available in your country/.test(body)) {
