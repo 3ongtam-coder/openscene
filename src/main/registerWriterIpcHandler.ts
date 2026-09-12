@@ -8,7 +8,7 @@ import {
   type WriterGenerationInput
 } from '../shared/writerWorkflow';
 import type { CredentialStore } from './credentialStore';
-import { requestAgentRouterHttpWriter } from './agentRouterHttpWriter';
+import { requestAgentRouterCodexWriter } from './agentRouterCodexWriter';
 import { fail, ok } from './ipcResponses';
 
 type WriterIpcHandler = (payload?: unknown) => Promise<ApiResponse<WriterDraft>>;
@@ -29,7 +29,7 @@ export function registerWriterIpcHandler(dependencies: {
     try {
       const draft = dependencies.generate === undefined
         ? agentRouter
-          ? await requestAgentRouterHttpWriter({ apiKey, modelId: input.modelId, request: input.request })
+          ? await requestAgentRouterCodexWriter({ apiKey, modelId: input.modelId, request: input.request })
           : await requestWriter({ apiKey, modelId: input.modelId, request: input.request })
         : await dependencies.generate({ ...input, apiKey });
       return ok(draft);

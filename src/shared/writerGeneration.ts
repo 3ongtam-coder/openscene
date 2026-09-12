@@ -88,8 +88,8 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
 /**
  * Shared code is also used by React Native, where the AgentRouter credential
  * and HTTP path are not enabled yet. This seam fails before making a network
- * request; desktop routes the same model IDs through its main-process HTTP
- * bridge instead.
+ * request; desktop routes the same model IDs through its main-process Codex
+ * CLI bridge instead.
  */
 export async function requestAgentRouterWriter(input: WriterProviderInput): Promise<WriterDraft> {
   const request = parseWriterRequest(input.request);
