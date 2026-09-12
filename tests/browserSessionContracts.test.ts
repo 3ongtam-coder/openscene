@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildGeminiBrowserImagePrompt,
-  geminiBrowserModelTierFor,
+  buildGoogleFlowImagePrompt,
+  googleFlowImageModelFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
+  isBrowserSessionCookieSourceAllowed,
   isBrowserSessionNavigationAllowed,
   parseBrowserSessionProviderId
 } from '../src/shared/browserSession';
@@ -18,10 +19,12 @@ describe('browser session shared boundary', () => {
   });
 
   it('uses exact HTTPS origins instead of wildcard navigation', () => {
-    expect(isBrowserSessionNavigationAllowed('gemini', 'https://gemini.google.com/app')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('gemini', 'https://labs.google/fx/tools/flow')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('gemini', 'https://gemini.google.com/app')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://accounts.google.com/v3/signin')).toBe(true);
-    expect(isBrowserSessionNavigationAllowed('gemini', 'http://gemini.google.com/app')).toBe(false);
+    expect(isBrowserSessionNavigationAllowed('gemini', 'http://labs.google/fx/tools/flow')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('gemini', 'https://evil.google.com')).toBe(false);
+    expect(isBrowserSessionCookieSourceAllowed('gemini', 'https://gemini.google.com/app')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com.evil.example')).toBe(false);
   });
@@ -35,12 +38,13 @@ describe('browser session shared boundary', () => {
   });
 
   it('keeps the official application origin separate from login redirect origins', () => {
-    expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://gemini.google.com');
+    expect(getBrowserSessionProviderPolicy('gemini').applicationOrigin).toBe('https://labs.google');
+    expect(getBrowserSessionProviderPolicy('gemini').loginUrl).toBe('https://labs.google/fx/tools/flow');
     expect(getBrowserSessionProviderPolicy('grok').applicationOrigin).toBe('https://grok.com');
   });
 
   it('builds a complete image request for the browser UI without dropping controls', () => {
-    expect(buildGeminiBrowserImagePrompt({
+    expect(buildGoogleFlowImagePrompt({
       prompt: 'A red apple on a dark table',
       aspectRatio: '16:9',
       stylePreset: 'Cinematic',
@@ -54,10 +58,10 @@ describe('browser session shared boundary', () => {
     ].join('\n'));
   });
 
-  it('maps API image models onto the model tiers Gemini Apps exposes', () => {
-    expect(geminiBrowserModelTierFor('gemini-3.1-flash-image')).toBe('flash');
-    expect(geminiBrowserModelTierFor('gemini-3.1-flash-lite-image')).toBe('flash-lite');
-    expect(geminiBrowserModelTierFor('gemini-3-pro-image')).toBe('pro');
-    expect(geminiBrowserModelTierFor('gemini-2.5-flash-image')).toBe('flash');
+  it('maps API catalog choices onto the image models Google Flow exposes', () => {
+    expect(googleFlowImageModelFor('gemini-3.1-flash-image')).toBe('nano-banana-2');
+    expect(googleFlowImageModelFor('gemini-3.1-flash-lite-image')).toBe('nano-banana-2');
+    expect(googleFlowImageModelFor('gemini-3-pro-image')).toBe('nano-banana-pro');
+    expect(googleFlowImageModelFor('gemini-2.5-flash-image')).toBe('nano-banana-2');
   });
 });

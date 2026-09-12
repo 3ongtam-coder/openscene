@@ -20,30 +20,32 @@ export interface BrowserSessionProviderPolicy {
   readonly applicationOrigin: string;
   readonly loginUrl: string;
   readonly allowedNavigationOrigins: readonly string[];
+  /** Origins accepted only for decrypting sessions saved by older builds. */
+  readonly compatibleCookieSourceOrigins?: readonly string[];
 }
 
-export type GeminiBrowserImagePromptInput = {
+export type GoogleFlowImagePromptInput = {
   readonly prompt: string;
   readonly aspectRatio: string;
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
 };
 
-export type GeminiBrowserModelTier = 'flash' | 'flash-lite' | 'pro';
+export type GoogleFlowImageModel = 'nano-banana-2' | 'nano-banana-pro';
 
-/** Map API catalog choices onto the model tiers exposed by Gemini Apps. */
-export function geminiBrowserModelTierFor(modelId: string): GeminiBrowserModelTier {
-  if (modelId.includes('flash-lite')) return 'flash-lite';
-  if (modelId.includes('pro')) return 'pro';
-  return 'flash';
+/** Map API catalog choices onto the image models exposed by Google Flow. */
+export function googleFlowImageModelFor(modelId: string): GoogleFlowImageModel {
+  if (modelId.includes('pro')) return 'nano-banana-pro';
+  // Flow does not expose a separate Flash-Lite image tier. Both Flash catalog
+  // entries use the current Nano Banana 2 option in the signed-in Flow UI.
+  return 'nano-banana-2';
 }
 
 /**
- * Gemini Apps does not expose the API's aspect-ratio fields to this bridge.
- * Preserve the same intent as explicit prompt text so the user can review the
- * complete request before submitting it through the provider UI.
+ * Flow exposes only coarse orientation controls. Preserve the exact requested
+ * ratio as prompt text so square and non-16:9 requests are not silently lost.
  */
-export function buildGeminiBrowserImagePrompt(input: GeminiBrowserImagePromptInput): string {
+export function buildGoogleFlowImagePrompt(input: GoogleFlowImagePromptInput): string {
   const lines = [
     'Create one image (do not answer with only text).',
     input.prompt.trim(),
@@ -59,10 +61,13 @@ export function buildGeminiBrowserImagePrompt(input: GeminiBrowserImagePromptInp
 const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProviderPolicy>> = {
   gemini: {
     id: 'gemini',
-    label: 'Google Gemini / Veo',
-    applicationOrigin: 'https://gemini.google.com',
-    loginUrl: 'https://gemini.google.com/app',
-    allowedNavigationOrigins: ['https://gemini.google.com', 'https://accounts.google.com']
+    label: 'Google Labs Flow / Veo',
+    applicationOrigin: 'https://labs.google',
+    loginUrl: 'https://labs.google/fx/tools/flow',
+    // The persisted provider id remains `gemini` for compatibility, but this
+    // media lane permits only Flow and Google's own sign-in origin.
+    allowedNavigationOrigins: ['https://labs.google', 'https://accounts.google.com'],
+    compatibleCookieSourceOrigins: ['https://gemini.google.com']
   },
   grok: {
     id: 'grok',
@@ -92,6 +97,17 @@ export function isBrowserSessionNavigationAllowed(providerId: BrowserSessionProv
   }
 }
 
+export function isBrowserSessionCookieSourceAllowed(providerId: BrowserSessionProviderId, candidateUrl: string): boolean {
+  try {
+    const origin = new URL(candidateUrl).origin;
+    const policy = POLICIES[providerId];
+    return policy.allowedNavigationOrigins.includes(origin)
+      || policy.compatibleCookieSourceOrigins?.includes(origin) === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A cookie is accepted only when its domain can be sent to one of the exact
  * HTTPS origins in the provider policy. This intentionally rejects unrelated
@@ -100,7 +116,9 @@ export function isBrowserSessionNavigationAllowed(providerId: BrowserSessionProv
 export function isBrowserSessionCookieDomainAllowed(providerId: BrowserSessionProviderId, cookieDomain: string): boolean {
   const normalized = cookieDomain.trim().toLowerCase().replace(/^\./, '');
   if (normalized.length === 0) return false;
-  return POLICIES[providerId].allowedNavigationOrigins.some((allowedOrigin) => {
+  const policy = POLICIES[providerId];
+  const cookieOrigins = [...policy.allowedNavigationOrigins, ...(policy.compatibleCookieSourceOrigins ?? [])];
+  return cookieOrigins.some((allowedOrigin) => {
     const hostname = new URL(allowedOrigin).hostname.toLowerCase();
     return hostname === normalized || hostname.endsWith(`.${normalized}`);
   });

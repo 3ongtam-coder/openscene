@@ -8,7 +8,7 @@ type Handler = (_event?: unknown, payload?: unknown) => Promise<ApiResponse<unkn
 
 function fixture() {
   const handlers = new Map<string, Handler>();
-  const disconnected = { providerId: 'gemini' as const, kind: 'disconnected' as const, origin: 'https://gemini.google.com' };
+  const disconnected = { providerId: 'gemini' as const, kind: 'disconnected' as const, origin: 'https://labs.google' };
   const service = {
     getStatuses: vi.fn(async () => [disconnected]),
     start: vi.fn(async () => ({ ...disconnected, kind: 'stored' as const })),
@@ -32,7 +32,7 @@ describe('browser session IPC handlers', () => {
     const { handlers, service } = fixture();
     await expect(handlerFor(handlers, IPC_CHANNELS.getBrowserSessionStatuses)()).resolves.toEqual({
       ok: true,
-      value: [{ providerId: 'gemini', kind: 'disconnected', origin: 'https://gemini.google.com' }]
+      value: [{ providerId: 'gemini', kind: 'disconnected', origin: 'https://labs.google' }]
     });
     await expect(handlerFor(handlers, IPC_CHANNELS.getBrowserSessionStatuses)(undefined, { cookie: 'secret' })).resolves.toMatchObject({
       ok: false,

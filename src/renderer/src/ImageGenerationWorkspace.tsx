@@ -28,7 +28,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
   const [generationMode, setGenerationMode] = useState<ImageGenerationMode>(
     imageModel.providerId === 'google_gemini' ? 'browser_session' : 'api'
   );
-  const [geminiSession, setGeminiSession] = useState<BrowserSessionStatus | null>(null);
+  const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const [jobs, setJobs] = useState<readonly ImageGenerationJob[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StatusMessage | null>(null);
@@ -45,7 +45,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
 
   useEffect(() => {
     void window.videoTool.getBrowserSessionStatuses().then((response) => {
-      if (response.ok) setGeminiSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
     });
   }, []);
 
@@ -64,7 +64,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
     setIsGenerating(true);
     setStatusMsg({
       text: generationMode === 'browser_session'
-        ? 'Starting the hidden signed-in Gemini image worker…'
+        ? 'Starting the hidden signed-in Google Flow image worker…'
         : `Submitting ${imageModel.providerLabel} image job…`,
       tone: 'neutral'
     });
@@ -91,7 +91,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
       setJobs((prev) => [job, ...prev]);
       if (job.mode === 'browser_session') {
         setStatusMsg({
-          text: 'Gemini is generating in the background. OpenScene will download and verify the result automatically.',
+          text: 'Google Flow is generating in the background. OpenScene will download and verify the result automatically.',
           tone: 'neutral'
         });
       }
@@ -179,13 +179,13 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
             Image Generation
           </h2>
           <span className="studio-surface__title-meta">
-            {generationMode === 'browser_session' ? 'Signed-in Gemini browser worker' : 'Cloud image generation'}
+            {generationMode === 'browser_session' ? 'Signed-in Google Flow worker' : 'Cloud image generation'}
           </span>
         </div>
         <DomainModelPicker
           domain="image-generation"
           ariaLabel="Image model"
-          linkedProviderIds={geminiSession?.kind === 'stored' ? ['google_gemini'] : []}
+          linkedProviderIds={flowSession?.kind === 'stored' ? ['google_gemini'] : []}
         />
       </header>
 
@@ -193,14 +193,14 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
         {imageModel.providerId === 'google_gemini' && (
           <div className="studio-field">
             <span className="studio-field__label">Connection</span>
-            <div className="studio-chips" role="group" aria-label="Gemini connection mode">
+            <div className="studio-chips" role="group" aria-label="Google Flow connection mode">
               <button
                 type="button"
                 aria-pressed={generationMode === 'browser_session'}
                 className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
                 onClick={() => setGenerationMode('browser_session')}
               >
-                Signed-in session
+                Google Flow session
               </button>
               <button
                 type="button"
@@ -212,10 +212,10 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
               </button>
             </div>
             {generationMode === 'browser_session' && (
-              <StatusCard tone={geminiSession?.kind === 'stored' ? 'success' : 'warning'}>
-                {geminiSession?.kind === 'stored'
-                  ? 'Gemini session ready. Generate runs in a hidden browser and imports the downloaded image automatically.'
-                  : 'No ready Gemini session detected. Sign in under Settings → Providers before generating.'}
+              <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
+                {flowSession?.kind === 'stored'
+                  ? 'Google Flow session ready. Generate runs in a hidden Flow project and imports the result automatically.'
+                  : 'No ready Google Flow session detected. Sign in under Settings → Providers before generating.'}
               </StatusCard>
             )}
           </div>
@@ -326,7 +326,7 @@ export function ImageGenerationWorkspace({ onUseForVideo }: ImageGenerationWorks
           <span className="studio-composer__hint">
             {aspectRatio} · {selectedStyle}
             {negativePrompt.trim().length === 0 ? '' : ' · avoid set'}
-            {generationMode === 'browser_session' ? ' · hidden Gemini session' : ''}
+            {generationMode === 'browser_session' ? ' · hidden Google Flow session' : ''}
           </span>
           <Button
             variant="primary"

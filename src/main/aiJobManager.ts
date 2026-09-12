@@ -493,11 +493,11 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
     throw new Error('No local image generation adapter is configured for this model.');
   }
   if (mode === 'browser_session' && model.providerId !== 'google_gemini') {
-    throw new Error('Browser-session image generation is available only for Google Gemini models.');
+    throw new Error('Browser-session image generation is available only for Google models routed through Flow.');
   }
   // One image per job, which is what this seam creates.
   const estimate = estimateImageCost({ modelId: model.id, imageCount: 1 });
-  // A Gemini Apps subscription/session is not a metered API request in this
+  // A Google Flow subscription/session is not a metered API request in this
   // ledger, so it must not reserve or charge API spend.
   const reservationId = mode === 'api' ? await reserveSpend(estimate, request.acceptUnknownCost) : null;
   const { imageDir } = await ensureAiDirectories();
@@ -536,7 +536,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
       let image: GeneratedImage;
       if (mode === 'browser_session') {
         if (activeBrowserImageGenerator === undefined) {
-          throw new Error('Gemini browser-session image generation is unavailable in this runtime.');
+          throw new Error('Google Flow browser-session image generation is unavailable in this runtime.');
         }
         logImageJob(id, 'browser.request.started');
         image = await activeBrowserImageGenerator({

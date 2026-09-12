@@ -158,7 +158,7 @@ export function ImageScreen({
       />
       {model?.providerId === 'google_gemini' && (
         <Text style={styles.sessionNote}>
-          Signed-in Gemini browser automation is desktop-only. Mobile continues to use the official Gemini API key.
+          Signed-in Google Flow automation is desktop-only. Mobile continues to use the official Gemini API key.
         </Text>
       )}
 

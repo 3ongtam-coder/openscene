@@ -97,7 +97,7 @@ const llmPromptRouter = new LlmPromptRouter({
   chatGptAdapter: new ChatGptCodexAdapter({ oauthService: chatGptOAuthService })
 });
 setAiJobManagerCredentialStore(credentialStore);
-setAiJobManagerBrowserImageGenerator((input) => browserSessionService.generateGeminiImage(input));
+setAiJobManagerBrowserImageGenerator((input) => browserSessionService.generateGoogleFlowImage(input));
 const managedVieNeuRuntime = new ManagedVieNeuRuntime({ workingDirectory: process.cwd() });
 setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 /*

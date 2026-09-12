@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 
 import {
   BROWSER_SESSION_PROVIDERS,
-  buildGeminiBrowserImagePrompt,
-  geminiBrowserModelTierFor,
+  buildGoogleFlowImagePrompt,
+  googleFlowImageModelFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -15,15 +15,15 @@ import {
   type BrowserSessionStatus
 } from '../shared/browserSession';
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
-import { automateGeminiImageGeneration, detectDownloadedImageMime } from './geminiBrowserImageAutomation';
+import { automateGoogleFlowImageGeneration, detectDownloadedImageMime } from './googleFlowImageAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
-const GEMINI_IMAGE_TIMEOUT_MS = 4 * 60_000;
-const GEMINI_PAGE_LOAD_TIMEOUT_MS = 60_000;
-const GEMINI_DOWNLOAD_TIMEOUT_MS = 60_000;
+const GOOGLE_FLOW_IMAGE_TIMEOUT_MS = 4 * 60_000;
+const GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS = 60_000;
+const GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_BROWSER_IMAGE_BYTES = 50 * 1024 * 1024;
 
-export type GeminiBrowserImageGenerationInput = {
+export type GoogleFlowImageGenerationInput = {
   readonly modelId: string;
   readonly prompt: string;
   readonly aspectRatio: string;
@@ -238,42 +238,43 @@ export class BrowserSessionService {
   }
 
   /**
-   * Generate through the normal Gemini web application in a real, hidden
+   * Generate through the normal Google Labs Flow application in a real, hidden
    * Chromium renderer. Cookie material remains inside the isolated Electron
    * session; automation sees only DOM geometry and the downloaded image.
    */
-  async generateGeminiImage(input: GeminiBrowserImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
+  async generateGoogleFlowImage(input: GoogleFlowImageGenerationInput): Promise<BrowserSessionGeneratedImage> {
     const providerId = 'gemini' as const;
     const policy = getBrowserSessionProviderPolicy(providerId);
     if (this.activeProviders.has(providerId)) {
-      throw new Error('Gemini is already being used by another browser-session operation. Wait for it to finish and retry.');
+      throw new Error('Google Flow is already being used by another browser-session operation. Wait for it to finish and retry.');
     }
 
     const requestId = randomUUID().slice(0, 8);
     const log = (event: string, details: Readonly<Record<string, unknown>> = {}): void => {
       const suffix = Object.keys(details).length === 0 ? '' : ` ${JSON.stringify(details)}`;
-      console.info(`[OpenScene][Gemini Browser Image][${requestId}] ${event}${suffix}`);
+      console.info(`[OpenScene][Google Flow Image][${requestId}] ${event}${suffix}`);
     };
-    const prompt = buildGeminiBrowserImagePrompt(input);
-    const temporaryPath = join(this.temporaryDirectory, `openscene-gemini-image-${requestId}.download`);
+    const prompt = buildGoogleFlowImagePrompt(input);
+    const temporaryPath = join(this.temporaryDirectory, `openscene-flow-image-${requestId}.download`);
     let isolatedSession: Electron.Session | undefined;
     let automationWindow: BrowserWindow | undefined;
     let activeDownloadItem: DownloadItem | undefined;
     let downloadListener: ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void) | undefined;
     let downloadTimer: ReturnType<typeof setTimeout> | undefined;
+    let downloadArmed = false;
 
     this.activeProviders.add(providerId);
     log('request.start', {
       promptCharacters: prompt.length,
       aspectRatio: input.aspectRatio,
-      timeoutSeconds: GEMINI_IMAGE_TIMEOUT_MS / 1_000,
+      timeoutSeconds: GOOGLE_FLOW_IMAGE_TIMEOUT_MS / 1_000,
       visible: false
     });
 
     try {
       const stored = await this.vault.loadSecret(providerId);
       if (stored === null || stored.cookies.length === 0) {
-        throw new Error('No Gemini browser session is stored. Open Settings, sign in to Gemini, close that window, then retry.');
+        throw new Error('No Google Flow browser session is stored. Open Settings, sign in to Google Flow, close that window, then retry.');
       }
       isolatedSession = await this.loadIntoPartition(providerId);
       automationWindow = new BrowserWindow({
@@ -281,7 +282,7 @@ export class BrowserSessionService {
         height: 900,
         show: false,
         skipTaskbar: true,
-        title: 'OpenScene Gemini image worker',
+        title: 'OpenScene Google Flow image worker',
         webPreferences: {
           partition: partitionFor(providerId),
           contextIsolation: true,
@@ -303,37 +304,37 @@ export class BrowserSessionService {
       const download = new Promise<BrowserSessionGeneratedImage>((resolve, reject) => {
         downloadListener = (event, item, sourceWebContents) => {
           if (automationWindow === undefined || sourceWebContents.id !== automationWindow.webContents.id) return;
-          const declaredMime = item.getMimeType().toLowerCase();
-          const filename = item.getFilename().toLowerCase();
-          const looksLikeImage = declaredMime.startsWith('image/') || /\.(?:png|jpe?g|webp)$/.test(filename);
-          if (!looksLikeImage) {
+          if (!downloadArmed) {
             event.preventDefault();
-            reject(new Error('Gemini attempted a non-image download, so OpenScene rejected it.'));
+            reject(new Error('Google Flow attempted an unexpected download before image generation completed.'));
             return;
           }
+          downloadArmed = false;
+          const declaredMime = item.getMimeType().toLowerCase();
+          const filename = item.getFilename().toLowerCase();
           activeDownloadItem = item;
           item.setSavePath(temporaryPath);
           log('download.started', { declaredMime, filenameExtension: filename.split('.').pop() ?? '' });
           item.once('done', (_doneEvent, state) => {
             void (async () => {
               if (state !== 'completed') {
-                reject(new Error(`Gemini image download ${state}.`));
+                reject(new Error(`Google Flow image download ${state}.`));
                 return;
               }
               const bytes = await readFile(temporaryPath);
               if (bytes.length === 0 || bytes.length > MAX_BROWSER_IMAGE_BYTES) {
-                reject(new Error('Gemini returned an empty or unexpectedly large image download.'));
+                reject(new Error('Google Flow returned an empty or unexpectedly large image download.'));
                 return;
               }
               const mimeType = detectDownloadedImageMime(bytes);
               if (mimeType === null) {
-                reject(new Error('Gemini download was not a valid PNG, JPEG, or WebP image.'));
+                reject(new Error('Google Flow download was not a valid PNG, JPEG, or WebP image.'));
                 return;
               }
               log('download.completed', { bytes: bytes.length, mimeType });
-              resolve({ bytes, mimeType, providerJobId: `gemini-browser-${requestId}` });
+              resolve({ bytes, mimeType, providerJobId: `google-flow-browser-${requestId}` });
             })().catch((error: unknown) => {
-              reject(error instanceof Error ? error : new Error('Gemini image download could not be read.'));
+              reject(error instanceof Error ? error : new Error('Google Flow image download could not be read.'));
             });
           });
         };
@@ -347,19 +348,22 @@ export class BrowserSessionService {
       log('browser.loading', { origin: policy.applicationOrigin });
       await withTimeout(
         automationWindow.loadURL(policy.loginUrl),
-        GEMINI_PAGE_LOAD_TIMEOUT_MS,
-        'Gemini did not finish loading within 60 seconds.'
+        GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS,
+        'Google Flow did not finish loading within 60 seconds.'
       );
-      await automateGeminiImageGeneration(automationWindow.webContents, {
+      const generatedImageUrl = await automateGoogleFlowImageGeneration(automationWindow.webContents, {
         prompt,
-        modelTier: geminiBrowserModelTierFor(input.modelId),
-        timeoutMs: GEMINI_IMAGE_TIMEOUT_MS,
+        model: googleFlowImageModelFor(input.modelId),
+        aspectRatio: input.aspectRatio,
+        timeoutMs: GOOGLE_FLOW_IMAGE_TIMEOUT_MS,
         onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
       });
+      downloadArmed = true;
+      automationWindow.webContents.downloadURL(generatedImageUrl);
       const downloadTimeout = new Promise<never>((_resolve, reject) => {
         downloadTimer = setTimeout(
-          () => reject(new Error('Gemini created an image, but the full-size download did not finish within 60 seconds.')),
-          GEMINI_DOWNLOAD_TIMEOUT_MS
+          () => reject(new Error('Google Flow created an image, but its browser download did not finish within 60 seconds.')),
+          GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS
         );
       });
       const result = await Promise.race([download, downloadTimeout]);

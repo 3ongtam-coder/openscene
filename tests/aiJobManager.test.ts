@@ -161,7 +161,7 @@ describe('AI Job Manager and cloud provider seams', () => {
       aspectRatio: '1:1',
       modelId: 'gpt-image-1',
       mode: 'browser_session'
-    })).rejects.toThrow('available only for Google Gemini models');
+    })).rejects.toThrow('available only for Google models routed through Flow');
   });
 
   it('rejects invalid model controls before a job or provider call is queued', async () => {
