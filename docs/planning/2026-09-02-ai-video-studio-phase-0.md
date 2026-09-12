@@ -65,7 +65,7 @@ Observed upstream Windows test blockers:
 2. Symlink security fixtures fail without Windows symlink privilege/developer mode.
 3. `tests/clipSpeed.test.ts` derives `ffprobe` with `/ffmpeg$/`; on Windows the path ends in `ffmpeg.exe`, so the test invokes FFmpeg with FFprobe-only arguments and fails with `Unrecognized option 'select_streams'`.
 4. Several source/CI assertion tests fail against the pinned upstream snapshot and need separate issue triage.
-5. The aggregate Vitest run retains open handles after failures and must be interrupted; focused failing files exit normally and provide useful diagnostics.
+5. The latest aggregate run completed with 1,092 passing and 44 failing tests across 22 files. The remaining failures include the Windows filesystem/privilege issues above, FFmpeg not being visible on the inherited test-process PATH, and source/CI assertions already mismatched in the pinned upstream snapshot.
 
 These are baseline findings, not changes introduced by this fork. Do not mix their fixes into the first Gemini/Grok authentication feature.
 
