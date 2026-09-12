@@ -4,6 +4,8 @@ import {
   AI_DOMAIN_MODEL_STORAGE_KEY,
   getAvailableDomainModels,
   getDomainModel,
+  getDomainModels,
+  isDomainModelAvailableOnRuntime,
   parseAiDomainModelPreferences
 } from '../src/shared/aiDomainModels';
 
@@ -37,7 +39,19 @@ describe('AI domain model catalog', () => {
       'agentrouter/glm-5.3',
       'agentrouter/gpt-5.6-sol'
     ]);
-    expect(ids).toContain('agentrouter/gpt-5.6-sol');
+    expect(ids).not.toContain('agentrouter/gpt-5.6-sol');
+  });
+
+  it('runs AgentRouter Writer aliases only on desktop and keeps Edit Agent aliases visibly unavailable', () => {
+    const writer = getDomainModel('writer', 'agentrouter/gpt-5.6-sol');
+    expect(writer).toBeDefined();
+    expect(isDomainModelAvailableOnRuntime(writer!, 'desktop')).toBe(true);
+    expect(isDomainModelAvailableOnRuntime(writer!, 'mobile')).toBe(false);
+    expect(writer?.unavailableReason).toContain('Claude Code');
+
+    const edit = getDomainModels('edit-agent').find((model) => model.id === 'agentrouter/gpt-5.6-sol');
+    expect(edit).toMatchObject({ available: false });
+    expect(edit?.unavailableReason).toContain('LangChain');
   });
 
   it('keeps the local model as the edit-agent default ahead of cloud providers', () => {

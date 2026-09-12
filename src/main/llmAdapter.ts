@@ -2,7 +2,7 @@ import type { CredentialStore } from './credentialStore';
 import { getLlmModel, parseLlmModelKey } from '../shared/llmModels';
 import { getLlmProvider, type LlmProviderInfo } from '../shared/llmProviders';
 import type { OpenAiAuthMode } from '../shared/openAiAuth';
-import { AGENT_ROUTER_PROVIDER_ID, agentRouterHeaders, agentRouterMessageText } from '../shared/agentRouter';
+import { AGENT_ROUTER_PROVIDER_ID, AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON } from '../shared/agentRouter';
 
 export interface LlmCompletionRequest {
   modelId: string;
@@ -67,6 +67,14 @@ export class LlmExecutionAdapter {
     const provider = getLlmProvider(model.providerId);
     if (provider === undefined || provider.kind !== 'cloud') {
       return { ok: false, modelId: model.id, providerId: model.providerId, error: `Provider ${model.providerLabel} is not available in the current build.` };
+    }
+    if (provider.id === AGENT_ROUTER_PROVIDER_ID) {
+      return {
+        ok: false,
+        modelId: model.id,
+        providerId: provider.id,
+        error: `${AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON} AgentRouter is not available through the generic prompt or Edit Agent clients.`
+      };
     }
     return this.executeCloudCompletion(model.id, provider, request);
   }
@@ -276,14 +284,11 @@ function openAiStyleRequest(
   baseUrl: string,
   modelId: string,
   apiKey: string,
-  request: LlmCompletionRequest,
-  providerId?: string
+  request: LlmCompletionRequest
 ): CloudCompletionRequest {
   return {
     url: `${baseUrl}/chat/completions`,
-    headers: providerId === AGENT_ROUTER_PROVIDER_ID
-      ? agentRouterHeaders(apiKey)
-      : { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: {
       model: modelId,
       messages: [
@@ -293,7 +298,7 @@ function openAiStyleRequest(
     },
     extractCompletion: (payload) => {
       const content = (payload as { choices?: readonly { message?: { content?: unknown } }[] }).choices?.[0]?.message?.content;
-      return providerId === AGENT_ROUTER_PROVIDER_ID ? agentRouterMessageText(content) : typeof content === 'string' ? content : undefined;
+      return typeof content === 'string' ? content : undefined;
     }
   };
 }
@@ -310,7 +315,7 @@ function buildCloudCompletionRequest(
       const baseUrl = provider.baseUrl.replace(/\/$/, '');
       return provider.id === 'openai' && modelId.includes('codex')
         ? openAiResponsesRequest(baseUrl, modelId, apiKey, request)
-        : openAiStyleRequest(baseUrl, modelId, apiKey, request, provider.id);
+        : openAiStyleRequest(baseUrl, modelId, apiKey, request);
     }
     case 'anthropic':
       return {

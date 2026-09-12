@@ -80,7 +80,7 @@ export const DEFAULT_LLM_MODELS: readonly LlmModelConfig[] = [
     providerId: AGENT_ROUTER_PROVIDER_ID,
     label: model.label,
     providerLabel: 'AgentRouter',
-    description: 'AgentRouter account model alias for Writer and agentic editing.',
+    description: 'AgentRouter account model alias; runnable in desktop Writer through Claude Code.',
     category: 'editor-assistant',
     badge: model.reasoning ? 'REASONING' : 'SMART',
     defaultMode: 'api',

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
 import { requestWriter } from '@openvideo/shared/writerGeneration';
 import { getLlmProvider } from '@openvideo/shared/llmProviders';
 import {
@@ -67,9 +67,14 @@ export function WriterScreen({
   );
   const parent = project?.ai.scripts.find((script) => script.id === parentScriptId);
   const targetDurationSeconds = Number(durationText);
+  const modelAvailable = model !== undefined && isDomainModelAvailableOnRuntime(model, 'mobile');
 
   const generate = async (): Promise<void> => {
     if (model === undefined || !(WRITER_MODEL_IDS as readonly string[]).includes(model.id)) return;
+    if (!modelAvailable) {
+      setMessage(model.unavailableReason ?? 'This Writer model is not available on mobile.');
+      return;
+    }
     if (mode === 'rewrite' && parent === undefined) {
       setMessage('Choose a script version to rewrite.');
       return;
@@ -130,7 +135,7 @@ export function WriterScreen({
     }
   };
 
-  const canGenerate = !busy && project !== null && model !== undefined && connected[model.providerId] === true && sourceText.trim().length > 0 &&
+  const canGenerate = !busy && project !== null && model !== undefined && modelAvailable && connected[model.providerId] === true && sourceText.trim().length > 0 &&
     language.trim().length > 0 && audience.trim().length > 0 && tone.trim().length > 0 &&
     Number.isSafeInteger(targetDurationSeconds) && targetDurationSeconds >= 4 && targetDurationSeconds <= 7_200 &&
     (mode !== 'rewrite' || parent !== undefined);
@@ -203,6 +208,7 @@ export function WriterScreen({
       <Text style={styles.label}>Tone</Text>
       <TextInput value={tone} onChangeText={setTone} style={styles.input} />
       <Text style={styles.note}>Generate is an explicit request to the selected provider and may incur text-generation charges.</Text>
+      {!modelAvailable && model?.unavailableReason !== undefined && <Text style={styles.message}>{model.unavailableReason}</Text>}
 
       <Pressable accessibilityRole="button" disabled={!canGenerate} onPress={() => void generate()} style={press([styles.primary, !canGenerate && styles.off])}>
         {busy ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.primaryText}>Generate draft</Text>}

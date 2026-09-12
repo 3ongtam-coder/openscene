@@ -8,6 +8,7 @@ import {
   type WriterGenerationInput
 } from '../shared/writerWorkflow';
 import type { CredentialStore } from './credentialStore';
+import { requestAgentRouterCliWriter } from './agentRouterCliWriter';
 import { fail, ok } from './ipcResponses';
 
 type WriterIpcHandler = (payload?: unknown) => Promise<ApiResponse<WriterDraft>>;
@@ -27,7 +28,9 @@ export function registerWriterIpcHandler(dependencies: {
     if (!apiKey) return fail('INVALID_INPUT', `${providerLabel} API key is missing. Connect ${providerLabel} in Settings first.`);
     try {
       const draft = dependencies.generate === undefined
-        ? await requestWriter({ apiKey, modelId: input.modelId, request: input.request })
+        ? agentRouter
+          ? await requestAgentRouterCliWriter({ apiKey, modelId: input.modelId, request: input.request })
+          : await requestWriter({ apiKey, modelId: input.modelId, request: input.request })
         : await dependencies.generate({ ...input, apiKey });
       return ok(draft);
     } catch (error) {

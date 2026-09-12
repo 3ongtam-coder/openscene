@@ -60,7 +60,7 @@ export const AGENT_ROUTER_PROVIDER: LlmProviderInfo = {
   credentialKey: AGENT_ROUTER_CREDENTIAL_KEY,
   keyPlaceholder: 'AgentRouter API key',
   baseUrl: AGENT_ROUTER_BASE_URL,
-  description: 'Unified OpenAI-compatible gateway for the model aliases enabled on your AgentRouter key.'
+  description: 'Legacy AgentRouter account routed through an installed Claude Code client for desktop Writer generation.'
 };
 
 function toProviderInfo(provider: LlmCatalogProvider): LlmProviderInfo {
