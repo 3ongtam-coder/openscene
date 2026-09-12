@@ -171,10 +171,40 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
     id: 'grok',
     label: 'Grok / xAI',
     applicationOrigin: 'https://grok.com',
-    loginUrl: 'https://grok.com',
-    allowedNavigationOrigins: ['https://grok.com', 'https://x.com', 'https://x.ai', 'https://accounts.x.ai']
+    // Start at xAI's account surface rather than relying on grok.com to
+    // discover and redirect to the current sign-in flow.
+    loginUrl: 'https://accounts.x.ai/sign-in?redirect=grok-com',
+    // Keep this exact. auth.x.ai is an official hand-off used after the
+    // account challenge; omitting it leaves the submit button spinning while
+    // the main-frame navigation guard silently cancels the callback.
+    allowedNavigationOrigins: [
+      'https://grok.com',
+      'https://x.com',
+      'https://x.ai',
+      'https://accounts.x.ai',
+      'https://auth.x.ai'
+    ]
   }
 };
+
+/** Reduce a URL to a non-sensitive origin suitable for browser-session logs. */
+export function browserSessionDiagnosticTarget(candidateUrl: string): string {
+  try {
+    const parsed = new URL(candidateUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return `${parsed.protocol}//opaque`;
+    }
+    return parsed.origin;
+  } catch {
+    return 'invalid-url';
+  }
+}
+
+/** Keep only Chromium's stable error token; never log provider response text. */
+export function browserSessionDiagnosticError(value: unknown): string {
+  const match = String(value ?? '').toUpperCase().match(/\bERR_[A-Z0-9_]+\b/);
+  return match?.[0] ?? 'NETWORK_ERROR';
+}
 
 export function parseBrowserSessionProviderId(value: unknown): BrowserSessionProviderId | null {
   return typeof value === 'string' && BROWSER_SESSION_PROVIDERS.includes(value as BrowserSessionProviderId)

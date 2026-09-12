@@ -23,6 +23,11 @@ describe('browser session security wiring', () => {
     expect(service).toContain('nodeIntegration: false');
     expect(service).toContain('devTools: false');
     expect(service).toContain("clearStorageData({ storages: ['cookies'] })");
+    expect(service).toContain("providerId === 'grok'");
+    expect(service).toContain("'request.failed'");
+    expect(service).toContain("'navigation.blocked'");
+    expect(service).toContain('browserSessionDiagnosticTarget(details.url)');
+    expect(service).not.toContain('details.uploadData');
   });
 
   it('shows desktop controls while mobile clearly disables the unsupported lane', async () => {
@@ -34,6 +39,7 @@ describe('browser session security wiring', () => {
     expect(desktop).toContain('window.videoTool.clearBrowserSession(providerId)');
     expect(desktop).toContain("does not read another browser's profile");
     expect(desktop).toContain('Show Google Flow while generating');
+    expect(desktop).toContain('[OpenScene][Browser Session][grok]');
     expect(mobile).toContain('browser-session sign-in is desktop-only');
     expect(mobile).toContain('Keychain or Keystore');
   });

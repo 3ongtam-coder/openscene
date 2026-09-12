@@ -1,4 +1,12 @@
-import { BrowserWindow, session, type Cookie, type CookiesSetDetails, type DownloadItem, type WebContents } from 'electron';
+import {
+  BrowserWindow,
+  session,
+  type Cookie,
+  type CookiesSetDetails,
+  type DownloadItem,
+  type WebContents,
+  type WebRequestFilter
+} from 'electron';
 import { randomUUID } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -6,6 +14,8 @@ import { tmpdir } from 'node:os';
 
 import {
   BROWSER_SESSION_PROVIDERS,
+  browserSessionDiagnosticError,
+  browserSessionDiagnosticTarget,
   buildGoogleFlowImagePrompt,
   buildGoogleFlowVideoPrompt,
   googleFlowImageModelFor,
@@ -24,6 +34,19 @@ import { automateGoogleFlowImageGeneration, detectDownloadedImageMime } from './
 import { automateGoogleFlowVideoGeneration, detectDownloadedMp4 } from './googleFlowVideoAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
+const BROWSER_SIGN_IN_PAGE_LOAD_TIMEOUT_MS = 60_000;
+const BROWSER_SIGN_IN_STILL_OPEN_MS = 45_000;
+const GROK_DIAGNOSTIC_REQUEST_FILTER: WebRequestFilter = {
+  urls: [
+    'https://grok.com/*',
+    'https://x.com/*',
+    'https://x.ai/*',
+    'https://accounts.x.ai/*',
+    'https://auth.x.ai/*',
+    'https://api.x.ai/*',
+    'https://challenges.cloudflare.com/*'
+  ]
+};
 const GOOGLE_FLOW_IMAGE_TIMEOUT_MS = 4 * 60_000;
 const GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS = 60_000;
 const GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -31,6 +54,15 @@ const MAX_BROWSER_IMAGE_BYTES = 50 * 1024 * 1024;
 const GOOGLE_FLOW_VIDEO_TIMEOUT_MS = 12 * 60_000;
 const GOOGLE_FLOW_VIDEO_DOWNLOAD_TIMEOUT_MS = 2 * 60_000;
 const MAX_BROWSER_VIDEO_BYTES = 500 * 1024 * 1024;
+
+function logBrowserSession(
+  providerId: BrowserSessionProviderId,
+  event: string,
+  details: Readonly<Record<string, unknown>> = {}
+): void {
+  const suffix = Object.keys(details).length === 0 ? '' : ` ${JSON.stringify(details)}`;
+  console.info(`[OpenScene][Browser Session][${providerId}] ${event}${suffix}`);
+}
 
 export type GoogleFlowImageGenerationInput = {
   readonly modelId: string;
@@ -172,14 +204,39 @@ function toElectronCookie(cookie: BrowserSessionStoredCookie): CookiesSetDetails
 
 export class BrowserSessionService {
   private readonly activeProviders = new Set<BrowserSessionProviderId>();
+  private readonly instrumentedSessions = new WeakSet<Electron.Session>();
 
   constructor(
     private readonly vault: BrowserSessionVault,
     private readonly temporaryDirectory: string = tmpdir()
   ) {}
 
+  private instrumentGrokSession(isolatedSession: Electron.Session): void {
+    if (this.instrumentedSessions.has(isolatedSession)) return;
+    this.instrumentedSessions.add(isolatedSession);
+
+    isolatedSession.webRequest.onCompleted(GROK_DIAGNOSTIC_REQUEST_FILTER, (details) => {
+      if (details.statusCode < 400) return;
+      logBrowserSession('grok', 'request.http-error', {
+        method: details.method,
+        resourceType: details.resourceType,
+        statusCode: details.statusCode,
+        target: browserSessionDiagnosticTarget(details.url)
+      });
+    });
+    isolatedSession.webRequest.onErrorOccurred(GROK_DIAGNOSTIC_REQUEST_FILTER, (details) => {
+      logBrowserSession('grok', 'request.failed', {
+        method: details.method,
+        resourceType: details.resourceType,
+        error: browserSessionDiagnosticError(details.error),
+        target: browserSessionDiagnosticTarget(details.url)
+      });
+    });
+  }
+
   private async loadIntoPartition(providerId: BrowserSessionProviderId): Promise<Electron.Session> {
     const isolatedSession = session.fromPartition(partitionFor(providerId), { cache: false });
+    if (providerId === 'grok') this.instrumentGrokSession(isolatedSession);
     // Rehydrate authentication from the encrypted vault on every operation,
     // while keeping the non-persistent partition's in-memory Flow project map
     // alive for the rest of this app run. `clear()` still removes all storage.
@@ -261,19 +318,71 @@ export class BrowserSessionService {
       });
 
       const guardNavigation = (event: Electron.Event, url: string): void => {
-        if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault();
+        const allowed = isBrowserSessionNavigationAllowed(providerId, url);
+        logBrowserSession(providerId, allowed ? 'navigation.allowed' : 'navigation.blocked', {
+          target: browserSessionDiagnosticTarget(url)
+        });
+        if (!allowed) event.preventDefault();
       };
       loginWindow.webContents.on('will-navigate', guardNavigation);
       loginWindow.webContents.on('will-redirect', guardNavigation);
       loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-        if (isBrowserSessionNavigationAllowed(providerId, url)) {
+        const allowed = isBrowserSessionNavigationAllowed(providerId, url);
+        logBrowserSession(providerId, allowed ? 'popup.redirected' : 'popup.blocked', {
+          target: browserSessionDiagnosticTarget(url)
+        });
+        if (allowed) {
           void loginWindow.loadURL(url);
         }
         return { action: 'deny' };
       });
+      loginWindow.webContents.on('did-finish-load', () => {
+        logBrowserSession(providerId, 'page.loaded', {
+          target: browserSessionDiagnosticTarget(loginWindow.webContents.getURL())
+        });
+      });
+      loginWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+        if (!isMainFrame) return;
+        logBrowserSession(providerId, 'page.failed', {
+          error: browserSessionDiagnosticError(errorDescription),
+          errorCode,
+          target: browserSessionDiagnosticTarget(validatedUrl)
+        });
+      });
+      loginWindow.webContents.on('render-process-gone', (_event, details) => {
+        logBrowserSession(providerId, 'renderer.gone', { reason: details.reason });
+      });
+      loginWindow.on('unresponsive', () => {
+        logBrowserSession(providerId, 'window.unresponsive');
+      });
 
-      await loadAllowedProviderPage(loginWindow.webContents, providerId, policy.loginUrl);
-      await new Promise<void>((resolve) => loginWindow.once('closed', resolve));
+      const windowClosed = new Promise<void>((resolve) => loginWindow.once('closed', resolve));
+      const stillOpenTimer = setTimeout(() => {
+        if (loginWindow.isDestroyed()) return;
+        logBrowserSession(providerId, 'signin.still-open', {
+          elapsedSeconds: Math.round(BROWSER_SIGN_IN_STILL_OPEN_MS / 1000),
+          target: browserSessionDiagnosticTarget(loginWindow.webContents.getURL())
+        });
+      }, BROWSER_SIGN_IN_STILL_OPEN_MS);
+      logBrowserSession(providerId, 'signin.opening', {
+        target: browserSessionDiagnosticTarget(policy.loginUrl)
+      });
+      try {
+        await withTimeout(
+          loadAllowedProviderPage(loginWindow.webContents, providerId, policy.loginUrl, (redirectUrl) => {
+            logBrowserSession(providerId, 'navigation.redirect-settled', {
+              target: browserSessionDiagnosticTarget(redirectUrl)
+            });
+          }),
+          BROWSER_SIGN_IN_PAGE_LOAD_TIMEOUT_MS,
+          `${policy.label} sign-in page did not finish loading within 60 seconds.`
+        );
+        await windowClosed;
+        logBrowserSession(providerId, 'signin.window-closed');
+      } finally {
+        clearTimeout(stillOpenTimer);
+        if (!loginWindow.isDestroyed()) loginWindow.destroy();
+      }
 
       const collected = new Map<string, BrowserSessionStoredCookie>();
       for (const sourceUrl of policy.allowedNavigationOrigins) {

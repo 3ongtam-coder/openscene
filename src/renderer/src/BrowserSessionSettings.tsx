@@ -126,6 +126,12 @@ export function BrowserSessionSettings(): ReactElement {
                   {status === undefined ? 'Status unavailable' : statusLabel(status)} · {policy.applicationOrigin}
                   {status?.expiresAt === undefined ? '' : ` · latest cookie expiry ${new Date(status.expiresAt).toLocaleString()}`}
                 </span>
+                {providerId === 'grok' && (
+                  <span className="settings-list__note">
+                    If xAI remains on a loading spinner after CAPTCHA, wait for the diagnostic marker, close the sign-in window,
+                    and share only console lines beginning with [OpenScene][Browser Session][grok].
+                  </span>
+                )}
               </div>
               <Button variant="default" onClick={() => void run(providerId, 'start')} disabled={busy}>
                 {busy ? 'Waiting for sign-in…' : stored ? 'Open / re-authenticate' : 'Sign in'}

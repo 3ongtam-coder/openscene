@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  browserSessionDiagnosticError,
+  browserSessionDiagnosticTarget,
   buildGoogleFlowImagePrompt,
   buildGoogleFlowVideoPrompt,
   DEFAULT_GOOGLE_FLOW_PREFERENCES,
@@ -38,6 +40,8 @@ describe('browser session shared boundary', () => {
     expect(isBrowserSessionCookieSourceAllowed('gemini', 'https://gemini.google.com/app')).toBe(true);
     expect(isBrowserSessionCookieSourceAllowed('gemini', 'https://flow.google.com/')).toBe(true);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.x.ai/oauth/callback?code=secret')).toBe(true);
+    expect(isBrowserSessionNavigationAllowed('grok', 'https://auth.x.ai.evil.example/callback')).toBe(false);
     expect(isBrowserSessionNavigationAllowed('grok', 'https://grok.com.evil.example')).toBe(false);
   });
 
@@ -55,6 +59,16 @@ describe('browser session shared boundary', () => {
     expect(getBrowserSessionProviderPolicy('gemini').loginUrl).toBe('https://flow.google.com/');
     expect(getBrowserSessionProviderPolicy('gemini').allowedNavigationOrigins).toContain('https://labs.google');
     expect(getBrowserSessionProviderPolicy('grok').applicationOrigin).toBe('https://grok.com');
+    expect(getBrowserSessionProviderPolicy('grok').loginUrl).toBe('https://accounts.x.ai/sign-in?redirect=grok-com');
+    expect(getBrowserSessionProviderPolicy('grok').allowedNavigationOrigins).toContain('https://auth.x.ai');
+  });
+
+  it('redacts paths, queries and provider text from browser-session diagnostics', () => {
+    expect(browserSessionDiagnosticTarget('https://auth.x.ai/oauth/callback?code=secret')).toBe('https://auth.x.ai');
+    expect(browserSessionDiagnosticTarget('file:///private/user/path')).toBe('file://opaque');
+    expect(browserSessionDiagnosticTarget('not a url')).toBe('invalid-url');
+    expect(browserSessionDiagnosticError('net::ERR_NAME_NOT_RESOLVED')).toBe('ERR_NAME_NOT_RESOLVED');
+    expect(browserSessionDiagnosticError('account email or provider response')).toBe('NETWORK_ERROR');
   });
 
   it('builds a complete image request for the browser UI without dropping controls', () => {
