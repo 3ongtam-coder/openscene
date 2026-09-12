@@ -47,8 +47,13 @@ export function BrowserSessionSettings(): ReactElement {
       const response = action === 'start'
         ? await window.videoTool.startBrowserSession(providerId)
         : await window.videoTool.clearBrowserSession(providerId);
-      if (!response.ok) setState({ kind: 'error', message: response.error.message });
+      if (!response.ok) {
+        setState({ kind: 'error', message: response.error.message });
+        return;
+      }
       await refresh();
+    } catch (error: unknown) {
+      setState({ kind: 'error', message: error instanceof Error ? error.message : 'Browser session action failed.' });
     } finally {
       setBusyProvider(null);
     }

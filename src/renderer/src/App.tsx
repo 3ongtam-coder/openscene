@@ -238,16 +238,16 @@ export function App(): ReactElement {
    */
   const selectProjectTab = useCallback(async (projectId: string): Promise<void> => {
     if (editor.project?.id === projectId) return;
-    if (editor.hasUnsavedTimeline) await editor.saveTimeline();
+    if (editor.hasUnsavedTimeline && !await editor.saveTimeline()) return;
     const opened = await editor.openProject(projectId);
     if (opened) navigateToPage('edit');
   }, [editor, navigateToPage]);
 
   const closeProjectTabById = useCallback(async (projectId: string): Promise<void> => {
     const next = closeProjectTab(projectTabs, projectId, editor.project?.id ?? null);
+    if (editor.project?.id === projectId && editor.hasUnsavedTimeline && !await editor.saveTimeline()) return;
     setProjectTabs(next.tabs);
     if (editor.project?.id !== projectId) return;
-    if (editor.hasUnsavedTimeline) await editor.saveTimeline();
     if (next.activeId === null) {
       navigateToPage('projects');
       return;
