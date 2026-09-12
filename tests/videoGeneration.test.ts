@@ -9,6 +9,7 @@ import {
   supportsReferenceImage,
   videoAdapterFor
 } from '../src/shared/videoGeneration';
+import { validateVideoInputSet } from '../src/shared/videoGeneration';
 
 /**
  * These cover the half of video generation that both hosts share: the request,
@@ -18,6 +19,19 @@ import {
  */
 
 describe('shared video generation', () => {
+  it('requires one character image, a project driving video and an explicit Move/Mix mode', () => {
+    const base = {
+      operation: 'motion_control' as const,
+      referenceImage: { mimeType: 'image/png', base64: 'QUJD' },
+      projectId: 'project-1',
+      drivingVideoAssetId: 'asset-1',
+      motionMode: 'move' as const
+    };
+    expect(validateVideoInputSet(base)).toEqual({ operation: 'motion_control', referenceImageCount: 1 });
+    expect(() => validateVideoInputSet({ operation: 'motion_control', referenceImage: base.referenceImage, projectId: 'project-1', motionMode: 'move' })).toThrow(/imported driving-video/);
+    expect(() => validateVideoInputSet({ operation: 'motion_control', referenceImage: base.referenceImage, projectId: 'project-1', drivingVideoAssetId: 'asset-1' })).toThrow(/Move or Mix/);
+    expect(() => validateVideoInputSet({ ...base, lastFrame: base.referenceImage })).toThrow(/exactly one character image/);
+  });
   it('polls Veo until done and reports the sample URI with the key in a header', async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {

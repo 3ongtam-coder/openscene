@@ -55,6 +55,7 @@ import type { ChatGptOAuthStatus, OpenAiAuthMode } from '../shared/openAiAuth';
 import type { BrowserSessionProviderId, BrowserSessionStatus } from '../shared/browserSession';
 import type { SaveAiProjectDocumentInput } from '../shared/aiProjectDomain';
 import type { WriterDraft, WriterGenerationInput } from '../shared/writerWorkflow';
+import type { ComfyUiMotionWorkerStatus } from '../shared/comfyUiMotion';
 
 type ImportProjectAssetsResult = {
   readonly assets: readonly MediaAsset[];
@@ -100,6 +101,7 @@ export interface VideoToolApi {
   openExportResult(input: ExportJobActionInput): Promise<ApiResponse<{ readonly opened: boolean }>>;
   revealExportResult(input: ExportJobActionInput): Promise<ApiResponse<{ readonly revealed: boolean }>>;
   aiGenerateVideo(request: VideoGenerationRequest): Promise<ApiResponse<VideoGenerationJob>>;
+  aiGetComfyUiMotionStatus(): Promise<ApiResponse<ComfyUiMotionWorkerStatus>>;
   aiSelectReferenceImage(): Promise<ApiResponse<ReferenceImageSelection | null>>;
   aiGetVideoJob(jobId: string): Promise<ApiResponse<VideoGenerationJob>>;
   aiGenerateSpeech(request: TextToSpeechRequest): Promise<ApiResponse<TextToSpeechJob>>;
@@ -222,6 +224,7 @@ const videoTool: VideoToolApi = {
   revealExportResult: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.revealExportResult, input) as Promise<ApiResponse<{ readonly revealed: boolean }>>,
   aiGenerateVideo: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateVideo, request) as Promise<ApiResponse<VideoGenerationJob>>,
+  aiGetComfyUiMotionStatus: () => ipcRenderer.invoke(IPC_CHANNELS.aiGetComfyUiMotionStatus) as Promise<ApiResponse<ComfyUiMotionWorkerStatus>>,
   aiSelectReferenceImage: () => ipcRenderer.invoke(IPC_CHANNELS.aiSelectReferenceImage) as Promise<ApiResponse<ReferenceImageSelection | null>>,
   aiGetVideoJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.aiGetVideoJob, jobId) as Promise<ApiResponse<VideoGenerationJob>>,
   aiGenerateSpeech: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiGenerateSpeech, request) as Promise<ApiResponse<TextToSpeechJob>>,

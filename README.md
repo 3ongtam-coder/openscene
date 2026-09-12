@@ -190,7 +190,7 @@ The provider and model registry is generated from a snapshot of the [models.dev]
 - **Local**: [Ollama](https://ollama.com) runs models on your machine with no key and no account.
 - **Cloud chat**: connect a provider in *Settings → Providers* with an API key. Only connected providers' models appear in the pickers.
 - **OpenAI**: two login methods on one provider — an API key, or a ChatGPT sign-in (PKCE OAuth) for the model set that backend serves. Tokens stay in main-process safe storage; the renderer only learns whether you are connected.
-- **Generation**: 17 runnable video models across Google Veo, OpenAI Sora, Runway and Luma — Runway alone fronts Seedance, Veo 3.1, HappyHorse and Gemini Omni Flash on one key. Eight image models and seven voices. Providers without a real adapter stay listed but honestly unavailable rather than pretending to work, and every model says which it is.
+- **Generation**: 18 runnable video models across Google Veo, OpenAI Sora, Runway, Luma and a user-managed ComfyUI Wan Animate worker — Runway alone fronts Seedance, Veo 3.1, HappyHorse and Gemini Omni Flash on one key. Eight image models and seven voices. Providers without a real adapter stay listed but honestly unavailable rather than pretending to work, and every model says which it is.
 
 A provider API key is entered in Settings and sent once through the typed bridge to Electron `safeStorage`; stored provider credentials are never returned to the renderer.
 
@@ -259,7 +259,7 @@ The renderer talks to the main process through a narrow typed `window.videoTool`
 | Local H.264/AAC MP4 export | Other export formats; frame-perfect multitrack mastering guarantees |
 | Signed installers and auto-update on all three desktop platforms, and the mobile app on the App Store and Google Play | Cloud sync, hosted rendering, accounts |
 | Agent-driven editing, generation, and export | Unattended operation — changes ask for approval |
-| Veo image-to-video, Start-End interpolation, and 1-3 character/product references | Sora reference images (needs a multipart upload path this build does not send) |
+| Veo image-to-video, Start-End interpolation, and 1-3 character/product references; desktop ComfyUI Wan Move/Mix Motion Control with user-supplied API workflows | Sora reference images (needs a multipart upload path this build does not send); bundled ComfyUI/models |
 
 Program Monitor is a best-effort review surface. FFmpeg export is the authoritative output.
 

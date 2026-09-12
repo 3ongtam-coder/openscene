@@ -4,19 +4,23 @@ import { approvedWriterShots } from '../../shared/writerPipeline';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
+import type { MediaAsset } from '../../shared/timelineTypes';
+import type { ComfyUiMotionWorkerStatus, MotionControlMode } from '../../shared/comfyUiMotion';
 import { DomainModelPicker } from './DomainModelPicker';
 import { useAiDomainModel } from './AiDomainModelContext';
 import { useProjectResultImport } from './ProjectResultImportContext';
-import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
+import { getVideoModelCapabilities, getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
+const MOTION_JOB_UI_TIMEOUT_MS = 35 * 60_000;
 const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: string }[] = [
   { id: 'text_to_video', label: 'Text' },
   { id: 'image_to_video', label: 'First frame' },
   { id: 'start_end', label: 'Start-End' },
-  { id: 'reference_to_video', label: 'References' }
+  { id: 'reference_to_video', label: 'References' },
+  { id: 'motion_control', label: 'Motion' }
 ];
 
 type VideoInputSnapshot = {
@@ -24,9 +28,14 @@ type VideoInputSnapshot = {
   readonly referenceImage?: ReferenceImageSelection;
   readonly lastFrame?: ReferenceImageSelection;
   readonly referenceImages?: readonly ReferenceImageSelection[];
+  readonly projectId?: string;
+  readonly drivingVideoAssetId?: string;
+  readonly motionMode?: MotionControlMode;
 };
 type VideoGenerationWorkspaceProps = {
   readonly writerDocument?: AiProjectDocument | null;
+  readonly projectId?: string | null;
+  readonly projectAssets?: readonly MediaAsset[];
   /**
    * Controlled from App so the image studio's "Use for video" can hand a
    * generated still straight into this form. Keeping it local meant the handoff
@@ -38,6 +47,8 @@ type VideoGenerationWorkspaceProps = {
 
 export function VideoGenerationWorkspace({
   writerDocument,
+  projectId,
+  projectAssets = [],
   referenceImage,
   onReferenceImageChange
 }: VideoGenerationWorkspaceProps): ReactElement {
@@ -52,6 +63,16 @@ export function VideoGenerationWorkspace({
   const [selectedOperation, setSelectedOperation] = useState<VideoOperation>('text_to_video');
   const [lastFrame, setLastFrame] = useState<ReferenceImageSelection | null>(null);
   const [referenceImages, setReferenceImages] = useState<readonly ReferenceImageSelection[]>([]);
+  const [motionMode, setMotionMode] = useState<MotionControlMode>('move');
+  const [drivingVideoAssetId, setDrivingVideoAssetId] = useState('');
+  const [motionWorker, setMotionWorker] = useState<ComfyUiMotionWorkerStatus | null>(null);
+  const [checkingMotionWorker, setCheckingMotionWorker] = useState(false);
+  const drivingVideoAssets = projectAssets.filter((asset) => asset.kind === 'video');
+  const drivingVideo = drivingVideoAssets.find((asset) => asset.id === drivingVideoAssetId);
+  const motionAspectRatio: '16:9' | '9:16' | '1:1' = drivingVideo?.metadata?.width && drivingVideo.metadata.height
+    ? drivingVideo.metadata.width / drivingVideo.metadata.height > 1.2 ? '16:9'
+      : drivingVideo.metadata.height / drivingVideo.metadata.width > 1.2 ? '9:16' : '1:1'
+    : '16:9';
   const previousReferenceImage = useRef<ReferenceImageSelection | null>(null);
   const operationAvailable = isVideoOperationImplemented(videoModel.id, selectedOperation);
   const operationConstraints = getVideoOperationConstraints(videoModel.id, selectedOperation)
@@ -84,6 +105,20 @@ export function VideoGenerationWorkspace({
   // Nothing to report until something happens; an idle card is just noise.
   const [statusMsg, setStatusMsg] = useState<{ text: string; tone: 'neutral' | 'success' | 'warning' | 'danger' } | null>(null);
 
+  const refreshMotionWorker = async (): Promise<void> => {
+    setCheckingMotionWorker(true);
+    try {
+      const response = await window.videoTool.aiGetComfyUiMotionStatus();
+      if (!response.ok) {
+        setStatusMsg({ text: response.error.message, tone: 'danger' });
+        return;
+      }
+      setMotionWorker(response.value);
+    } finally {
+      setCheckingMotionWorker(false);
+    }
+  };
+
   // A still handed over from Image Generation should open the first-frame path,
   // but must not knock Start-End back to image-to-video while its first frame is picked.
   useEffect(() => {
@@ -95,7 +130,13 @@ export function VideoGenerationWorkspace({
   }, [referenceImage, selectedOperation, videoModel.id]);
 
   useEffect(() => {
-    if (!isVideoOperationImplemented(videoModel.id, selectedOperation)) setSelectedOperation('text_to_video');
+    if (!isVideoOperationImplemented(videoModel.id, selectedOperation)) {
+      setSelectedOperation(getVideoModelCapabilities(videoModel.id)?.implemented[0] ?? 'text_to_video');
+    }
+  }, [selectedOperation, videoModel.id]);
+
+  useEffect(() => {
+    if (selectedOperation === 'motion_control') void refreshMotionWorker();
   }, [selectedOperation, videoModel.id]);
 
   useEffect(() => () => {
@@ -119,7 +160,8 @@ export function VideoGenerationWorkspace({
     readonly modelId?: string;
   }): Promise<void> => {
     const promptText = overrides?.prompt ?? prompt;
-    if (promptText.trim().length === 0) {
+    const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
+    if (promptText.trim().length === 0 && candidateOperation !== 'motion_control') {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
       return;
     }
@@ -130,7 +172,10 @@ export function VideoGenerationWorkspace({
         ? referenceImage === null ? {} : { referenceImage }
         : {}),
       ...(selectedOperation === 'start_end' && lastFrame !== null ? { lastFrame } : {}),
-      ...(selectedOperation === 'reference_to_video' ? { referenceImages } : {})
+      ...(selectedOperation === 'reference_to_video' ? { referenceImages } : {}),
+      ...(selectedOperation === 'motion_control' && referenceImage !== null && projectId && drivingVideoAssetId
+        ? { referenceImage, projectId, drivingVideoAssetId, motionMode }
+        : {})
     };
     const targetModelId = overrides?.modelId ?? videoModel.id;
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
@@ -149,16 +194,28 @@ export function VideoGenerationWorkspace({
       setStatusMsg({ text: 'Choose at least one character or product reference.', tone: 'warning' });
       return;
     }
+    if (inputs.operation === 'motion_control') {
+      if (!inputs.referenceImage || !inputs.projectId || !inputs.drivingVideoAssetId || !inputs.motionMode) {
+        setStatusMsg({ text: 'Choose a character image and an imported driving video before Motion Control.', tone: 'warning' });
+        return;
+      }
+      if (motionWorker?.modes[inputs.motionMode].ready !== true) {
+        setStatusMsg({ text: motionWorker?.modes[inputs.motionMode].reason ?? 'Check the ComfyUI worker before generating.', tone: 'warning' });
+        return;
+      }
+    }
 
     setIsGenerating(true);
-    setStatusMsg({ text: `Submitting ${videoModel.providerLabel} cloud job...`, tone: 'neutral' });
+    setStatusMsg({ text: `Submitting ${videoModel.providerLabel} ${videoModel.executionPath === 'local' ? 'worker' : 'cloud'} job...`, tone: 'neutral' });
 
     try {
       const response = await window.videoTool.aiGenerateVideo({
         prompt: promptText,
-        aspectRatio: overrides?.aspectRatio ?? effectiveAspectRatio,
-        durationSeconds: overrides?.durationSeconds ?? effectiveDuration,
-        stylePreset: overrides?.stylePreset ?? selectedStyle,
+        aspectRatio: overrides?.aspectRatio ?? (inputs.operation === 'motion_control' ? motionAspectRatio : effectiveAspectRatio),
+        durationSeconds: overrides?.durationSeconds ?? (inputs.operation === 'motion_control' && drivingVideo?.metadata
+          ? Math.max(1, Math.min(30, Math.ceil(drivingVideo.metadata.durationMs / 1_000)))
+          : effectiveDuration),
+        stylePreset: overrides?.stylePreset ?? (inputs.operation === 'motion_control' ? 'Workflow controlled' : selectedStyle),
         modelId: targetModelId,
         ...inputs
       });
@@ -170,7 +227,8 @@ export function VideoGenerationWorkspace({
         setStatusMsg({ text: `Job started (${job.id}). Synthesizing video frames...`, tone: 'neutral' });
 
         // Poll for job completion
-        const pollingDeadline = Date.now() + VIDEO_JOB_UI_TIMEOUT_MS;
+        const pollingTimeout = inputs.operation === 'motion_control' ? MOTION_JOB_UI_TIMEOUT_MS : VIDEO_JOB_UI_TIMEOUT_MS;
+        const pollingDeadline = Date.now() + pollingTimeout;
         const stopPolling = (intervalId: ReturnType<typeof setInterval>): void => {
           clearInterval(intervalId);
           pollTimers.current.delete(intervalId);
@@ -184,7 +242,7 @@ export function VideoGenerationWorkspace({
           if (Date.now() > pollingDeadline) {
             stopPolling(intervalId);
             setIsGenerating(false);
-            setStatusMsg({ text: 'Stopped waiting after 12 minutes. Check the terminal log for this job before retrying.', tone: 'warning' });
+            setStatusMsg({ text: `Stopped waiting after ${Math.round(pollingTimeout / 60_000)} minutes. Check the terminal log for this job before retrying.`, tone: 'warning' });
             return;
           }
           if (inFlightPollJobs.current.has(job.id)) return;
@@ -286,7 +344,7 @@ export function VideoGenerationWorkspace({
         <div className="studio-surface__title">
           <h2 className="studio-surface__title-label" id="video-generation-title">Video Generation</h2>
           {/* The picker beside it already names the model and provider. */}
-          <span className="studio-surface__title-meta">Cloud video generation</span>
+          <span className="studio-surface__title-meta">Cloud + user-managed local generation</span>
         </div>
         <DomainModelPicker domain="video-generation" ariaLabel="Video model" />
       </header>
@@ -307,12 +365,13 @@ export function VideoGenerationWorkspace({
           <span className="studio-reference__empty">
             {selectedOperation === 'start_end' ? 'Veo builds the motion between two approved frames.'
               : selectedOperation === 'reference_to_video' ? 'Attach 1-3 character or product images. This mode uses an 8-second clip.'
+                : selectedOperation === 'motion_control' ? 'Transfer performance from an imported driving video with a user-managed ComfyUI Wan workflow.'
                 : selectedOperation === 'image_to_video' ? 'The supplied image becomes the first frame.'
                   : 'Prompt only, without visual references.'}
           </span>
         </div>
 
-        <div className="studio-field">
+        {selectedOperation !== 'motion_control' && <div className="studio-field">
           <span className="studio-field__label">Style</span>
           <div className="studio-chips" role="group" aria-label="Style preset">
             {STYLE_PRESETS.map((preset) => (
@@ -327,9 +386,9 @@ export function VideoGenerationWorkspace({
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
-        <div className="studio-field">
+        {selectedOperation !== 'motion_control' && <div className="studio-field">
           <span className="studio-field__label">Aspect ratio</span>
           <div className="studio-chips" role="group" aria-label="Aspect ratio">
             {aspectRatioOptions.map((ratio) => (
@@ -344,9 +403,9 @@ export function VideoGenerationWorkspace({
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
-        <div className="studio-field">
+        {selectedOperation !== 'motion_control' && <div className="studio-field">
           <span className="studio-field__label">Duration</span>
           <div className="studio-chips" role="group" aria-label="Duration">
             {durationOptions.map((sec) => (
@@ -361,18 +420,18 @@ export function VideoGenerationWorkspace({
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
         {statusMsg !== null && <StatusCard tone={statusMsg.tone}>{statusMsg.text}</StatusCard>}
 
-        {(selectedOperation === 'image_to_video' || selectedOperation === 'start_end') && <div className="studio-field">
-          <span className="studio-field__label">First frame</span>
+        {(selectedOperation === 'image_to_video' || selectedOperation === 'start_end' || selectedOperation === 'motion_control') && <div className="studio-field">
+          <span className="studio-field__label">{selectedOperation === 'motion_control' ? 'Character image' : 'First frame'}</span>
           {referenceImage === null ? (
             <div className="studio-reference">
               <span className="studio-reference__empty">
                 Required. Review this image before generation.
               </span>
-              <Button variant="ghost" onClick={() => void pickReferenceImage('first')}>Choose first frame</Button>
+              <Button variant="ghost" onClick={() => void pickReferenceImage('first')}>{selectedOperation === 'motion_control' ? 'Choose character image' : 'Choose first frame'}</Button>
             </div>
           ) : (
             <div className="studio-reference">
@@ -388,6 +447,38 @@ export function VideoGenerationWorkspace({
             </div>
           )}
         </div>}
+
+        {selectedOperation === 'motion_control' && <>
+          <div className="studio-field">
+            <span className="studio-field__label">Motion method</span>
+            <div className="studio-chips" role="group" aria-label="Motion method">
+              {(['move', 'mix'] as const).map((mode) => <button key={mode} type="button"
+                aria-pressed={motionMode === mode}
+                className={`studio-chip${motionMode === mode ? ' studio-chip--selected' : ''}`}
+                onClick={() => setMotionMode(mode)}>{mode === 'move' ? 'Move · transfer motion' : 'Mix · replace character'}</button>)}
+            </div>
+            <span className="studio-reference__empty">{motionMode === 'move'
+              ? 'Move preserves the character image and transfers the driving performance.'
+              : 'Mix uses the driving scene while replacing its performer with the character reference.'}</span>
+          </div>
+          <div className="studio-field">
+            <label className="studio-field__label" htmlFor="motion-driving-video">Driving video</label>
+            <select id="motion-driving-video" value={drivingVideoAssetId} onChange={(event) => setDrivingVideoAssetId(event.target.value)}>
+              <option value="">Choose an imported project video</option>
+              {drivingVideoAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}{asset.metadata ? ` · ${Math.ceil(asset.metadata.durationMs / 1_000)}s` : ''}</option>)}
+            </select>
+            {drivingVideo && drivingVideo.metadata === null && <StatusCard tone="warning">This asset has no verified duration metadata. Re-import it before Motion Control.</StatusCard>}
+            {drivingVideo?.metadata && drivingVideo.metadata.durationMs > 30_000 && <StatusCard tone="warning">Trim the driving clip to 30 seconds or less before generation.</StatusCard>}
+            {drivingVideo?.metadata && drivingVideo.metadata.durationMs <= 30_000 && <span className="studio-reference__empty">Output length and framing follow the driving clip and configured workflow.</span>}
+          </div>
+          <div className="studio-field">
+            <span className="studio-field__label">ComfyUI worker</span>
+            <StatusCard tone={motionWorker?.modes[motionMode].ready ? 'success' : motionWorker ? 'warning' : 'neutral'}>
+              {motionWorker === null ? 'Worker not checked.' : `${motionWorker.endpoint} · ${motionWorker.modes[motionMode].ready ? 'ready' : motionWorker.modes[motionMode].reason ?? motionWorker.reason ?? motionWorker.state}${motionWorker.deviceName ? ` · ${motionWorker.deviceName}` : ''}${motionWorker.totalVramMb ? ` · ${motionWorker.freeVramMb ?? '?'} / ${motionWorker.totalVramMb} MB VRAM free` : ''}`}
+            </StatusCard>
+            <Button variant="ghost" disabled={checkingMotionWorker} onClick={() => void refreshMotionWorker()}>{checkingMotionWorker ? 'Checking…' : 'Refresh worker'}</Button>
+          </div>
+        </>}
 
         {selectedOperation === 'start_end' && <div className="studio-field">
           <span className="studio-field__label">Last frame</span>
@@ -503,12 +594,15 @@ export function VideoGenerationWorkspace({
         />
         <div className="studio-composer__toolbar">
           <span className="studio-composer__hint">
-            {effectiveDuration}s · {effectiveAspectRatio} · {selectedStyle} · {selectedOperation}
+            {selectedOperation === 'motion_control' && drivingVideo?.metadata
+              ? `${Math.ceil(drivingVideo.metadata.durationMs / 1_000)}s · ${motionAspectRatio} · ${motionMode} · workflow controlled`
+              : `${effectiveDuration}s · ${effectiveAspectRatio} · ${selectedStyle} · ${selectedOperation}`}
           </span>
-          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || prompt.trim().length === 0 || !operationAvailable
-            || ((selectedOperation === 'image_to_video' || selectedOperation === 'start_end') && referenceImage === null)
+          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || (prompt.trim().length === 0 && selectedOperation !== 'motion_control') || !operationAvailable
+            || ((selectedOperation === 'image_to_video' || selectedOperation === 'start_end' || selectedOperation === 'motion_control') && referenceImage === null)
             || (selectedOperation === 'start_end' && lastFrame === null)
-            || (selectedOperation === 'reference_to_video' && referenceImages.length === 0)}>
+            || (selectedOperation === 'reference_to_video' && referenceImages.length === 0)
+            || (selectedOperation === 'motion_control' && (!projectId || !drivingVideoAssetId || !drivingVideo?.metadata || drivingVideo.metadata.durationMs > 30_000 || motionWorker?.modes[motionMode].ready !== true))}>
             {isGenerating ? 'Generating…' : 'Generate'}
           </Button>
         </div>

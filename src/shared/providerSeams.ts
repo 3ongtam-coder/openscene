@@ -1,4 +1,6 @@
-export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo';
+import type { MotionControlMode } from './comfyUiMotion';
+
+export type VideoGenerationProviderId = 'gemini_veo' | 'openai_sora' | 'runway_gen4' | 'kling_v3' | 'luma_dream' | 'minimax_hailuo' | 'comfyui_wan';
 export type TextToSpeechProviderId = 'elevenlabs' | 'openai_tts' | 'gemini_tts' | 'groq_tts' | 'vieneu_local';
 export type ImageGenerationProviderId =
   | 'openai_images'
@@ -38,6 +40,12 @@ export interface ReferenceImageSelection {
 
 export interface VideoGenerationRequest {
   prompt: string;
+  /** Project-scoped source used by local motion-control jobs. */
+  projectId?: string;
+  /** Driving video already imported into the project asset library. */
+  drivingVideoAssetId?: string;
+  /** Wan Animate movement transfer or character/background replacement. */
+  motionMode?: MotionControlMode;
   /** Explicit operation; omitted requests retain legacy text/first-frame inference. */
   operation?: import('./mediaCapabilityRegistry').VideoOperation;
   /** First frame for image-to-video or Start-End generation. */

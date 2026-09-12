@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { planVideoStoryboard, supportedShotSeconds, CONTINUITY_KEYS } from '@openvideo/shared/videoStoryboardPlan';
 import { composeShotPrompt, refineShotPrompt, revisionsOf, takeLabel } from '@openvideo/shared/shotPrompt';
-import { getDomainModels } from '@openvideo/shared/aiDomainModels';
+import { getDomainModels, isDomainModelAvailableOnRuntime } from '@openvideo/shared/aiDomainModels';
 import { approvedWriterShots } from '@openvideo/shared/writerPipeline';
 import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
@@ -50,7 +50,8 @@ const INPUT_MODES: readonly { readonly id: VideoOperation; readonly label: strin
   { id: 'text_to_video', label: 'Text' },
   { id: 'image_to_video', label: 'First frame' },
   { id: 'start_end', label: 'Start-End' },
-  { id: 'reference_to_video', label: 'References' }
+  { id: 'reference_to_video', label: 'References' },
+  { id: 'motion_control', label: 'Motion · desktop' }
 ];
 type PickedReference = { readonly displayName: string; readonly base64: string; readonly mimeType: string };
 
@@ -69,7 +70,7 @@ export function PlanScreen({
 }) {
   const catalog = getDomainModels('video-generation');
   const [totalSeconds, setTotalSeconds] = useState<number>(30);
-  const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => entry.available)?.id ?? '');
+  const [modelId, setModelId] = useState<string>(() => catalog.find((entry) => isDomainModelAvailableOnRuntime(entry, 'mobile'))?.id ?? '');
   const [connected, setConnected] = useState<Readonly<Record<string, boolean>>>({});
   const [prompt, setPrompt] = useState('');
   const [writerMessage, setWriterMessage] = useState('');
@@ -395,13 +396,14 @@ export function PlanScreen({
       <View style={styles.row}>
         {INPUT_MODES.map((mode) => (
           <Chip key={mode.id} label={mode.label} selected={operation === mode.id}
-            disabled={!isVideoOperationImplemented(model.id, mode.id)}
+            disabled={mode.id === 'motion_control' || !isVideoOperationImplemented(model.id, mode.id)}
             onPress={() => setPlan(() => {
               setOperation(mode.id);
               if (mode.id === 'reference_to_video' || mode.id === 'start_end') setContinuity(false);
             })} />
         ))}
       </View>
+      <Text style={styles.body}>Motion Control remains visible here but runs only in the desktop app, where OpenScene can safely read project video files and reach your user-managed ComfyUI worker.</Text>
       {(operation === 'start_end' || operation === 'reference_to_video') && totalSeconds !== 8 && (
         <Text style={styles.warn}>Choose 8s for this manual advanced-input render. It runs as one reviewed shot.</Text>
       )}

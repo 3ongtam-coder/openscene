@@ -19,7 +19,10 @@ describe('AI domain model catalog', () => {
     expect(isDomainModelAvailableOnRuntime(vieneu!, 'desktop')).toBe(true);
     expect(isDomainModelAvailableOnRuntime(vieneu!, 'mobile')).toBe(false);
     const videoModels = getAvailableDomainModels('video-generation');
-    expect(videoModels.every((model) => model.executionPath === 'api')).toBe(true);
+    const wan = videoModels.find((model) => model.id === 'wan2.2-animate-14b-comfyui');
+    expect(wan).toMatchObject({ executionPath: 'local', availableOn: ['desktop'] });
+    expect(isDomainModelAvailableOnRuntime(wan!, 'desktop')).toBe(true);
+    expect(isDomainModelAvailableOnRuntime(wan!, 'mobile')).toBe(false);
     expect(videoModels.map((model) => model.id)).toContain('veo-3.0-generate-001');
     expect(videoModels.map((model) => model.id)).toContain('sora-2');
     // The Edit Agent keeps the local engine.
