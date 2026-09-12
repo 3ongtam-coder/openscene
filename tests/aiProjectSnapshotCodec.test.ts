@@ -57,4 +57,24 @@ describe('AI project snapshot codec', () => {
       schemaVersion: 4, ...base, assets: [still], timeline: withStill, ai: createEmptyAiProjectDocument()
     }))?.toMatchObject({ assets: [{ id: still.id, kind: 'image' }] });
   });
+
+  it('accepts one path-free result origin and rejects a duplicate or malformed origin', () => {
+    const asset = {
+      id: 'asset-1', displayName: 'Generated image', projectRelativePath: 'assets/asset-1/original.png',
+      kind: 'image' as const, mimeType: 'image/png', byteLength: 8, metadata: null,
+      resultOrigin: { kind: 'ai-generation' as const, resultId: 'job-1' },
+      createdAt: timestamp, updatedAt: timestamp
+    };
+    const valid = { schemaVersion: 4, ...base, assets: [asset], ai: createEmptyAiProjectDocument() };
+
+    expect(parsePersistedProject(valid))?.toMatchObject({ assets: [{ resultOrigin: asset.resultOrigin }] });
+    expect(parsePersistedProject({
+      ...valid,
+      assets: [asset, { ...asset, id: 'asset-2', projectRelativePath: 'assets/asset-2/original.png' }]
+    })).toBeNull();
+    expect(parsePersistedProject({
+      ...valid,
+      assets: [{ ...asset, resultOrigin: { ...asset.resultOrigin, sourcePath: 'C:/private/result.png' } }]
+    })).toBeNull();
+  });
 });

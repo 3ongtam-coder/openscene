@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { createInitialTimeline } from '../shared/timelineLogic';
-import { PROJECT_SCHEMA_VERSION } from '../shared/timelineTypes';
+import { PROJECT_SCHEMA_VERSION, resultAssetOriginKey } from '../shared/timelineTypes';
 import type {
   CreateProjectInput,
   LocalProjectSnapshot,
@@ -320,6 +320,11 @@ export class ProjectStore {
       const incomingIds = new Set(input.assets.map((asset) => asset.id));
       if (incomingIds.size !== input.assets.length || current.assets.some((asset) => incomingIds.has(asset.id))) {
         throw new ProjectStoreError('Asset registration contains a duplicate asset id.');
+      }
+      const currentOrigins = new Set(current.assets.flatMap((asset) => asset.resultOrigin === undefined ? [] : [resultAssetOriginKey(asset.resultOrigin)]));
+      const incomingOrigins = input.assets.flatMap((asset) => asset.resultOrigin === undefined ? [] : [resultAssetOriginKey(asset.resultOrigin)]);
+      if (new Set(incomingOrigins).size !== incomingOrigins.length || incomingOrigins.some((origin) => currentOrigins.has(origin))) {
+        throw new ProjectStoreError('That completed result is already registered in this project.');
       }
       assertAssetImportQuota(
         {

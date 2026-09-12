@@ -119,6 +119,18 @@ export type BrowserAssetMetadata = {
   readonly height?: number;
 };
 
+export const RESULT_ASSET_ORIGIN_KINDS = ['recording', 'ai-generation'] as const;
+
+/** Path-free identity of a completed app result imported into the project. */
+export type ResultAssetOrigin = {
+  readonly kind: (typeof RESULT_ASSET_ORIGIN_KINDS)[number];
+  readonly resultId: string;
+};
+
+export function resultAssetOriginKey(origin: ResultAssetOrigin): string {
+  return `${origin.kind}:${origin.resultId}`;
+}
+
 export type MediaAsset = {
   readonly id: string;
   readonly displayName: string;
@@ -127,6 +139,8 @@ export type MediaAsset = {
   readonly mimeType: string;
   readonly byteLength: number;
   readonly metadata: BrowserAssetMetadata | null;
+  /** Absent for user imports and projects written before idempotent result import. */
+  readonly resultOrigin?: ResultAssetOrigin;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
