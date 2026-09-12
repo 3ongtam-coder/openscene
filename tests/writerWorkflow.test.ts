@@ -65,6 +65,8 @@ describe('Writer workflow', () => {
     expect(WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.minItems).toBe(1);
     expect(WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.maxItems).toBe(100);
     const shotSchema = WRITER_RESPONSE_JSON_SCHEMA.properties.scenes.items.properties.shots;
+    expect(shotSchema.items.properties).toHaveProperty('framing');
+    expect(shotSchema.items.properties).toHaveProperty('cameraMotion');
     expect(shotSchema.minItems).toBe(1);
     expect(shotSchema.maxItems).toBe(100);
     expect(shotSchema.items.properties.durationSeconds).toMatchObject({ type: 'integer', minimum: 1, maximum: 120 });

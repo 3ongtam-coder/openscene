@@ -70,11 +70,11 @@ describe('Gemini Writer generation', () => {
 });
 
 describe('AgentRouter Writer generation', () => {
-  it('fails before fetch on shared/mobile runtimes because AgentRouter requires a supported desktop client', async () => {
+  it('keeps the shared/mobile seam disabled while desktop owns the HTTP credential boundary', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     await expect(requestAgentRouterWriter({
       apiKey: 'router-secret', modelId: 'agentrouter/gpt-5.6-sol', request, fetchImpl
-    })).rejects.toThrow('Install Claude Code');
+    })).rejects.toThrow('currently available in OpenScene desktop');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

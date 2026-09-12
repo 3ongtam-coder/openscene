@@ -47,11 +47,11 @@ describe('AI domain model catalog', () => {
     expect(writer).toBeDefined();
     expect(isDomainModelAvailableOnRuntime(writer!, 'desktop')).toBe(true);
     expect(isDomainModelAvailableOnRuntime(writer!, 'mobile')).toBe(false);
-    expect(writer?.unavailableReason).toContain('Claude Code');
+    expect(writer?.unavailableReason).toContain('OpenScene desktop');
 
     const edit = getDomainModels('edit-agent').find((model) => model.id === 'agentrouter/gpt-5.6-sol');
     expect(edit).toMatchObject({ available: false });
-    expect(edit?.unavailableReason).toContain('LangChain');
+    expect(edit?.unavailableReason).toContain('tool approvals');
   });
 
   it('keeps the local model as the edit-agent default ahead of cloud providers', () => {

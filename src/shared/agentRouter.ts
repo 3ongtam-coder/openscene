@@ -1,13 +1,13 @@
 export const AGENT_ROUTER_PROVIDER_ID = 'agentrouter';
 export const AGENT_ROUTER_CREDENTIAL_KEY = 'agentRouterApiKey';
-/** Base URL from AgentRouter's Claude Code setup guide (there is no /v1 suffix). */
-export const AGENT_ROUTER_BASE_URL = 'https://agentrouter.org';
+/** OpenAI-compatible base URL used by AgentRouter and NewAPI clients. */
+export const AGENT_ROUTER_BASE_URL = 'https://agentrouter.org/v1';
 
 export const AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON =
-  'AgentRouter requires a supported desktop client. Install Claude Code and use OpenScene on desktop.';
+  'AgentRouter Writer is currently available in OpenScene desktop.';
 
 export const AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON =
-  'AgentRouter blocks generic LangChain clients. Its Claude Code bridge is Writer-only until OpenScene can preserve Edit Agent tool approvals through that client.';
+  'AgentRouter Edit Agent is unavailable until OpenScene can preserve tool approvals through its OpenAI-compatible route.';
 
 /**
  * Account model aliases supplied by the user. AgentRouter pools can expose a

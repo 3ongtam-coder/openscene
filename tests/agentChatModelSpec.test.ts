@@ -43,9 +43,9 @@ describe('agent chat model provider resolution', () => {
     });
   });
 
-  it('rejects AgentRouter before constructing the LangChain client', () => {
+  it('rejects AgentRouter before constructing an Edit Agent client without approval support', () => {
     expect(() => resolveAgentChatModelSpec('agentrouter/gpt-5.6-sol')).toThrow(
-      'AgentRouter blocks generic LangChain clients'
+      'preserve tool approvals'
     );
   });
 

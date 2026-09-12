@@ -86,10 +86,10 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
 }
 
 /**
- * AgentRouter rejects generic fetch/OpenAI clients at its client gate. Shared
- * code is also used by React Native, where the supported Claude Code client
- * cannot run, so this seam fails before making a network request. Desktop
- * routes the same model IDs through the main-process CLI bridge instead.
+ * Shared code is also used by React Native, where the AgentRouter credential
+ * and HTTP path are not enabled yet. This seam fails before making a network
+ * request; desktop routes the same model IDs through its main-process HTTP
+ * bridge instead.
  */
 export async function requestAgentRouterWriter(input: WriterProviderInput): Promise<WriterDraft> {
   const request = parseWriterRequest(input.request);

@@ -2,7 +2,7 @@ import type { CredentialStore } from './credentialStore';
 import { getLlmModel, parseLlmModelKey } from '../shared/llmModels';
 import { getLlmProvider, type LlmProviderInfo } from '../shared/llmProviders';
 import type { OpenAiAuthMode } from '../shared/openAiAuth';
-import { AGENT_ROUTER_PROVIDER_ID, AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON } from '../shared/agentRouter';
+import { AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON, AGENT_ROUTER_PROVIDER_ID } from '../shared/agentRouter';
 
 export interface LlmCompletionRequest {
   modelId: string;
@@ -73,7 +73,7 @@ export class LlmExecutionAdapter {
         ok: false,
         modelId: model.id,
         providerId: provider.id,
-        error: `${AGENT_ROUTER_WRITER_DESKTOP_ONLY_REASON} AgentRouter is not available through the generic prompt or Edit Agent clients.`
+        error: AGENT_ROUTER_EDIT_AGENT_UNAVAILABLE_REASON
       };
     }
     return this.executeCloudCompletion(model.id, provider, request);
