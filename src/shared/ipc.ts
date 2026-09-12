@@ -21,6 +21,7 @@ export const IPC_CHANNELS = {
   projectAssetMetadataUpdate: 'project-assets:update-metadata',
   projectAssetPlaybackUrl: 'project-assets:playback-url',
   projectTimelineSave: 'project-timeline:save',
+  projectAiDocumentSave: 'project-ai-document:save',
   projectTimelineChanged: 'project-timeline:changed',
   getFfmpegRuntimeStatus: 'ffmpeg:runtime-status',
   startExportJob: 'export:start-job',
