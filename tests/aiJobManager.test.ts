@@ -8,7 +8,8 @@ import {
   getSpeechGenerationJob,
   getVideoGenerationJob,
   getImageGenerationJob,
-  setAiJobManagerBrowserImageGenerator
+  setAiJobManagerBrowserImageGenerator,
+  setAiJobManagerBrowserVideoGenerator
 } from '../src/main/aiJobManager';
 import { createVoiceDeliverySettings } from '../src/shared/voiceDelivery';
 
@@ -29,7 +30,7 @@ describe('AI Job Manager and cloud provider seams', () => {
     // Aleph edits a source video this build does not send, so job creation
     // refuses all three up front. Runway and Luma moved out of this list when
     // their adapters landed.
-    for (const modelId of ['kling-v2.5-turbo', 'minimax-hailuo-02', 'aleph2', 'grok-imagine-video-1.5']) {
+    for (const modelId of ['kling-v2.5-turbo', 'minimax-hailuo-02', 'aleph2', 'grok-imagine-video-1.5', 'veo-3.0-generate-001', 'veo-3.0-fast-generate-001']) {
       await expect(createVideoGenerationJob({
         prompt: `Test prompt for ${modelId}`,
         aspectRatio: '16:9',
@@ -154,6 +155,64 @@ describe('AI Job Manager and cloud provider seams', () => {
     } finally {
       setAiJobManagerBrowserImageGenerator(undefined);
     }
+  });
+
+  it('runs Flow video through the injected browser session without an API key', async () => {
+    const generatedMp4 = Buffer.from([
+      0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d
+    ]);
+    const generate = vi.fn(async () => ({
+      bytes: generatedMp4,
+      providerJobId: 'google-flow-browser-video-test'
+    }));
+    setAiJobManagerBrowserVideoGenerator(generate);
+    try {
+      const job = await createVideoGenerationJob({
+        prompt: 'A quiet sunrise above the clouds',
+        aspectRatio: '9:16',
+        durationSeconds: 4,
+        stylePreset: 'Cinematic',
+        modelId: 'gemini-omni-1.1-flash',
+        mode: 'browser_session',
+        showBrowserWindow: false,
+        flowProjectName: 'Vertical trailer'
+      });
+      expect(job).toMatchObject({ mode: 'browser_session', provider: 'gemini_omni', status: 'queued' });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(generate).toHaveBeenCalledWith({
+        modelId: 'gemini-omni-1.1-flash',
+        prompt: 'A quiet sunrise above the clouds',
+        operation: 'text_to_video',
+        aspectRatio: '9:16',
+        durationSeconds: 4,
+        stylePreset: 'Cinematic',
+        showBrowserWindow: false,
+        projectName: 'Vertical trailer'
+      });
+      expect(getVideoGenerationJob(job.id)).toMatchObject({
+        status: 'completed',
+        mode: 'browser_session',
+        providerJobId: 'google-flow-browser-video-test'
+      });
+      expect(getVideoGenerationJob(job.id)?.outputFilePath).toMatch(/\.mp4$/);
+    } finally {
+      setAiJobManagerBrowserVideoGenerator(undefined);
+    }
+  }, 10_000);
+
+  it('rejects video models and controls without an exact Flow counterpart before queuing', async () => {
+    await expect(createVideoGenerationJob({
+      prompt: 'Unsupported Flow model', aspectRatio: '16:9', durationSeconds: 8,
+      modelId: 'veo-2.0-generate-001', mode: 'browser_session'
+    })).rejects.toThrow(/no exact counterpart/);
+    await expect(createVideoGenerationJob({
+      prompt: 'Unsupported Flow duration', aspectRatio: '16:9', durationSeconds: 6,
+      modelId: 'veo-3.1-generate-preview', mode: 'browser_session'
+    })).rejects.toThrow(/accepts 8 second clips/);
+    await expect(createVideoGenerationJob({
+      prompt: 'Wrong provider', aspectRatio: '16:9', durationSeconds: 4,
+      modelId: 'sora-2', mode: 'browser_session'
+    })).rejects.toThrow(/available only for Google models/);
   });
 
   it('does not let a non-Gemini model masquerade as a browser-session job', async () => {

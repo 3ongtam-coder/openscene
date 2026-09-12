@@ -19,7 +19,7 @@ describe('versioned media capability registry', () => {
     const ids = VIDEO_MODEL_CAPABILITIES.map((model) => model.modelId);
     expect(new Set(ids).size).toBe(ids.length);
     expect(VIDEO_MODEL_CAPABILITIES.every((model) => model.registryVersion === MEDIA_CAPABILITY_REGISTRY_VERSION)).toBe(true);
-    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-07');
+    expect(MEDIA_CAPABILITIES_AS_OF).toBe('2026-09-09');
     expect(GENERATION_CAPABILITIES).toEqual(VIDEO_OPERATIONS);
   });
 
@@ -77,6 +77,18 @@ describe('versioned media capability registry', () => {
       expect(capabilityModel, catalogModel.id).toBeDefined();
       expect(catalogModel.available, catalogModel.id).toBe((capabilityModel?.implemented.length ?? 0) > 0);
     }
+  });
+
+  it('registers the current Veo 3.1 Fast and Lite variants without inventing Lite reference mode', () => {
+    const fast = getVideoModelCapabilities('veo-3.1-fast-generate-preview');
+    expect(fast?.implemented).toEqual(['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']);
+    expect(fast?.operations.text_to_video?.durationSeconds).toEqual([4, 6, 8]);
+    const lite = getVideoModelCapabilities('veo-3.1-lite-generate-preview');
+    expect(lite?.implemented).toEqual(['text_to_video', 'image_to_video', 'start_end']);
+    expect(lite?.operations.reference_to_video).toBeUndefined();
+    expect(lite?.operations.video_extend).toBeUndefined();
+    expect(lite?.operations.text_to_video?.resolutions).toEqual(['720p', '1080p']);
+    expect(getDomainModels('video-generation').find((model) => model.id === 'veo-3.0-generate-001')).toMatchObject({ available: false });
   });
 
   it('registers direct Gemini Omni separately from the Runway-hosted route', () => {

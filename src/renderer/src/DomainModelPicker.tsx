@@ -13,6 +13,8 @@ type DomainModelPickerProps = {
   readonly ariaLabel: string;
   /** Provider sessions that can run this surface without an API key. */
   readonly linkedProviderIds?: readonly string[];
+  /** Session-capable models when only part of a provider catalog is reachable. */
+  readonly linkedModelIds?: readonly string[];
 };
 
 const POPOVER_WIDTH_PX = 300;
@@ -24,7 +26,7 @@ const POPOVER_WIDTH_PX = 300;
  * The popover renders through a body portal because the studio surface and the
  * workspace both clip overflow.
  */
-export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [] }: DomainModelPickerProps): ReactElement {
+export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [], linkedModelIds = [] }: DomainModelPickerProps): ReactElement {
   const { selectedModel, setSelectedModelId } = useAiDomainModel();
   const { credentialStatus } = useLlmModel();
   const { isModelVisible } = useModelVisibility();
@@ -45,6 +47,7 @@ export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [] }:
     credentialStatus: effectiveCredentialStatus,
     // The ChatGPT sign-in only serves Edit Agent chat models.
     chatGptConnected: false,
+    linkedModelIds,
     isModelVisible
   });
 
@@ -88,7 +91,8 @@ export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [] }:
       style={anchorStyle}
     >
       {groups.map((group) => {
-        const linkedBySession = linkedProviderIds.includes(group.providerId);
+        const linkedBySession = linkedProviderIds.includes(group.providerId)
+          || group.models.some((model) => linkedModelIds.includes(model.id));
         const status = linkedBySession
           ? 'Session'
           : agentModelGroupStatus(group, { credentialStatus: effectiveCredentialStatus, chatGptConnected: false });
@@ -105,7 +109,11 @@ export function DomainModelPicker({ domain, ariaLabel, linkedProviderIds = [] }:
             </div>
             {group.models.map((model) => {
               const runtimeAvailable = isDomainModelAvailableOnRuntime(model, 'desktop');
-              const selectable = runtimeAvailable && connected;
+              const selectable = runtimeAvailable && (
+                linkedProviderIds.includes(group.providerId)
+                || linkedModelIds.includes(model.id)
+                || agentModelGroupStatus(group, { credentialStatus: effectiveCredentialStatus, chatGptConnected: false }) !== 'Not connected'
+              );
               const isActive = model.id === activeModel.id;
               return (
                 <button

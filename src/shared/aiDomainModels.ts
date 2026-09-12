@@ -193,22 +193,24 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
   {
     id: 'veo-3.0-generate-001',
     providerId: 'google_gemini',
-    label: 'Veo 3',
+    label: 'Veo 3 (retired)',
     providerLabel: 'Google Veo',
-    description: 'Stable Veo 3 text-to-video with native audio.',
+    description: 'Legacy Veo 3 model retained only for saved-project history.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: true
+    available: false,
+    unavailableReason: 'Google shut down the Veo 3 API model on June 30, 2026. Choose a Veo 3.1 model.'
   },
   {
     id: 'veo-3.0-fast-generate-001',
     providerId: 'google_gemini',
-    label: 'Veo 3 Fast',
+    label: 'Veo 3 Fast (retired)',
     providerLabel: 'Google Veo',
-    description: 'Faster, cheaper Veo 3 text-to-video.',
+    description: 'Legacy Veo 3 Fast model retained only for saved-project history.',
     executionPath: 'api',
     domains: ['video-generation'],
-    available: true
+    available: false,
+    unavailableReason: 'Google shut down the Veo 3 Fast API model on June 30, 2026. Choose Veo 3.1 Fast.'
   },
   {
     id: 'veo-2.0-generate-001',
@@ -216,6 +218,26 @@ const AI_DOMAIN_MODEL_CATALOG: readonly AiDomainModelConfig[] = [
     label: 'Veo 2',
     providerLabel: 'Google Veo',
     description: 'Previous-generation Veo text-to-video.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'veo-3.1-fast-generate-preview',
+    providerId: 'google_gemini',
+    label: 'Veo 3.1 Fast (Preview)',
+    providerLabel: 'Google Veo',
+    description: 'Lower-latency Veo 3.1 generation with native audio and advanced frame controls.',
+    executionPath: 'api',
+    domains: ['video-generation'],
+    available: true
+  },
+  {
+    id: 'veo-3.1-lite-generate-preview',
+    providerId: 'google_gemini',
+    label: 'Veo 3.1 Lite (Preview)',
+    providerLabel: 'Google Veo',
+    description: 'Lowest-cost Veo 3.1 text/image generation with native audio; no reference-image or extension mode.',
     executionPath: 'api',
     domains: ['video-generation'],
     available: true

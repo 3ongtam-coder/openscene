@@ -14,7 +14,7 @@ import {
 describe('video cost estimates', () => {
   it('multiplies the recorded per-second rate by the requested length', () => {
     // Given / When
-    const estimate = estimateVideoCost({ modelId: 'veo-3.0-generate-001', durationSeconds: 8 });
+    const estimate = estimateVideoCost({ modelId: 'veo-3.1-generate-preview', durationSeconds: 8 });
 
     // Then
     expect(estimate.priced).toBe(true);
@@ -49,9 +49,11 @@ describe('video cost estimates', () => {
 
   it('always says the figure is a dated list price rather than a quote', () => {
     // Given / When / Then
-    const estimate = estimateVideoCost({ modelId: 'veo-3.0-fast-generate-001', durationSeconds: 6 });
+    const estimate = estimateVideoCost({ modelId: 'veo-3.1-fast-generate-preview', durationSeconds: 6 });
     expect(estimate.caveat).toContain(PRICING_AS_OF);
     expect(estimate.caveat).toMatch(/estimate, not a quote/);
+    expect(estimate.amountUsd).toBe(0.6);
+    expect(estimateVideoCost({ modelId: 'veo-3.1-lite-generate-preview', durationSeconds: 8 }).amountUsd).toBe(0.4);
   });
 });
 

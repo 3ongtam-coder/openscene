@@ -19,7 +19,15 @@ import {
 import { approvedWriterShots, applyWriterStyleLock } from '../../shared/writerPipeline';
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
-import type { ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
+import type { ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
+import {
+  DEFAULT_GOOGLE_FLOW_PREFERENCES,
+  GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
+  googleFlowVideoDurationOptions,
+  googleFlowVideoModelFor,
+  parseGoogleFlowPreferences,
+  type BrowserSessionStatus
+} from '../../shared/browserSession';
 import type { MediaAsset } from '../../shared/timelineTypes';
 import type { ComfyUiMotionWorkerStatus, MotionControlMode } from '../../shared/comfyUiMotion';
 import { DomainModelPicker } from './DomainModelPicker';
@@ -69,7 +77,19 @@ type VideoGenerationWorkspaceProps = {
    */
   readonly referenceImage: ReferenceImageSelection | null;
   readonly onReferenceImageChange: (reference: ReferenceImageSelection | null) => void;
+  /** Local project folder/name mirrored to the signed-in Flow workspace. */
+  readonly projectName?: string | undefined;
 };
+
+function showGoogleFlowWindow(): boolean {
+  try {
+    return parseGoogleFlowPreferences(
+      window.localStorage.getItem(GOOGLE_FLOW_PREFERENCES_STORAGE_KEY)
+    ).showWindowDuringGeneration;
+  } catch {
+    return DEFAULT_GOOGLE_FLOW_PREFERENCES.showWindowDuringGeneration;
+  }
+}
 
 export function VideoGenerationWorkspace({
   writerDocument,
@@ -77,10 +97,16 @@ export function VideoGenerationWorkspace({
   projectId,
   projectAssets = [],
   referenceImage,
-  onReferenceImageChange
+  onReferenceImageChange,
+  projectName
 }: VideoGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
   const videoModel = selectedModel('video-generation');
+  const flowVideoModel = googleFlowVideoModelFor(videoModel.id);
+  const [generationMode, setGenerationMode] = useState<ProviderExecutionMode>(
+    flowVideoModel === null ? videoModel.executionPath : 'browser_session'
+  );
+  const [flowSession, setFlowSession] = useState<BrowserSessionStatus | null>(null);
   const { importAiResult, placeAiAssetOnTimeline, assembleApprovedWriterShots } = useProjectResultImport();
   const [prompt, setPrompt] = useState('');
   const [writerShotId, setWriterShotId] = useState('');
@@ -105,8 +131,12 @@ export function VideoGenerationWorkspace({
   const operationAvailable = isVideoOperationImplemented(videoModel.id, selectedOperation);
   const operationConstraints = getVideoOperationConstraints(videoModel.id, selectedOperation)
     ?? getVideoOperationConstraints(videoModel.id, 'text_to_video');
-  const durationOptions = operationConstraints?.durationSeconds ?? [4, 8];
-  const aspectRatioOptions = operationConstraints?.aspectRatios ?? ['16:9', '9:16'];
+  const durationOptions = generationMode === 'browser_session' && flowVideoModel !== null
+    ? googleFlowVideoDurationOptions(flowVideoModel)
+    : operationConstraints?.durationSeconds ?? [4, 8];
+  const aspectRatioOptions = generationMode === 'browser_session' && flowVideoModel !== null
+    ? ['16:9', '9:16'] as const
+    : operationConstraints?.aspectRatios ?? ['16:9', '9:16'];
   // Switching engines keeps the chosen length when valid, else the closest option.
   const effectiveDuration = durationOptions.includes(durationSeconds)
     ? durationSeconds
@@ -132,6 +162,7 @@ export function VideoGenerationWorkspace({
   const inFlightPollJobs = useRef<Set<string>>(new Set());
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const previousVideoModelId = useRef(videoModel.id);
   // Which take is being refined, and what to change about it. A note belongs to
   // one job: applying the last one to a different take would be a change nobody
   // asked for on a shot they were happy with.
@@ -144,6 +175,18 @@ export function VideoGenerationWorkspace({
   useEffect(() => {
     documentRef.current = writerDocument ?? null;
   }, [writerDocument]);
+
+  useEffect(() => {
+    void window.videoTool.getBrowserSessionStatuses().then((response) => {
+      if (response.ok) setFlowSession(response.value.find((status) => status.providerId === 'gemini') ?? null);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (previousVideoModelId.current === videoModel.id) return;
+    previousVideoModelId.current = videoModel.id;
+    setGenerationMode(googleFlowVideoModelFor(videoModel.id) === null ? videoModel.executionPath : 'browser_session');
+  }, [videoModel.id, videoModel.executionPath]);
 
   const persistCandidateChange = async (
     change: (document: AiProjectDocument) => GenerationReviewResult
@@ -229,6 +272,7 @@ export function VideoGenerationWorkspace({
     readonly writerShotId?: string;
     readonly parentGenerationId?: string;
     readonly referenceAssetIds?: readonly string[];
+    readonly mode?: ProviderExecutionMode;
   }): Promise<void> => {
     const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
     const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
@@ -253,6 +297,11 @@ export function VideoGenerationWorkspace({
         : {})
     };
     const targetModelId = overrides?.modelId ?? videoModel.id;
+    const targetGenerationMode = overrides?.mode ?? generationMode;
+    if (targetGenerationMode === 'browser_session' && googleFlowVideoModelFor(targetModelId) === null) {
+      setStatusMsg({ text: 'The selected model has no exact counterpart in Google Flow. Choose API key or a supported Flow model.', tone: 'warning' });
+      return;
+    }
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
       setStatusMsg({ text: `${videoModel.label} does not implement ${inputs.operation} in this build.`, tone: 'warning' });
       return;
@@ -280,8 +329,14 @@ export function VideoGenerationWorkspace({
       }
     }
 
+    const flowWindowVisible = targetGenerationMode === 'browser_session' && showGoogleFlowWindow();
     setIsGenerating(true);
-    setStatusMsg({ text: `Submitting ${videoModel.providerLabel} ${videoModel.executionPath === 'local' ? 'worker' : 'cloud'} job...`, tone: 'neutral' });
+    setStatusMsg({
+      text: targetGenerationMode === 'browser_session'
+        ? flowWindowVisible ? 'Opening the signed-in Google Flow windowâ€¦' : 'Starting the hidden signed-in Google Flow video workerâ€¦'
+        : `Submitting ${videoModel.providerLabel} ${targetGenerationMode === 'local' ? 'worker' : 'cloud'} job...`,
+      tone: 'neutral'
+    });
 
     try {
       const response = await window.videoTool.aiGenerateVideo({
@@ -292,6 +347,10 @@ export function VideoGenerationWorkspace({
           : effectiveDuration),
         stylePreset: overrides?.stylePreset ?? (inputs.operation === 'motion_control' ? 'Workflow controlled' : effectiveStylePreset),
         modelId: targetModelId,
+        mode: targetGenerationMode,
+        ...(targetGenerationMode === 'browser_session'
+          ? { showBrowserWindow: flowWindowVisible, ...(projectName === undefined ? {} : { flowProjectName: projectName }) }
+          : {}),
         ...inputs
       });
 
@@ -415,6 +474,7 @@ export function VideoGenerationWorkspace({
       durationSeconds: job.durationSeconds,
       ...(job.modelId === undefined ? {} : { modelId: job.modelId }),
       ...(job.stylePreset === undefined ? {} : { stylePreset: job.stylePreset }),
+      mode: job.mode,
       inputs: jobInputs[job.id] ?? { operation: job.operation ?? 'text_to_video' },
       ...(sourceCandidate === undefined ? {} : {
         writerShotId: sourceCandidate.shotId,
@@ -608,9 +668,17 @@ export function VideoGenerationWorkspace({
         <div className="studio-surface__title">
           <h2 className="studio-surface__title-label" id="video-generation-title">Video Generation</h2>
           {/* The picker beside it already names the model and provider. */}
-          <span className="studio-surface__title-meta">Cloud + user-managed local generation</span>
+          <span className="studio-surface__title-meta">
+            {generationMode === 'browser_session' ? 'Signed-in Google Flow worker' : 'Cloud + user-managed local generation'}
+          </span>
         </div>
-        <DomainModelPicker domain="video-generation" ariaLabel="Video model" />
+        <DomainModelPicker
+          domain="video-generation"
+          ariaLabel="Video model"
+          linkedModelIds={flowSession?.kind === 'stored'
+            ? ['gemini-omni-1.1-flash', 'veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview']
+            : []}
+        />
       </header>
 
       <div className="studio-surface__body">
@@ -623,6 +691,36 @@ export function VideoGenerationWorkspace({
             onOpenShot={openProductionShot}
             onAssemble={assembleApprovedWriterShots}
           />}
+        {flowVideoModel !== null && (
+          <div className="studio-field">
+            <span className="studio-field__label">Connection</span>
+            <div className="studio-chips" role="group" aria-label="Google Flow video connection mode">
+              <button
+                type="button"
+                aria-pressed={generationMode === 'browser_session'}
+                className={`studio-chip${generationMode === 'browser_session' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('browser_session')}
+              >
+                Google Flow session
+              </button>
+              <button
+                type="button"
+                aria-pressed={generationMode === 'api'}
+                className={`studio-chip${generationMode === 'api' ? ' studio-chip--selected' : ''}`}
+                onClick={() => setGenerationMode('api')}
+              >
+                API key
+              </button>
+            </div>
+            {generationMode === 'browser_session' && (
+              <StatusCard tone={flowSession?.kind === 'stored' ? 'success' : 'warning'}>
+                {flowSession?.kind === 'stored'
+                  ? 'Google Flow session ready. OpenScene selects the exact Flow model, downloads the MP4, then returns it to candidate review.'
+                  : 'No ready Google Flow session detected. Sign in under Settings â†’ Providers before generating.'}
+              </StatusCard>
+            )}
+          </div>
+        )}
         <div className="studio-field">
           <span className="studio-field__label">Input mode</span>
           <div className="studio-chips" role="group" aria-label="Video input mode">

@@ -50,6 +50,19 @@ export function normalizeGoogleFlowProjectName(value: string | undefined): strin
 
 export type GoogleFlowImageModel = 'nano-banana-2' | 'nano-banana-pro';
 
+export type GoogleFlowVideoModel =
+  | 'omni-1.1-flash'
+  | 'veo-3.1-lite'
+  | 'veo-3.1-fast'
+  | 'veo-3.1-quality';
+
+export type GoogleFlowVideoPromptInput = {
+  readonly prompt: string;
+  readonly aspectRatio: string;
+  readonly durationSeconds: number;
+  readonly stylePreset?: string;
+};
+
 export const GOOGLE_FLOW_PREFERENCES_STORAGE_KEY = 'openvideo-google-flow-preferences-v1';
 
 export type GoogleFlowPreferences = {
@@ -90,6 +103,37 @@ export function googleFlowImageModelFor(modelId: string): GoogleFlowImageModel {
   // Flow does not expose a separate Flash-Lite image tier. Both Flash catalog
   // entries use the current Nano Banana 2 option in the signed-in Flow UI.
   return 'nano-banana-2';
+}
+
+/** Map only catalog choices that have an exact counterpart in the live Flow UI. */
+export function googleFlowVideoModelFor(modelId: string): GoogleFlowVideoModel | null {
+  if (modelId === 'gemini-omni-1.1-flash') return 'omni-1.1-flash';
+  if (modelId === 'veo-3.1-generate-preview') return 'veo-3.1-quality';
+  if (modelId === 'veo-3.1-fast-generate-preview') return 'veo-3.1-fast';
+  if (modelId === 'veo-3.1-lite-generate-preview') return 'veo-3.1-lite';
+  return null;
+}
+
+export function googleFlowVideoModelLabel(model: GoogleFlowVideoModel): string {
+  if (model === 'omni-1.1-flash') return 'Omni 1.1 Flash';
+  if (model === 'veo-3.1-lite') return 'Veo 3.1 - Lite';
+  if (model === 'veo-3.1-fast') return 'Veo 3.1 - Fast';
+  return 'Veo 3.1 - Quality';
+}
+
+export function googleFlowVideoDurationOptions(model: GoogleFlowVideoModel): readonly number[] {
+  return model === 'omni-1.1-flash' ? [4, 6, 8, 10] : [8];
+}
+
+export function buildGoogleFlowVideoPrompt(input: GoogleFlowVideoPromptInput): string {
+  const lines = [
+    'Create one video (do not answer with only text).',
+    input.prompt.trim(),
+    `Use a ${input.aspectRatio} aspect ratio and ${input.durationSeconds} second duration.`
+  ];
+  const style = input.stylePreset?.trim();
+  if (style) lines.push(`Visual style: ${style}.`);
+  return lines.join('\n');
 }
 
 /**

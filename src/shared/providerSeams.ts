@@ -61,6 +61,10 @@ export interface VideoGenerationRequest {
   durationSeconds?: number;
   stylePreset?: string;
   mode?: ProviderExecutionMode;
+  /** Desktop-only observability control for signed-in Google Flow jobs. */
+  showBrowserWindow?: boolean;
+  /** Desktop-only project/folder label mirrored into Google Flow. */
+  flowProjectName?: string;
   provider?: VideoGenerationProviderId;
   modelId?: string;
   apiKey?: string;

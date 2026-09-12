@@ -78,4 +78,30 @@ describe('browser session security wiring', () => {
     expect(studio).toContain('flowProjectName');
     expect(mobile).toContain('Signed-in Google Flow automation is desktop-only');
   });
+
+  it('keeps Flow video generation on the same isolated session boundary and validates MP4 bytes', async () => {
+    const [service, automation, studio, jobs, mobile] = await Promise.all([
+      readRepo('src/main/browserSessionService.ts'),
+      readRepo('src/main/googleFlowVideoAutomation.ts'),
+      readRepo('src/renderer/src/VideoGenerationWorkspace.tsx'),
+      readRepo('src/main/aiJobManager.ts'),
+      readRepo('mobile/src/screens/PlanScreen.tsx')
+    ]);
+    expect(service).toContain('generateGoogleFlowVideo');
+    expect(service).toContain('partition: partitionFor(providerId)');
+    expect(service).toContain('detectDownloadedMp4(bytes)');
+    expect(service).toContain('item.getReceivedBytes() <= MAX_BROWSER_VIDEO_BYTES');
+    expect(service).toContain('webContents.downloadURL(generatedVideoUrl)');
+    expect(service).not.toMatch(/batchexecute|StreamGenerate/);
+    expect(automation).toContain("input[type=\"file\"]");
+    expect(automation).toContain("input.operation === 'start_end'");
+    expect(automation).toContain('googleFlowVideoModelLabel(input.model)');
+    expect(automation).toContain("selectChoice(webContents, configButton, '720p')");
+    expect(automation).toContain("box === 'ftyp'");
+    expect(studio).toContain('Google Flow session');
+    expect(studio).toContain('mode: targetGenerationMode');
+    expect(studio).toContain('showBrowserWindow: flowWindowVisible');
+    expect(jobs).toContain('setAiJobManagerBrowserVideoGenerator');
+    expect(mobile).toContain('Signed-in Google Flow video automation is desktop-only');
+  });
 });

@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os';
 import {
   BROWSER_SESSION_PROVIDERS,
   buildGoogleFlowImagePrompt,
+  buildGoogleFlowVideoPrompt,
   googleFlowImageModelFor,
+  googleFlowVideoModelFor,
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
@@ -15,14 +17,20 @@ import {
   type BrowserSessionProviderId,
   type BrowserSessionStatus
 } from '../shared/browserSession';
+import type { ReferenceImageSelection } from '../shared/providerSeams';
+import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
 import { BrowserSessionVault, type BrowserSessionStoredCookie } from './browserSessionVault';
 import { automateGoogleFlowImageGeneration, detectDownloadedImageMime } from './googleFlowImageAutomation';
+import { automateGoogleFlowVideoGeneration, detectDownloadedMp4 } from './googleFlowVideoAutomation';
 
 const PARTITION_PREFIX = 'ai-video-studio-browser-session';
 const GOOGLE_FLOW_IMAGE_TIMEOUT_MS = 4 * 60_000;
 const GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS = 60_000;
 const GOOGLE_FLOW_DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_BROWSER_IMAGE_BYTES = 50 * 1024 * 1024;
+const GOOGLE_FLOW_VIDEO_TIMEOUT_MS = 12 * 60_000;
+const GOOGLE_FLOW_VIDEO_DOWNLOAD_TIMEOUT_MS = 2 * 60_000;
+const MAX_BROWSER_VIDEO_BYTES = 500 * 1024 * 1024;
 
 export type GoogleFlowImageGenerationInput = {
   readonly modelId: string;
@@ -37,6 +45,25 @@ export type GoogleFlowImageGenerationInput = {
 export type BrowserSessionGeneratedImage = {
   readonly bytes: Buffer;
   readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  readonly providerJobId: string;
+};
+
+export type GoogleFlowVideoGenerationInput = {
+  readonly modelId: string;
+  readonly prompt: string;
+  readonly operation: VideoOperation;
+  readonly aspectRatio: string;
+  readonly durationSeconds: number;
+  readonly stylePreset?: string;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly lastFrame?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
+  readonly showBrowserWindow?: boolean;
+  readonly projectName?: string;
+};
+
+export type BrowserSessionGeneratedVideo = {
+  readonly bytes: Buffer;
   readonly providerJobId: string;
 };
 
@@ -457,6 +484,178 @@ export class BrowserSessionService {
           log('session.persist.failed', { error: error instanceof Error ? error.message : 'unknown error' });
         });
       }
+      if (automationWindow !== undefined && !automationWindow.isDestroyed()) automationWindow.destroy();
+      await removeTemporaryDownload(temporaryPath);
+      this.activeProviders.delete(providerId);
+      log('cleanup.complete');
+    }
+  }
+
+  /** Generate a video through the visible Flow product without exposing its session to the renderer. */
+  async generateGoogleFlowVideo(input: GoogleFlowVideoGenerationInput): Promise<BrowserSessionGeneratedVideo> {
+    const providerId = 'gemini' as const;
+    const policy = getBrowserSessionProviderPolicy(providerId);
+    if (this.activeProviders.has(providerId)) {
+      throw new Error('Google Flow is already being used by another browser-session operation. Wait for it to finish and retry.');
+    }
+    const model = googleFlowVideoModelFor(input.modelId);
+    if (model === null) {
+      throw new Error(`Model ${input.modelId} has no exact counterpart in the current Google Flow video menu. Use the API lane instead.`);
+    }
+
+    const requestId = randomUUID().slice(0, 8);
+    const prompt = buildGoogleFlowVideoPrompt(input);
+    const projectName = normalizeGoogleFlowProjectName(input.projectName);
+    const showBrowserWindow = input.showBrowserWindow !== false;
+    const temporaryPath = join(this.temporaryDirectory, `openscene-flow-video-${requestId}.download`);
+    const log = (event: string, details: Readonly<Record<string, unknown>> = {}): void => {
+      const suffix = Object.keys(details).length === 0 ? '' : ` ${JSON.stringify(details)}`;
+      console.info(`[OpenScene][Google Flow Video][${requestId}] ${event}${suffix}`);
+    };
+    let isolatedSession: Electron.Session | undefined;
+    let automationWindow: BrowserWindow | undefined;
+    let activeDownloadItem: DownloadItem | undefined;
+    let downloadListener: ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void) | undefined;
+    let downloadTimer: ReturnType<typeof setTimeout> | undefined;
+    let downloadArmed = false;
+    let operationSettled = false;
+    let windowClosed: Promise<never> | undefined;
+
+    this.activeProviders.add(providerId);
+    log('request.start', {
+      model: input.modelId,
+      operation: input.operation,
+      promptCharacters: prompt.length,
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio,
+      visible: showBrowserWindow,
+      referenceCount: input.operation === 'reference_to_video' ? input.referenceImages?.length ?? 0 : input.operation === 'start_end' ? 2 : input.referenceImage === undefined ? 0 : 1
+    });
+    try {
+      const stored = await this.vault.loadSecret(providerId);
+      if (stored === null || stored.cookies.length === 0) {
+        throw new Error('No Google Flow browser session is stored. Open Settings, sign in to Google Flow, close that window, then retry.');
+      }
+      isolatedSession = await this.loadIntoPartition(providerId);
+      automationWindow = new BrowserWindow({
+        width: 1280,
+        height: 900,
+        show: showBrowserWindow,
+        skipTaskbar: !showBrowserWindow,
+        title: 'OpenScene Google Flow video worker',
+        backgroundColor: '#101010',
+        autoHideMenuBar: true,
+        webPreferences: {
+          partition: partitionFor(providerId),
+          contextIsolation: true,
+          sandbox: true,
+          nodeIntegration: false,
+          webSecurity: true,
+          devTools: false,
+          backgroundThrottling: false
+        }
+      });
+      windowClosed = new Promise<never>((_resolve, reject) => {
+        automationWindow!.once('closed', () => {
+          if (operationSettled) return;
+          log('browser.closed');
+          reject(new Error('The Google Flow window was closed before video generation completed.'));
+        });
+      });
+      void windowClosed.catch(() => undefined);
+
+      const guardNavigation = (event: Electron.Event, url: string): void => {
+        if (!isBrowserSessionNavigationAllowed(providerId, url)) event.preventDefault();
+      };
+      automationWindow.webContents.on('will-navigate', guardNavigation);
+      automationWindow.webContents.on('will-redirect', guardNavigation);
+      automationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+      const download = new Promise<BrowserSessionGeneratedVideo>((resolve, reject) => {
+        downloadListener = (event, item, sourceWebContents) => {
+          if (automationWindow === undefined || sourceWebContents.id !== automationWindow.webContents.id) return;
+          if (!downloadArmed) {
+            event.preventDefault();
+            reject(new Error('Google Flow attempted an unexpected download before video generation completed.'));
+            return;
+          }
+          downloadArmed = false;
+          activeDownloadItem = item;
+          const declaredBytes = item.getTotalBytes();
+          if (declaredBytes > MAX_BROWSER_VIDEO_BYTES) {
+            event.preventDefault();
+            reject(new Error('Google Flow declared a video larger than the 500 MB browser-session limit.'));
+            return;
+          }
+          item.setSavePath(temporaryPath);
+          log('download.started', { declaredMime: item.getMimeType().toLowerCase(), filenameExtension: item.getFilename().split('.').pop()?.toLowerCase() ?? '' });
+          let exceededLimit = false;
+          item.on('updated', () => {
+            if (item.getReceivedBytes() <= MAX_BROWSER_VIDEO_BYTES) return;
+            exceededLimit = true;
+            item.cancel();
+          });
+          item.once('done', (_doneEvent, state) => {
+            void (async () => {
+              if (exceededLimit) throw new Error('Google Flow video exceeded the 500 MB browser-session limit while downloading.');
+              if (state !== 'completed') throw new Error(`Google Flow video download ${state}.`);
+              const bytes = await readFile(temporaryPath);
+              if (bytes.length === 0 || bytes.length > MAX_BROWSER_VIDEO_BYTES) throw new Error('Google Flow returned an empty or unexpectedly large video download.');
+              if (!detectDownloadedMp4(bytes)) throw new Error('Google Flow download was not a valid MP4 file.');
+              log('download.completed', { bytes: bytes.length, mimeType: 'video/mp4' });
+              resolve({ bytes, providerJobId: `google-flow-browser-video-${requestId}` });
+            })().catch((error: unknown) => reject(error instanceof Error ? error : new Error('Google Flow video download could not be read.')));
+          });
+        };
+        isolatedSession!.on('will-download', downloadListener);
+      });
+      void download.catch(() => undefined);
+
+      await Promise.race([
+        withTimeout(
+          loadAllowedProviderPage(automationWindow.webContents, providerId, policy.loginUrl),
+          GOOGLE_FLOW_PAGE_LOAD_TIMEOUT_MS,
+          'Google Flow did not finish loading within 60 seconds.'
+        ),
+        windowClosed
+      ]);
+      const generatedVideoUrl = await Promise.race([
+        automateGoogleFlowVideoGeneration(automationWindow.webContents, {
+          prompt,
+          model,
+          operation: input.operation,
+          aspectRatio: input.aspectRatio,
+          durationSeconds: input.durationSeconds,
+          ...(input.referenceImage === undefined ? {} : { referenceImage: input.referenceImage }),
+          ...(input.lastFrame === undefined ? {} : { lastFrame: input.lastFrame }),
+          ...(input.referenceImages === undefined ? {} : { referenceImages: input.referenceImages }),
+          ...(projectName === undefined ? {} : { projectName }),
+          timeoutMs: GOOGLE_FLOW_VIDEO_TIMEOUT_MS,
+          onProgress: (stage, elapsedMs, details = {}) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000), ...details })
+        }),
+        windowClosed
+      ]);
+      downloadArmed = true;
+      automationWindow.webContents.downloadURL(generatedVideoUrl);
+      const downloadTimeout = new Promise<never>((_resolve, reject) => {
+        downloadTimer = setTimeout(
+          () => reject(new Error('Google Flow created a video, but its download did not finish within two minutes.')),
+          GOOGLE_FLOW_VIDEO_DOWNLOAD_TIMEOUT_MS
+        );
+      });
+      const result = await Promise.race([download, downloadTimeout, windowClosed]);
+      operationSettled = true;
+      log('request.completed');
+      return result;
+    } catch (error) {
+      log('request.failed', { error: error instanceof Error ? error.message : 'unknown error' });
+      throw error;
+    } finally {
+      operationSettled = true;
+      if (downloadTimer !== undefined) clearTimeout(downloadTimer);
+      if (isolatedSession !== undefined && downloadListener !== undefined) isolatedSession.removeListener('will-download', downloadListener);
+      if (activeDownloadItem?.getState() === 'progressing') activeDownloadItem.cancel();
+      if (isolatedSession !== undefined) await this.persistPartition(providerId, isolatedSession).catch(() => undefined);
       if (automationWindow !== undefined && !automationWindow.isDestroyed()) automationWindow.destroy();
       await removeTemporaryDownload(temporaryPath);
       this.activeProviders.delete(providerId);

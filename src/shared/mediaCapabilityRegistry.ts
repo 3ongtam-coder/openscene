@@ -5,7 +5,7 @@
  */
 
 export const MEDIA_CAPABILITY_REGISTRY_VERSION = 3 as const;
-export const MEDIA_CAPABILITIES_AS_OF = '2026-09-07' as const;
+export const MEDIA_CAPABILITIES_AS_OF = '2026-09-09' as const;
 
 export const VIDEO_OPERATIONS = [
   'text_to_video',
@@ -147,6 +147,36 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
     implemented: ['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']
   }),
   model({
+    modelId: 'veo-3.1-fast-generate-preview', providerId: 'google_gemini', providerLabel: 'Google Veo',
+    label: 'Veo 3.1 Fast (Preview)', description: 'Lower-latency Veo 3.1 generation with native audio and advanced frame controls.',
+    sourceUrls: [GOOGLE_VIDEO_SOURCE, GOOGLE_MODELS_SOURCE], binding: GOOGLE_BINDING,
+    operations: {
+      text_to_video: veo31Common,
+      image_to_video: veo31Common,
+      reference_to_video: veo31Reference,
+      start_end: veo31StartEnd,
+      video_extend: veo31Extend
+    },
+    implemented: ['text_to_video', 'image_to_video', 'reference_to_video', 'start_end']
+  }),
+  model({
+    modelId: 'veo-3.1-lite-generate-preview', providerId: 'google_gemini', providerLabel: 'Google Veo',
+    label: 'Veo 3.1 Lite (Preview)', description: 'Efficient Veo 3.1 text/image generation without reference-image or extension mode.',
+    sourceUrls: [GOOGLE_VIDEO_SOURCE, GOOGLE_MODELS_SOURCE], binding: GOOGLE_BINDING,
+    operations: {
+      text_to_video: operation([4, 6, 8], LANDSCAPE_PORTRAIT, ['720p', '1080p'], true, {
+        notes: ['1080p requires 8 seconds.']
+      }),
+      image_to_video: operation([4, 6, 8], LANDSCAPE_PORTRAIT, ['720p', '1080p'], true, {
+        minReferenceImages: 1, maxReferenceImages: 1, notes: ['1080p requires 8 seconds.']
+      }),
+      start_end: operation([4, 6, 8], LANDSCAPE_PORTRAIT, ['720p', '1080p'], true, {
+        minReferenceImages: 2, maxReferenceImages: 2, notes: ['1080p requires 8 seconds.']
+      })
+    },
+    implemented: ['text_to_video', 'image_to_video', 'start_end']
+  }),
+  model({
     modelId: 'veo-3.0-generate-001', providerId: 'google_gemini', providerLabel: 'Google Veo',
     label: 'Veo 3', description: 'Stable Veo 3 text/image-to-video with native audio.',
     sourceUrls: [GOOGLE_VIDEO_SOURCE], binding: GOOGLE_BINDING,
@@ -154,7 +184,7 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
       text_to_video: operation([8], ['16:9'], ['720p', '1080p'], true),
       image_to_video: operation([8], ['16:9'], ['720p', '1080p'], true)
     },
-    implemented: ['text_to_video', 'image_to_video']
+    implemented: []
   }),
   model({
     modelId: 'veo-3.0-fast-generate-001', providerId: 'google_gemini', providerLabel: 'Google Veo',
@@ -164,7 +194,7 @@ export const VIDEO_MODEL_CAPABILITIES: readonly VideoModelCapabilities[] = [
       text_to_video: operation([8], ['16:9'], ['720p', '1080p'], true),
       image_to_video: operation([8], ['16:9'], ['720p', '1080p'], true)
     },
-    implemented: ['text_to_video', 'image_to_video']
+    implemented: []
   }),
   model({
     modelId: 'veo-2.0-generate-001', providerId: 'google_gemini', providerLabel: 'Google Veo',

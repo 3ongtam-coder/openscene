@@ -14,7 +14,7 @@
  */
 
 /** The day the rates below were recorded. Surfaced in every estimate. */
-export const PRICING_AS_OF = '2026-09-07';
+export const PRICING_AS_OF = '2026-09-09';
 
 export type GenerationRate =
   | { readonly kind: 'per-second'; readonly usd: number }
@@ -34,6 +34,8 @@ const UNKNOWN_THIRD_PARTY: GenerationRate = {
  */
 const VIDEO_RATES: Readonly<Record<string, GenerationRate>> = {
   'veo-3.1-generate-preview': { kind: 'per-second', usd: 0.4 },
+  'veo-3.1-fast-generate-preview': { kind: 'per-second', usd: 0.1 },
+  'veo-3.1-lite-generate-preview': { kind: 'per-second', usd: 0.05 },
   'veo-3.0-generate-001': { kind: 'per-second', usd: 0.4 },
   'veo-3.0-fast-generate-001': { kind: 'per-second', usd: 0.15 },
   'veo-2.0-generate-001': { kind: 'per-second', usd: 0.35 },

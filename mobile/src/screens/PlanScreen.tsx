@@ -455,6 +455,7 @@ export function PlanScreen({
       </View>}
       <Text style={styles.h1}>Plan a video</Text>
       <Text style={styles.sub}>Shot lengths and prices come from the same modules the desktop app uses.</Text>
+      <Text style={styles.body}>Signed-in Google Flow video automation is desktop-only. Mobile continues to use official provider API keys.</Text>
 
       <Text style={styles.label}>Model</Text>
       <ModelSelect
