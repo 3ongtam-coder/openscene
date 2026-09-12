@@ -35,7 +35,27 @@ describe('Gemini Writer generation', () => {
   it('fails closed on invalid JSON and structurally incomplete output', async () => {
     const response = (text: string) => async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
     await expect(requestGeminiWriter({ apiKey: 'key', modelId: 'gemini-3.1-flash-lite', request, fetchImpl: response('{') })).rejects.toThrow('invalid JSON');
-    await expect(requestGeminiWriter({ apiKey: 'key', modelId: 'gemini-3.1-flash-lite', request, fetchImpl: response('{}') })).rejects.toThrow('project contract');
+    await expect(requestGeminiWriter({ apiKey: 'key', modelId: 'gemini-3.1-flash-lite', request, fetchImpl: response('{}') })).rejects.toThrow('at title: must be text');
+  });
+
+  it('reports a safe field path for semantic mismatches without echoing generated content', async () => {
+    const privateTitle = 'private unreleased campaign';
+    const mismatched = {
+      ...draft,
+      title: privateTitle,
+      scenes: [{ ...draft.scenes[0]!, characterNames: ['Narrator'] }]
+    };
+    const fetchImpl = async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify(mismatched) }] } }]
+    }), { status: 200 });
+    try {
+      await requestGeminiWriter({ apiKey: 'key', modelId: 'gemini-3.1-flash-lite', request, fetchImpl });
+      throw new Error('Expected the mismatched draft to fail.');
+    } catch (error) {
+      expect(String(error)).toContain('scenes[0].characterNames[0]');
+      expect(String(error)).not.toContain(privateTitle);
+      expect(String(error)).not.toContain('Narrator');
+    }
   });
 
   it('does not echo the API key in provider errors', async () => {
