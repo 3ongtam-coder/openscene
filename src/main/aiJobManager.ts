@@ -46,10 +46,15 @@ import { parseVoiceDeliverySettings, type VoiceDeliverySettings } from '../share
 import { generateComfyUiMotionVideo } from './comfyUiMotionAdapter';
 import type { VieNeuRuntimeController } from './managedVieNeuRuntime';
 import { googleFlowVideoDurationOptions, googleFlowVideoModelFor } from '../shared/browserSession';
+import { recoverVideoJobAfterRestart } from '../shared/videoJobRecovery';
+import { VideoJobRecoveryStore, type PersistedVideoGenerationJob } from './videoJobRecoveryStore';
 
-const videoJobs = new Map<string, VideoGenerationJob>();
-const speechJobs = new Map<string, TextToSpeechJob>();
-const imageJobs = new Map<string, ImageGenerationJob>();
+const videoJobs = new Map<string, PersistedVideoGenerationJob>();
+type InternalSpeechGenerationJob = TextToSpeechJob & { outputFilePath?: string };
+type InternalImageGenerationJob = ImageGenerationJob & { outputFilePath?: string };
+const speechJobs = new Map<string, InternalSpeechGenerationJob>();
+const imageJobs = new Map<string, InternalImageGenerationJob>();
+let activeVideoJobRecoveryStore: VideoJobRecoveryStore | undefined;
 let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
 let activeVieNeuRuntime: VieNeuRuntimeController | undefined;
@@ -165,6 +170,83 @@ export function setAiJobManagerAssetSourceResolver(
   resolver?: ((projectId: string, assetId: string) => Promise<MotionAssetSource | null>) | undefined
 ): void {
   activeAssetSourceResolver = resolver;
+}
+
+function publicVideoJob(job: PersistedVideoGenerationJob): VideoGenerationJob {
+  const { outputFilePath: _privatePath, ...publicJob } = job;
+  return publicJob;
+}
+
+function publicSpeechJob(job: InternalSpeechGenerationJob): TextToSpeechJob {
+  const { outputFilePath: _privatePath, ...publicJob } = job;
+  return publicJob;
+}
+
+function publicImageJob(job: InternalImageGenerationJob): ImageGenerationJob {
+  const { outputFilePath: _privatePath, ...publicJob } = job;
+  return publicJob;
+}
+
+async function persistVideoJobs(): Promise<void> {
+  await activeVideoJobRecoveryStore?.replace([...videoJobs.values()]);
+}
+
+async function persistVideoJobsBestEffort(jobId: string): Promise<void> {
+  try {
+    await persistVideoJobs();
+  } catch {
+    logVideoJob(jobId, 'recovery.persist.failed', {}, 'error');
+  }
+}
+
+/**
+ * Restores the local journal before IPC becomes reachable. Active work is not
+ * replayed: a remote provider may already have charged and completed it.
+ */
+export async function initializeVideoJobRecovery(
+  store: VideoJobRecoveryStore,
+  options: { readonly videoDirectory?: string; readonly now?: () => Date } = {}
+): Promise<void> {
+  activeVideoJobRecoveryStore = store;
+  const recoveredAt = (options.now?.() ?? new Date()).toISOString();
+  const videoDir = options.videoDirectory ?? (await ensureAiDirectories()).videoDir;
+  videoJobs.clear();
+  for (const persisted of await store.load()) {
+    const publicRecovered = recoverVideoJobAfterRestart(publicVideoJob(persisted), recoveredAt);
+    let recovered: PersistedVideoGenerationJob = {
+      ...publicRecovered,
+      ...(persisted.status === 'queued' || persisted.status === 'running' || persisted.outputFilePath === undefined
+        ? {}
+        : { outputFilePath: persisted.outputFilePath })
+    };
+    if (recovered.status === 'completed') {
+      const source = recovered.outputFilePath === undefined
+        ? null
+        : await openCompletedPreviewSource(recovered.outputFilePath, videoDir, 'video/mp4');
+      if (source === null) {
+        const { outputFilePath: _missingPath, ...withoutPath } = recovered;
+        recovered = {
+          ...withoutPath,
+          status: 'failed',
+          error: 'The completed video output is no longer available in local storage.',
+          updatedAt: recoveredAt
+        };
+      } else {
+        await source.file.close();
+        recovered = { ...recovered, previewUrl: videoPreviewUrl(recovered.id) };
+      }
+    }
+    videoJobs.set(recovered.id, recovered);
+    if (persisted.status === 'queued' || persisted.status === 'running') {
+      logVideoJob(recovered.id, 'recovery.interrupted', { automaticResubmit: false });
+    }
+  }
+  await persistVideoJobs();
+}
+
+/** Test and shutdown seam; it does not delete the on-disk journal. */
+export function setAiJobManagerVideoRecoveryStore(store?: VideoJobRecoveryStore): void {
+  activeVideoJobRecoveryStore = store;
 }
 
 function getAiStorageDir(): string {
@@ -407,7 +489,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
 
   const now = new Date().toISOString();
 
-  const job: VideoGenerationJob = {
+  const job: PersistedVideoGenerationJob = {
     id,
     provider,
     mode,
@@ -428,6 +510,13 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
   };
 
   videoJobs.set(id, job);
+  try {
+    await persistVideoJobs();
+  } catch {
+    videoJobs.delete(id);
+    await settleSpend(reservationId, 'released');
+    throw new Error('The video job could not be recorded safely, so it was not submitted.');
+  }
   logVideoJob(id, 'request.queued', {
     modelId,
     operation,
@@ -443,6 +532,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       job.status = 'running';
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      await persistVideoJobs();
       logVideoJob(id, 'process.started');
 
       let apiKey = mode === 'api' ? request.apiKey?.trim() : undefined;
@@ -518,6 +608,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
 
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      await persistVideoJobsBestEffort(id);
       logVideoJob(id, 'request.completed', {
         elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
         providerJobId: cloudResult.providerJobId
@@ -531,6 +622,7 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       job.error = err instanceof Error ? err.message : 'Video generation failed';
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
+      await persistVideoJobsBestEffort(id);
       logVideoJob(id, 'request.failed', {
         elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
         error: job.error
@@ -538,11 +630,12 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
     }
   }, 1000);
 
-  return job;
+  return publicVideoJob(job);
 }
 
 export function getVideoGenerationJob(jobId: string): VideoGenerationJob | null {
-  return videoJobs.get(jobId) ?? null;
+  const job = videoJobs.get(jobId);
+  return job === undefined ? null : publicVideoJob(job);
 }
 
 export async function createImageGenerationJob(request: ImageGenerationRequest): Promise<ImageGenerationJob> {
@@ -565,7 +658,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
   const id = `image-job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const now = new Date().toISOString();
 
-  const job: ImageGenerationJob = {
+  const job: InternalImageGenerationJob = {
     id,
     provider,
     mode,
@@ -663,11 +756,12 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
     }
   }, 0);
 
-  return job;
+  return publicImageJob(job);
 }
 
 export function getImageGenerationJob(jobId: string): ImageGenerationJob | null {
-  return imageJobs.get(jobId) ?? null;
+  const job = imageJobs.get(jobId);
+  return job === undefined ? null : publicImageJob(job);
 }
 
 /**
@@ -714,7 +808,7 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
   const startedAt = Date.now();
   const now = new Date().toISOString();
 
-  const job: TextToSpeechJob = {
+  const job: InternalSpeechGenerationJob = {
     id,
     provider,
     mode: model.executionPath,
@@ -791,11 +885,12 @@ export async function createSpeechGenerationJob(request: TextToSpeechRequest): P
     }
   }, 1000);
 
-  return job;
+  return publicSpeechJob(job);
 }
 
 export function getSpeechGenerationJob(jobId: string): TextToSpeechJob | null {
-  return speechJobs.get(jobId) ?? null;
+  const job = speechJobs.get(jobId);
+  return job === undefined ? null : publicSpeechJob(job);
 }
 
 /**

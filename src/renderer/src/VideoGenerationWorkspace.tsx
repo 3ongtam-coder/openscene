@@ -29,6 +29,7 @@ import {
 
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ImageAspectRatio, ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
+import { reconcileVideoCandidateAfterRestart } from '../../shared/videoJobRecovery';
 import {
   DEFAULT_GOOGLE_FLOW_PREFERENCES,
   GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
@@ -198,6 +199,8 @@ export function VideoGenerationWorkspace({
   const pollTimers = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
   const activePollJobs = useRef<Set<string>>(new Set());
   const inFlightPollJobs = useRef<Set<string>>(new Set());
+  const recoveredCandidateIds = useRef<Set<string>>(new Set());
+  const recoveryGeneration = useRef(0);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const previousVideoModelId = useRef(videoModel.id);
@@ -264,6 +267,128 @@ export function VideoGenerationWorkspace({
     }
   };
 
+  const startPollingJob = (job: VideoGenerationJob, targetWriterShotId: string, pollingTimeout: number): void => {
+    if (activePollJobs.current.has(job.id)) return;
+    const pollingDeadline = Date.now() + pollingTimeout;
+    const stopPolling = (intervalId: ReturnType<typeof setInterval>): void => {
+      clearInterval(intervalId);
+      pollTimers.current.delete(intervalId);
+      activePollJobs.current.delete(job.id);
+      inFlightPollJobs.current.delete(job.id);
+    };
+    const intervalId = setInterval(async () => {
+      if (!activePollJobs.current.has(job.id)) return;
+      if (Date.now() > pollingDeadline) {
+        stopPolling(intervalId);
+        setIsGenerating(activePollJobs.current.size > 0);
+        setStatusMsg({ text: `Stopped waiting after ${Math.round(pollingTimeout / 60_000)} minutes. Check the terminal log for this job before retrying.`, tone: 'warning' });
+        return;
+      }
+      if (inFlightPollJobs.current.has(job.id)) return;
+      inFlightPollJobs.current.add(job.id);
+      try {
+        const pollRes = await window.videoTool.aiGetVideoJob(job.id);
+        if (!activePollJobs.current.has(job.id)) return;
+        if (!pollRes.ok || !pollRes.value) {
+          stopPolling(intervalId);
+          setIsGenerating(activePollJobs.current.size > 0);
+          setStatusMsg({ text: !pollRes.ok ? pollRes.error.message : 'The video job could not be read.', tone: 'danger' });
+          return;
+        }
+        const updatedJob = pollRes.value;
+        setJobs((current) => current.some((entry) => entry.id === updatedJob.id)
+          ? current.map((entry) => entry.id === updatedJob.id ? updatedJob : entry)
+          : [updatedJob, ...current]);
+
+        if (updatedJob.status === 'completed') {
+          stopPolling(intervalId);
+          setIsGenerating(activePollJobs.current.size > 0);
+          if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+            status: 'completed', updatedAt: updatedJob.updatedAt
+          }));
+          setStatusMsg({ text: 'Video generation completed! Asset ready.', tone: 'success' });
+        } else if (updatedJob.status === 'failed') {
+          stopPolling(intervalId);
+          setIsGenerating(activePollJobs.current.size > 0);
+          if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+            status: 'failed', error: updatedJob.error ?? 'Unknown error', updatedAt: updatedJob.updatedAt
+          }));
+          setStatusMsg({ text: `Generation failed: ${updatedJob.error ?? 'Unknown error'}`, tone: 'danger' });
+        }
+      } catch (error) {
+        stopPolling(intervalId);
+        setIsGenerating(activePollJobs.current.size > 0);
+        setStatusMsg({ text: error instanceof Error ? error.message : 'Video job polling failed.', tone: 'danger' });
+      } finally {
+        inFlightPollJobs.current.delete(job.id);
+      }
+    }, 1000);
+    pollTimers.current.add(intervalId);
+    activePollJobs.current.add(job.id);
+    setIsGenerating(true);
+  };
+
+  useEffect(() => {
+    recoveredCandidateIds.current.clear();
+    recoveryGeneration.current += 1;
+  }, [projectId]);
+
+  useEffect(() => {
+    const recoverable = (writerDocument?.generations ?? []).filter((candidate) =>
+      (candidate.status === 'queued' || candidate.status === 'running') &&
+      !recoveredCandidateIds.current.has(candidate.id)
+    );
+    if (recoverable.length === 0) return;
+    const runGeneration = recoveryGeneration.current;
+    for (const candidate of recoverable) recoveredCandidateIds.current.add(candidate.id);
+    void (async () => {
+      for (const candidate of recoverable) {
+        const response = await window.videoTool.aiGetVideoJob(candidate.id);
+        if (recoveryGeneration.current !== runGeneration) return;
+        if (!response.ok && response.error.code !== 'JOB_NOT_FOUND') {
+          recoveredCandidateIds.current.delete(candidate.id);
+          setStatusMsg({ tone: 'danger', text: response.error.message });
+          continue;
+        }
+        const recoveredJob = response.ok ? response.value : null;
+        if (recoveredJob !== null) {
+          setJobs((current) => current.some((job) => job.id === recoveredJob.id)
+            ? current.map((job) => job.id === recoveredJob.id ? recoveredJob : job)
+            : [recoveredJob, ...current]);
+          if (recoveredJob.status === 'queued' || recoveredJob.status === 'running') {
+            startPollingJob(
+              recoveredJob,
+              candidate.shotId,
+              recoveredJob.operation === 'motion_control' ? MOTION_JOB_UI_TIMEOUT_MS : VIDEO_JOB_UI_TIMEOUT_MS
+            );
+          }
+        }
+        const saved = await persistCandidateChange((document) => reconcileVideoCandidateAfterRestart(
+          document,
+          candidate.id,
+          recoveredJob,
+          new Date().toISOString()
+        ));
+        if (recoveryGeneration.current !== runGeneration) return;
+        if (!saved) {
+          recoveredCandidateIds.current.delete(candidate.id);
+          setStatusMsg({ tone: 'danger', text: 'Interrupted candidate recovery could not be saved. Reopen the project to retry recovery.' });
+          continue;
+        }
+        if (saved && (recoveredJob === null || recoveredJob.status === 'failed')) {
+          setStatusMsg({
+            tone: 'warning',
+            text: recoveredJob?.error ?? 'An interrupted candidate was recovered without resubmitting it to the provider.'
+          });
+        } else if (saved && recoveredJob?.status === 'completed') {
+          setStatusMsg({ tone: 'success', text: 'A completed video job was recovered from local storage and is ready to import.' });
+        }
+      }
+    })().catch(() => {
+      if (recoveryGeneration.current === runGeneration) setStatusMsg({ tone: 'danger', text: 'Interrupted candidate recovery could not update the project.' });
+    });
+  }, [projectId, writerDocument]);
+
   const refreshMotionWorker = async (): Promise<void> => {
     setCheckingMotionWorker(true);
     try {
@@ -299,6 +424,7 @@ export function VideoGenerationWorkspace({
   }, [selectedOperation, videoModel.id]);
 
   useEffect(() => () => {
+    recoveryGeneration.current += 1;
     for (const timer of pollTimers.current) clearInterval(timer);
     pollTimers.current.clear();
     activePollJobs.current.clear();
@@ -454,64 +580,11 @@ export function VideoGenerationWorkspace({
         }
         setStatusMsg({ text: `Job started (${job.id}). Synthesizing video frames...`, tone: 'neutral' });
 
-        // Poll for job completion
-        const pollingTimeout = inputs.operation === 'motion_control' ? MOTION_JOB_UI_TIMEOUT_MS : VIDEO_JOB_UI_TIMEOUT_MS;
-        const pollingDeadline = Date.now() + pollingTimeout;
-        const stopPolling = (intervalId: ReturnType<typeof setInterval>): void => {
-          clearInterval(intervalId);
-          pollTimers.current.delete(intervalId);
-          activePollJobs.current.delete(job.id);
-          inFlightPollJobs.current.delete(job.id);
-        };
-        const intervalId = setInterval(async () => {
-          if (!activePollJobs.current.has(job.id)) return;
-          // Keep checking the deadline even while an earlier IPC request is
-          // unresolved, then ignore that request if it eventually comes back.
-          if (Date.now() > pollingDeadline) {
-            stopPolling(intervalId);
-            setIsGenerating(false);
-            setStatusMsg({ text: `Stopped waiting after ${Math.round(pollingTimeout / 60_000)} minutes. Check the terminal log for this job before retrying.`, tone: 'warning' });
-            return;
-          }
-          if (inFlightPollJobs.current.has(job.id)) return;
-          inFlightPollJobs.current.add(job.id);
-          try {
-            const pollRes = await window.videoTool.aiGetVideoJob(job.id);
-            if (!activePollJobs.current.has(job.id)) return;
-            if (!pollRes.ok || !pollRes.value) {
-              stopPolling(intervalId);
-              setIsGenerating(false);
-              setStatusMsg({ text: !pollRes.ok ? pollRes.error.message : 'The video job could not be read.', tone: 'danger' });
-              return;
-            }
-            const updatedJob = pollRes.value as VideoGenerationJob;
-            setJobs((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
-
-            if (updatedJob.status === 'completed') {
-              stopPolling(intervalId);
-              setIsGenerating(false);
-              if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
-                status: 'completed', updatedAt: updatedJob.updatedAt
-              }));
-              setStatusMsg({ text: `Video generation completed! Asset ready.`, tone: 'success' });
-            } else if (updatedJob.status === 'failed') {
-              stopPolling(intervalId);
-              setIsGenerating(false);
-              if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
-                status: 'failed', error: updatedJob.error ?? 'Unknown error', updatedAt: updatedJob.updatedAt
-              }));
-              setStatusMsg({ text: `Generation failed: ${updatedJob.error ?? 'Unknown error'}`, tone: 'danger' });
-            }
-          } catch (error) {
-            stopPolling(intervalId);
-            setIsGenerating(false);
-            setStatusMsg({ text: error instanceof Error ? error.message : 'Video job polling failed.', tone: 'danger' });
-          } finally {
-            inFlightPollJobs.current.delete(job.id);
-          }
-        }, 1000);
-        pollTimers.current.add(intervalId);
-        activePollJobs.current.add(job.id);
+        startPollingJob(
+          job,
+          targetWriterShotId,
+          inputs.operation === 'motion_control' ? MOTION_JOB_UI_TIMEOUT_MS : VIDEO_JOB_UI_TIMEOUT_MS
+        );
       } else {
         setIsGenerating(false);
         setStatusMsg({ text: !response.ok ? response.error.message : 'Failed to start generation job.', tone: 'danger' });
@@ -579,7 +652,7 @@ export function VideoGenerationWorkspace({
   };
 
   const handleImportToProject = async (job: VideoGenerationJob): Promise<void> => {
-    if (!job.outputFilePath) return;
+    if (job.status !== 'completed') return;
     try {
       const status = await importAiResult(job.id);
       setStatusMsg(status);
@@ -1028,7 +1101,7 @@ export function VideoGenerationWorkspace({
                       Generated video preview is unavailable in this renderer.
                     </video>
                   )}
-                  {job.status === 'completed' && job.outputFilePath !== undefined && (
+                  {job.status === 'completed' && (
                     <Button variant="primary" disabled={(writerDocument?.generations.find((entry) => entry.id === job.id)?.outputAssetIds.length ?? 0) > 0} onClick={() => void handleImportToProject(job)}>
                       {(writerDocument?.generations.find((entry) => entry.id === job.id)?.outputAssetIds.length ?? 0) > 0 ? 'Imported' : 'Import to project'}
                     </Button>
@@ -1094,6 +1167,7 @@ export function VideoGenerationWorkspace({
                     {outputNames.length === 0
                       ? <p className="studio-reference__empty">Not imported. Import the completed job above before approval.</p>
                       : <p className="studio-reference__empty">Project asset: {outputNames.join(', ')}</p>}
+                    {candidate.status === 'failed' && candidate.error !== undefined && <p className="studio-job__error">{candidate.error}</p>}
                     <div className="studio-candidate__checklist" aria-label="Human continuity review">
                       {CONTINUITY_REVIEW_FIELDS.map((field) => (
                         <div className="studio-candidate__check" key={field}>

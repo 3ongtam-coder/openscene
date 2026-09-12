@@ -31,7 +31,8 @@ import { fail, ok } from './ipcResponses';
 import { IPC_CHANNELS } from '../shared/ipc';
 import { installApplicationMenu } from './applicationMenu';
 
-import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerBrowserImageGenerator, setAiJobManagerBrowserVideoGenerator, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
+import { createImageGenerationJob, createSpeechGenerationJob, createVideoGenerationJob, getCompletedAiSource, getGeneratedImageAsReference, getImageGenerationJob, getSpeechGenerationJob, getVideoGenerationJob, initializeVideoJobRecovery, listSpeechVoices, openCompletedSpeechPreviewSource, openCompletedVideoPreviewSource, setAiJobManagerAssetSourceResolver, setAiJobManagerBrowserImageGenerator, setAiJobManagerBrowserVideoGenerator, setAiJobManagerCredentialStore, setAiJobManagerSpendStore, setAiJobManagerVieNeuRuntime } from './aiJobManager';
+import { VideoJobRecoveryStore } from './videoJobRecoveryStore';
 import { getComfyUiMotionWorkerStatus } from './comfyUiMotionAdapter';
 import { CredentialStore } from './credentialStore';
 import { LlmExecutionAdapter } from './llmAdapter';
@@ -110,6 +111,7 @@ setAiJobManagerVieNeuRuntime(managedVieNeuRuntime);
 */
 const generationSpendStore = new GenerationSpendStore(join(app.getPath('userData'), 'generation-spend.json'));
 setAiJobManagerSpendStore(generationSpendStore);
+const videoJobRecoveryStore = new VideoJobRecoveryStore(join(app.getPath('userData'), 'video-generation-jobs.json'));
 const timelineIpcService = new TimelineIpcService({
   projects: projectStore,
   assets: assetLibraryStore,
@@ -444,16 +446,17 @@ async function installIpcHandlers(): Promise<void> {
   // learns about stills: the user picks the destination, main writes the bytes.
   ipcMain.handle(IPC_CHANNELS.aiSaveImageResult, async (_event, jobId: string) => {
     const job = getImageGenerationJob(jobId);
-    if (job === null || job.status !== 'completed' || job.outputFilePath === undefined) {
+    const source = getCompletedAiSource(jobId);
+    if (job === null || job.status !== 'completed' || source?.kind !== 'image') {
       return fail('JOB_NOT_FOUND', 'No completed image is available for that job.');
     }
-    const suggested = `AI_Image_${job.id.slice(-6)}${extname(job.outputFilePath)}`;
+    const suggested = `AI_Image_${job.id.slice(-6)}${extname(source.sourcePath)}`;
     const choice = await dialog.showSaveDialog({ title: 'Save generated image', defaultPath: suggested });
     if (choice.canceled || choice.filePath === undefined || choice.filePath.length === 0) {
       return ok({ saved: false });
     }
     try {
-      await copyFile(job.outputFilePath, choice.filePath);
+      await copyFile(source.sourcePath, choice.filePath);
       return ok({ saved: true });
     } catch (err) {
       return fail('FILE_WRITE_FAILED', err instanceof Error ? err.message : 'The image could not be saved.');
@@ -584,6 +587,16 @@ app.setAboutPanelOptions({
 });
 
 app.whenReady().then(async () => {
+  // Recovery completes before renderer IPC exists. An interrupted paid request
+  // is surfaced as interrupted and is never submitted again on startup.
+  try {
+    await initializeVideoJobRecovery(videoJobRecoveryStore);
+  } catch {
+    // Editing must still open when the recovery journal is unavailable. New
+    // video jobs remain fail-closed because their queued state must be written
+    // successfully before any provider request starts.
+    console.error('[OpenScene][Video Recovery] startup.failed');
+  }
   installApplicationMenu(() => {
     // The user asked, so an up-to-date or failed answer is reported here where
     // the startup path stays quiet about both.

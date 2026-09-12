@@ -30,15 +30,28 @@ describe('reviewed video candidate parity', () => {
   });
 
   it('previews desktop candidates through a path-free protected media URL', async () => {
-    const [studio, manager, protocol] = await Promise.all([
+    const [studio, manager, protocol, mobile, main, seams, mcp] = await Promise.all([
       readRepo('src/renderer/src/VideoGenerationWorkspace.tsx'),
       readRepo('src/main/aiJobManager.ts'),
-      readRepo('src/main/timelineAssetResponse.ts')
+      readRepo('src/main/timelineAssetResponse.ts'),
+      readRepo('mobile/src/screens/PlanScreen.tsx'),
+      readRepo('src/main/index.ts'),
+      readRepo('src/shared/providerSeams.ts'),
+      readRepo('src/main/openVideoMcpServer.ts')
     ]);
     expect(studio).toContain('src={job.previewUrl}');
     expect(manager).toContain('job.previewUrl = videoPreviewUrl(job.id)');
+    expect(manager).toContain('const { outputFilePath: _privatePath, ...publicJob } = job');
     expect(protocol).toContain("url.hostname === 'video-preview'");
     expect(studio).not.toContain('src={job.outputFilePath}');
+    expect(studio).not.toContain('job.outputFilePath');
+    expect(studio).toContain('reconcileVideoCandidateAfterRestart');
+    expect(mobile).toContain('it is never submitted again automatically');
+    expect(main.indexOf('await initializeVideoJobRecovery(videoJobRecoveryStore)')).toBeLessThan(main.indexOf('await installIpcHandlers()'));
+    expect(main).toContain("console.error('[OpenScene][Video Recovery] startup.failed')");
+    expect(main.indexOf('try {\n    await initializeVideoJobRecovery(videoJobRecoveryStore)')).toBeGreaterThan(-1);
+    expect(seams).not.toContain('outputFilePath?: string');
+    expect(mcp).not.toContain('outputFilePath: job.outputFilePath');
   });
 
   it('chains an approved desktop tail frame while mobile retains native sequential chaining', async () => {

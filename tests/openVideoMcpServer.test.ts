@@ -479,6 +479,7 @@ describe('OpenScene TypeMCP Server and Tool declarations', () => {
     });
     expect(statusResult.success).toBe(true);
     expect(statusResult.status).toBeDefined();
+    expect(statusResult).not.toHaveProperty('outputFilePath');
 
     // 3. Register asset & add to real project timeline
     const project = await projectStore.create({ name: 'Copilot Workflow Project' });
