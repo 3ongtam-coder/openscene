@@ -11,6 +11,7 @@ import {
   getBrowserSessionProviderPolicy,
   isBrowserSessionCookieDomainAllowed,
   isBrowserSessionNavigationAllowed,
+  normalizeGoogleFlowProjectName,
   type BrowserSessionProviderId,
   type BrowserSessionStatus
 } from '../shared/browserSession';
@@ -30,6 +31,7 @@ export type GoogleFlowImageGenerationInput = {
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
   readonly showBrowserWindow?: boolean;
+  readonly projectName?: string;
 };
 
 export type BrowserSessionGeneratedImage = {
@@ -256,6 +258,7 @@ export class BrowserSessionService {
       console.info(`[OpenScene][Google Flow Image][${requestId}] ${event}${suffix}`);
     };
     const prompt = buildGoogleFlowImagePrompt(input);
+    const projectName = normalizeGoogleFlowProjectName(input.projectName);
     const showBrowserWindow = input.showBrowserWindow !== false;
     const temporaryPath = join(this.temporaryDirectory, `openscene-flow-image-${requestId}.download`);
     let isolatedSession: Electron.Session | undefined;
@@ -272,7 +275,9 @@ export class BrowserSessionService {
       promptCharacters: prompt.length,
       aspectRatio: input.aspectRatio,
       timeoutSeconds: GOOGLE_FLOW_IMAGE_TIMEOUT_MS / 1_000,
-      visible: showBrowserWindow
+      visible: showBrowserWindow,
+      projectName: projectName ?? '',
+      projectNameCharacters: projectName?.length ?? 0
     });
 
     try {
@@ -373,8 +378,12 @@ export class BrowserSessionService {
           prompt,
           model: googleFlowImageModelFor(input.modelId),
           aspectRatio: input.aspectRatio,
+          ...(projectName === undefined ? {} : { projectName }),
           timeoutMs: GOOGLE_FLOW_IMAGE_TIMEOUT_MS,
-          onProgress: (stage, elapsedMs) => log(`browser.${stage}`, { elapsedSeconds: Math.round(elapsedMs / 1_000) })
+          onProgress: (stage, elapsedMs, details = {}) => log(`browser.${stage}`, {
+            elapsedSeconds: Math.round(elapsedMs / 1_000),
+            ...details
+          })
         }),
         windowClosed
       ]);

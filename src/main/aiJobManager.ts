@@ -59,6 +59,7 @@ type BrowserImageGenerator = (input: {
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
   readonly showBrowserWindow?: boolean;
+  readonly projectName?: string;
 }) => Promise<GeneratedImage>;
 let activeBrowserImageGenerator: BrowserImageGenerator | undefined;
 type MotionAssetSource = OpenedAssetPlaybackSource & { readonly durationMs?: number };
@@ -545,6 +546,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
           prompt: request.prompt,
           aspectRatio: request.aspectRatio,
           showBrowserWindow: request.showBrowserWindow !== false,
+          ...(request.flowProjectName === undefined ? {} : { projectName: request.flowProjectName }),
           ...(request.stylePreset === undefined ? {} : { stylePreset: request.stylePreset }),
           ...(request.negativePrompt === undefined ? {} : { negativePrompt: request.negativePrompt })
         });

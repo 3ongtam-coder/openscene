@@ -156,6 +156,8 @@ export interface ImageGenerationRequest {
   mode?: ProviderExecutionMode;
   /** Desktop-only observability control for signed-in Google Flow jobs. */
   showBrowserWindow?: boolean;
+  /** Desktop-only project/folder label mirrored into Google Flow. */
+  flowProjectName?: string;
   provider?: ImageGenerationProviderId;
   modelId?: string;
   apiKey?: string;
