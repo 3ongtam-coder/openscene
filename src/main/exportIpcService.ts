@@ -6,6 +6,7 @@ import { FILTER_LIST_ARGS, escapeFontPath, fontCandidates, supportsDrawtext } fr
 import type { ApiResponse } from '../shared/models';
 import { EXPORT_DEFAULTS, type LocalExportJob, type LocalFfmpegRuntimeStatus, type StartExportJobInput } from '../shared/exportTypes';
 import { createSubtitleSidecar, DEFAULT_SUBTITLE_DELIVERY, timelineForSubtitleDelivery, type SubtitleSidecar } from '../shared/subtitleDelivery';
+import { resolvedTitleStyle } from '../shared/captionStyle';
 import { parseExportJobActionInput, parseStartExportJobInput } from '../shared/exportValidators';
 import type { LocalProjectSnapshot } from '../shared/timelineTypes';
 import type { OpenedAssetPlaybackSource } from './assetLibraryStore';
@@ -238,7 +239,7 @@ export class ExportIpcService {
    * font where one is expected. Saying which of the two failed is the difference
    * between a fixable message and a mysterious export.
    */
-  private async titleFont(executablePath: string): Promise<string> {
+  private async titleFont(executablePath: string, weight: 'regular' | 'bold' = 'regular'): Promise<string> {
     const filters = await new Promise<string>((resolve) => {
       let listing = '';
       const probe = spawn(executablePath, [...FILTER_LIST_ARGS]);
@@ -253,7 +254,7 @@ export class ExportIpcService {
         'This FFmpeg build cannot draw text — it was compiled without libfreetype, so titles cannot be rendered.'
       );
     }
-    for (const candidate of fontCandidates(process.platform)) {
+    for (const candidate of fontCandidates(process.platform, weight)) {
       try {
         await access(candidate);
         return escapeFontPath(candidate);
@@ -261,7 +262,7 @@ export class ExportIpcService {
         // Try the next one; a machine without this face is ordinary.
       }
     }
-    throw new ExportAssetStagingError('No font could be found on this machine to draw titles with.');
+    throw new ExportAssetStagingError(`No ${weight} system font could be found on this machine to draw titles with.`);
   }
 
   private async prepareExport(input: PrepareExportInput): Promise<PreparedExport> {
@@ -272,7 +273,9 @@ export class ExportIpcService {
     try {
       const delivery = input.request.subtitleDelivery ?? DEFAULT_SUBTITLE_DELIVERY;
       const exportTimeline = timelineForSubtitleDelivery(input.project.timeline, delivery);
-      const sidecar = delivery.sidecarFormat === 'none' ? undefined : createSubtitleSidecar(input.project.timeline, delivery.sidecarFormat);
+      const sidecar = delivery.sidecarFormat === 'none'
+        ? undefined
+        : createSubtitleSidecar(input.project.timeline, delivery.sidecarFormat, dimensions);
       staged = await stageExportAssets({
         assets: this.dependencies.assets,
         project: input.project,
@@ -299,7 +302,12 @@ export class ExportIpcService {
         // Only looked for when there is something to draw: an export with no
         // titles must not fail because the machine has an unusual font layout.
         ...((exportTimeline.titles ?? []).length > 0
-          ? { titleFontPath: await this.titleFont(input.executablePath) }
+          ? {
+              titleFontPath: await this.titleFont(input.executablePath),
+              ...((exportTimeline.titles ?? []).some((title) => resolvedTitleStyle(title).fontWeight === 'bold')
+                ? { titleBoldFontPath: await this.titleFont(input.executablePath, 'bold') }
+                : {})
+            }
           : {}),
         outputPath,
         ...dimensions,
