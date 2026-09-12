@@ -175,10 +175,10 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
     // discover and redirect to the current sign-in flow.
     loginUrl: 'https://accounts.x.ai/sign-in?redirect=grok-com',
     // Keep these exact. xAI currently hands the account challenge through
-    // auth.grok.com and its isolated auth.grokusercontent.com renderer before
-    // returning to Grok. Omitting an authentication origin leaves the submit
-    // button spinning while the main-frame navigation guard cancels the
-    // callback.
+    // auth.grok.com, its isolated auth.grokusercontent.com renderer, and the
+    // shared auth.grokipedia.com cookie setter before returning to Grok.
+    // Omitting an authentication origin leaves the submit button spinning
+    // while the main-frame navigation guard cancels the callback.
     allowedNavigationOrigins: [
       'https://grok.com',
       'https://x.com',
@@ -186,7 +186,8 @@ const POLICIES: Readonly<Record<BrowserSessionProviderId, BrowserSessionProvider
       'https://accounts.x.ai',
       'https://auth.x.ai',
       'https://auth.grok.com',
-      'https://auth.grokusercontent.com'
+      'https://auth.grokusercontent.com',
+      'https://auth.grokipedia.com'
     ]
   }
 };

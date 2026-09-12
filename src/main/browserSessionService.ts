@@ -45,6 +45,7 @@ const GROK_DIAGNOSTIC_REQUEST_FILTER: WebRequestFilter = {
     'https://auth.x.ai/*',
     'https://auth.grok.com/*',
     'https://auth.grokusercontent.com/*',
+    'https://auth.grokipedia.com/*',
     'https://api.x.ai/*',
     'https://challenges.cloudflare.com/*'
   ]
