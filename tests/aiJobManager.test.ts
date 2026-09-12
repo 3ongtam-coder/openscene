@@ -139,6 +139,7 @@ describe('AI Job Manager and cloud provider seams', () => {
       expect(job).toMatchObject({ mode: 'browser_session', provider: 'google_nano_banana', status: 'queued' });
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(generate).toHaveBeenCalledWith({
+        modelId: 'gemini-3.1-flash-image',
         prompt: 'A cinematic apple',
         aspectRatio: '16:9',
         stylePreset: 'Cinematic',

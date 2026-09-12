@@ -53,6 +53,7 @@ let activeCredentialStore: CredentialStore | undefined;
 let activeSpendStore: GenerationSpendStore | undefined;
 let activeVieNeuRuntime: VieNeuRuntimeController | undefined;
 type BrowserImageGenerator = (input: {
+  readonly modelId: string;
   readonly prompt: string;
   readonly aspectRatio: string;
   readonly stylePreset?: string;
@@ -539,6 +540,7 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
         }
         logImageJob(id, 'browser.request.started');
         image = await activeBrowserImageGenerator({
+          modelId: model.id,
           prompt: request.prompt,
           aspectRatio: request.aspectRatio,
           ...(request.stylePreset === undefined ? {} : { stylePreset: request.stylePreset }),

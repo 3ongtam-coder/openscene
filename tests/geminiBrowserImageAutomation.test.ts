@@ -25,15 +25,25 @@ describe('Gemini browser image download validation', () => {
     const input = { x: 10, y: 20, width: 100, height: 40 };
     const download = { x: 200, y: 300, width: 30, height: 30 };
     const executeJavaScript = vi.fn()
-      .mockResolvedValueOnce({ url: 'https://gemini.google.com/app', input, downloadButtons: [] })
-      .mockResolvedValueOnce({ url: 'https://gemini.google.com/app', input, downloadButtons: [download] });
+      .mockResolvedValueOnce({
+        url: 'https://gemini.google.com/app', input, downloadButtons: [],
+        modelPicker: { rectangle: { x: 0, y: 0, width: 20, height: 20 }, text: 'Flash' }, modelOptions: []
+      })
+      .mockResolvedValueOnce({
+        url: 'https://gemini.google.com/app', input, downloadButtons: [],
+        modelPicker: { rectangle: { x: 0, y: 0, width: 20, height: 20 }, text: 'Flash' }, modelOptions: []
+      })
+      .mockResolvedValueOnce({
+        url: 'https://gemini.google.com/app', input, downloadButtons: [download],
+        modelPicker: { rectangle: { x: 0, y: 0, width: 20, height: 20 }, text: 'Flash' }, modelOptions: []
+      });
     const insertText = vi.fn(async () => undefined);
     const sendInputEvent = vi.fn();
     const operation = automateGeminiImageGeneration({
       executeJavaScript,
       insertText,
       sendInputEvent
-    } as unknown as WebContents, { prompt: 'Create a fox', timeoutMs: 10_000 });
+    } as unknown as WebContents, { prompt: 'Create a fox', modelTier: 'flash', timeoutMs: 10_000 });
 
     await vi.runAllTimersAsync();
     await operation;
