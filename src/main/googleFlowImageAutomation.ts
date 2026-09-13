@@ -7,6 +7,8 @@ const POLL_INTERVAL_MS = 1_000;
 const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
 const FLOW_PROJECT_RENAME_TIMEOUT_MS = 5_000;
 const FLOW_PROJECT_DISCOVERY_GRACE_MS = 4_000;
+const FLOW_REFERENCE_UPLOAD_TIMEOUT_MS = 5_000;
+const FLOW_REFERENCE_UPLOAD_POLL_MS = 250;
 
 type RectangleWithText = {
   readonly rectangle: Rectangle;
@@ -38,7 +40,8 @@ export type GoogleFlowAutomationState = {
   readonly agentSettingsClose?: Rectangle;
   readonly agentToggle?: RectangleWithText;
   readonly configButton?: RectangleWithText;
-  readonly upload?: Rectangle;
+  readonly uploadLauncher?: Rectangle;
+  readonly uploadChoice?: Rectangle;
   readonly modelDropdown?: RectangleWithText;
   readonly tabs: readonly RectangleWithText[];
   readonly menuItems: readonly RectangleWithText[];
@@ -180,12 +183,22 @@ export function buildGoogleFlowStateProbeScript(): string {
     const buttons = visible('button');
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
-    const uploadEntry = buttons.find(({ element, rectangle }) => {
+    const uploadLauncherEntry = buttons.find(({ element, rectangle }) => {
       if (rectangle.y < viewH * 0.55) return false;
       const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
-      return text === '+' || /upload|add image|reference|attach|them anh|tai len/.test(text)
+      return text === '+'
+        || /add media|media menu|them noi dung nghe nhin|trinh don them noi dung nghe nhin/.test(text)
         || (rectangle.x < window.innerWidth * 0.3 && rectangle.width < 100 && rectangle.height < 100);
     });
+    // The current Flow composer opens a second menu after the + button. Its
+    // explicit Upload/Tai len action must be selected before Flow creates the
+    // file input used by the reference importer.
+    const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex="0"]')
+      .filter(({ element }) => {
+        const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+        return /^(upload|upload image|tai len)$/.test(text);
+      })
+      .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
 
     // Flow may open its Agent composer by default. Its Settings button and
     // media defaults resemble the classic generation configuration, but they
@@ -400,7 +413,8 @@ export function buildGoogleFlowStateProbeScript(): string {
       ...(agentSettingsCloseEntry ? { agentSettingsClose: agentSettingsCloseEntry.rectangle } : {}),
       ...(agentToggle ? { agentToggle } : {}),
       ...(configButton ? { configButton } : {}),
-      ...(uploadEntry ? { upload: uploadEntry.rectangle } : {}),
+      ...(uploadLauncherEntry ? { uploadLauncher: uploadLauncherEntry.rectangle } : {}),
+      ...(uploadChoiceEntry ? { uploadChoice: uploadChoiceEntry.rectangle } : {}),
       ...(modelDropdown ? { modelDropdown } : {}),
       tabs,
       menuItems,
@@ -765,7 +779,7 @@ function safeReferenceName(reference: ReferenceImageSelection, index: number): s
   return `${base || `reference-${index + 1}`}.${extension}`;
 }
 
-async function injectImageFile(webContents: WebContents, reference: ReferenceImageSelection, index: number): Promise<void> {
+async function injectImageFile(webContents: WebContents, reference: ReferenceImageSelection, index: number): Promise<boolean> {
   const injected = await webContents.executeJavaScript(`(() => {
     const input = [...document.querySelectorAll('input[type="file"]')]
       .find((candidate) => !candidate.disabled && (!candidate.accept || candidate.accept.includes('image')));
@@ -779,8 +793,8 @@ async function injectImageFile(webContents: WebContents, reference: ReferenceIma
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`, true) as boolean;
-  if (!injected) throw new Error('Google Flow opened its image picker, but no image upload control was available. Import the reference manually and retry.');
-  await delay(800);
+  if (injected) await delay(800);
+  return injected;
 }
 
 async function attachImageReferences(
@@ -788,13 +802,35 @@ async function attachImageReferences(
   references: readonly ReferenceImageSelection[]
 ): Promise<void> {
   for (let index = 0; index < references.length; index += 1) {
-    const state = await readState(webContents);
-    if (state.upload === undefined) {
+    let state = await readState(webContents);
+    if (state.uploadLauncher === undefined && state.uploadChoice === undefined) {
       throw new Error('Google Flow Image does not expose an upload control for the selected character reference.');
     }
-    clickAt(webContents, state.upload);
-    await delay(400);
-    await injectImageFile(webContents, references[index]!, index);
+
+    if (state.uploadChoice === undefined) {
+      clickAt(webContents, state.uploadLauncher!);
+    }
+
+    const deadline = Date.now() + FLOW_REFERENCE_UPLOAD_TIMEOUT_MS;
+    let uploadChoiceSelected = false;
+    let injected = false;
+    while (Date.now() < deadline) {
+      if (await injectImageFile(webContents, references[index]!, index)) {
+        injected = true;
+        break;
+      }
+
+      state = await readState(webContents);
+      if (!uploadChoiceSelected && state.uploadChoice !== undefined) {
+        clickAt(webContents, state.uploadChoice);
+        uploadChoiceSelected = true;
+      }
+      await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
+    }
+
+    if (!injected) {
+      throw new Error('Google Flow opened its image picker, but no image upload control was available after selecting Upload. Import the reference manually and retry.');
+    }
   }
 }
 
