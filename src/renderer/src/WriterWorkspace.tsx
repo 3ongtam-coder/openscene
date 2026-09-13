@@ -61,6 +61,13 @@ export function WriterWorkspace({ document, onSave }: {
   };
   const nextStage = WRITER_STAGES[WRITER_STAGES.indexOf(flow.stage) + 1];
   const approved = flow.artifact?.approved === true && !flow.dirty && !briefChanged;
+  const approvalBlockedReason = flow.busy
+    ? 'Writer is still working. Wait for the draft to finish.'
+    : briefChanged
+      ? 'The creative brief changed. Return to Develop idea and generate the revised concept before approving this stage.'
+      : approved
+        ? 'This stage is already approved. Continue to the next stage when ready.'
+        : undefined;
   return (
     <section className="ai-workspace writer-workspace" aria-labelledby="writer-workspace-title">
       <header className="ai-workspace__header">
@@ -132,10 +139,13 @@ export function WriterWorkspace({ document, onSave }: {
               <textarea className="writer-stage-content" disabled={flow.busy} value={flow.artifact.content} onChange={(e) => flow.edit({ content: e.target.value })} spellCheck={flow.stage !== 'prompts'} />
             </label>
             {flow.stage === 'prompts' && <p>The approved screenplay is preserved when saving. Edit the screenplay in step 2, not inside this technical JSON.</p>}
+            {approvalBlockedReason && <StatusCard tone={briefChanged ? 'warning' : 'neutral'}>{approvalBlockedReason}</StatusCard>}
             <div className="writer-preview__actions">
               {flow.dirty && <Button disabled={flow.busy} onClick={flow.discard}>Discard edits</Button>}
               <Button disabled={flow.busy || briefChanged} onClick={() => void flow.save(false)}>Save draft</Button>
-              <Button variant="primary" disabled={flow.busy || briefChanged || approved} onClick={() => void flow.save(true)}>Approve & save this stage</Button>
+              <Button variant="primary" title={approvalBlockedReason} aria-label={approvalBlockedReason ?? 'Approve and save this stage'} disabled={flow.busy || briefChanged || approved} onClick={() => void flow.save(true)}>
+                {approved ? 'Stage already approved' : 'Approve & save this stage'}
+              </Button>
             </div>
             {approved && nextStage && <Button variant="primary" disabled={flow.busy} onClick={() => { flow.chooseStage(nextStage); setNotes(''); }}>Continue to {WRITER_STAGE_LABELS[nextStage]}</Button>}
             {approved && flow.stage === 'prompts' && <Button variant="primary" disabled={flow.busy || flow.applied} onClick={() => void flow.apply()}>{flow.applied ? 'Production scenes saved' : 'Create production scenes (no video generation)'}</Button>}

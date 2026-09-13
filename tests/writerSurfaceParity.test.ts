@@ -16,6 +16,7 @@ describe('Writer surface parity', () => {
     expect(desktop).toContain('useWriterPipeline(document, onSave)');
     expect(desktop).toContain('customVideoStyle');
     expect(desktop).toContain('WRITER_VIDEO_STYLE_LABELS');
+    expect(desktop).toContain('approvalBlockedReason');
     expect(mobile).toContain("from '@openvideo/shared/writerWorkflow'");
     expect(mobile).toContain("from '@openvideo/shared/writerGeneration'");
     expect(mobile).toContain("isDomainModelAvailableOnRuntime(model, 'mobile')");
