@@ -1,5 +1,6 @@
 import type { AiProjectDocument, GenerationRecord, ReferenceAsset } from './aiProjectDomain';
 import type { ImageAspectRatio } from './providerSeams';
+import type { VideoContinuityControls } from './videoContinuitySettings';
 import { approvedWriterShots, pipelineBaseRequest } from './writerPipeline';
 import { writerVideoStyleDirection } from './writerWorkflow';
 import { DEFAULT_CLIP_EFFECTS, type TimelineDocument } from './timelineTypes';
@@ -112,30 +113,92 @@ export function productionVisualStyle(document: AiProjectDocument | null | undef
   };
 }
 
-function projectAssetIdsForCharacterReferences(
-  document: AiProjectDocument,
-  referenceIds: readonly string[]
-): readonly string[] {
-  const referenceById = new Map(document.referenceAssets.map((reference) => [reference.id, reference]));
-  return referenceIds.flatMap((referenceId) => {
-    const reference = referenceById.get(referenceId);
-    return reference?.role === 'character' ? [reference.assetId] : [];
-  });
-}
-
 export function activeStyleReference(document: AiProjectDocument): ReferenceAsset | undefined {
   return document.referenceAssets.find((reference) => reference.role === 'style');
 }
 
+function characterReferencesRoundRobin(
+  document: AiProjectDocument,
+  referenceGroups: readonly (readonly string[])[],
+  limit: number,
+  excludedAssetIds: readonly string[] = []
+): readonly ReferenceAsset[] {
+  const referenceById = new Map(document.referenceAssets.map((reference) => [reference.id, reference]));
+  const groups = referenceGroups.map((ids) => ids.flatMap((id) => {
+    const reference = referenceById.get(id);
+    return reference?.role === 'character' ? [reference] : [];
+  }));
+  const selected: ReferenceAsset[] = [];
+  const seenAssets = new Set(excludedAssetIds);
+  const maxDepth = Math.max(0, ...groups.map((group) => group.length));
+  for (let depth = 0; depth < maxDepth && selected.length < limit; depth += 1) {
+    for (const group of groups) {
+      const reference = group[depth];
+      if (reference === undefined || seenAssets.has(reference.assetId)) continue;
+      selected.push(reference);
+      seenAssets.add(reference.assetId);
+      if (selected.length === limit) break;
+    }
+  }
+  return selected;
+}
+
 function productionReferenceAssetIds(
   document: AiProjectDocument,
-  characterReferenceIds: readonly string[]
+  characterReferenceGroups: readonly (readonly string[])[]
 ): readonly string[] {
   const styleAssetId = activeStyleReference(document)?.assetId;
-  return [...new Set([
+  const remaining = styleAssetId === undefined ? 3 : 2;
+  return [
     ...(styleAssetId === undefined ? [] : [styleAssetId]),
-    ...projectAssetIdsForCharacterReferences(document, characterReferenceIds)
-  ])].slice(0, 3);
+    ...characterReferencesRoundRobin(
+      document,
+      characterReferenceGroups,
+      remaining,
+      styleAssetId === undefined ? [] : [styleAssetId]
+    ).map((reference) => reference.assetId)
+  ];
+}
+
+export type ProductionVideoReferencePlan =
+  | { readonly kind: 'storyboard'; readonly reference: ReferenceAsset }
+  | { readonly kind: 'characters'; readonly references: readonly ReferenceAsset[] }
+  | { readonly kind: 'text' }
+  | { readonly kind: 'blocked'; readonly reason: string };
+
+/** Chooses one honest provider input mode without silently dropping an active continuity source. */
+export function planProductionVideoReferences(document: AiProjectDocument, shotId: string, input: {
+  readonly controls: VideoContinuityControls;
+  readonly supportsImageToVideo: boolean;
+  readonly supportsReferenceToVideo: boolean;
+  readonly supportsTextToVideo: boolean;
+}): ProductionVideoReferencePlan {
+  const shot = document.shots.find((entry) => entry.id === shotId);
+  if (shot === undefined) return { kind: 'blocked', reason: 'Writer shot no longer exists.' };
+  const scene = document.scenes.find((entry) => entry.id === shot.sceneId);
+  if (scene === undefined) return { kind: 'blocked', reason: 'Writer scene no longer exists.' };
+  const referenceById = new Map(document.referenceAssets.map((reference) => [reference.id, reference]));
+  const storyboard = shot.referenceAssetIds.map((id) => referenceById.get(id))
+    .find((reference) => reference?.role === 'start_frame');
+  if (storyboard !== undefined) {
+    return input.supportsImageToVideo
+      ? { kind: 'storyboard', reference: storyboard }
+      : { kind: 'blocked', reason: 'Selected model cannot use the approved storyboard first frame.' };
+  }
+  if (input.controls.styleConsistency && activeStyleReference(document) !== undefined) {
+    return { kind: 'blocked', reason: 'Generate or attach this shot\'s storyboard first so the world/style reference is preserved in the video.' };
+  }
+  const characters = characterReferencesRoundRobin(document, scene.characterIds.map((characterId) =>
+    document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
+  ), 3);
+  if (input.controls.characterConsistency && characters.length > 0) {
+    return input.supportsReferenceToVideo
+      ? { kind: 'characters', references: characters }
+      : { kind: 'blocked', reason: 'Selected model cannot use the approved character references; choose a reference-video model or generate a storyboard first.' };
+  }
+  return input.supportsTextToVideo
+    ? { kind: 'text' }
+    : { kind: 'blocked', reason: 'Selected model has no usable production input mode.' };
 }
 
 export function assignStyleReference(document: AiProjectDocument, input: {
@@ -205,7 +268,7 @@ export function buildCharacterReferenceImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: productionReferenceAssetIds(document, character.referenceAssetIds)
+      referenceAssetIds: productionReferenceAssetIds(document, [character.referenceAssetIds])
     }
   };
 }
@@ -249,7 +312,7 @@ export function buildStoryboardImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: productionReferenceAssetIds(document, scene.characterIds.flatMap((characterId) =>
+      referenceAssetIds: productionReferenceAssetIds(document, scene.characterIds.map((characterId) =>
         document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
       ))
     }

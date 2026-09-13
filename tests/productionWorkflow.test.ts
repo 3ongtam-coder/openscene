@@ -18,6 +18,7 @@ import {
   clearStoryboardReference,
   clearStyleReference,
   missingProductionImageTargets,
+  planProductionVideoReferences,
   productionShotRows,
   removeCharacterReference
 } from '../src/shared/productionWorkflow';
@@ -126,6 +127,62 @@ describe('production storyboard workflow', () => {
     expect(activeStyleReference(replaced.document)?.assetId).toBe('style-two');
     const cleared = clearStyleReference(replaced.document);
     expect(cleared.ok && activeStyleReference(cleared.document)).toBeUndefined();
+  });
+
+  it('allocates limited storyboard slots across characters instead of letting the first character consume them', () => {
+    const base = project();
+    const firstCharacter = base.characters[0]!;
+    const firstScene = base.scenes[0]!;
+    const firstShot = base.shots[0]!;
+    const document = {
+      ...base,
+      characters: [
+        { ...firstCharacter, referenceAssetIds: ['ref-ari-a', 'ref-ari-b'] },
+        { id: 'character-bex', name: 'Bex', invariantDescription: 'Blue scarf', referenceAssetIds: ['ref-bex-a', 'ref-bex-b'] }
+      ],
+      scenes: base.scenes.map((scene) => scene.id === firstScene.id
+        ? { ...scene, characterIds: [firstCharacter.id, 'character-bex'] }
+        : scene),
+      referenceAssets: [
+        { id: 'ref-style', assetId: 'asset-style', role: 'style' as const, label: 'World style' },
+        { id: 'ref-ari-a', assetId: 'asset-ari-a', role: 'character' as const, label: 'Ari front' },
+        { id: 'ref-ari-b', assetId: 'asset-ari-b', role: 'character' as const, label: 'Ari side' },
+        { id: 'ref-bex-a', assetId: 'asset-bex-a', role: 'character' as const, label: 'Bex front' },
+        { id: 'ref-bex-b', assetId: 'asset-bex-b', role: 'character' as const, label: 'Bex side' }
+      ]
+    };
+    const brief = buildStoryboardImageBrief(document, firstShot.id);
+    expect(brief.ok && brief.brief.referenceAssetIds).toEqual(['asset-style', 'asset-ari-a', 'asset-bex-a']);
+  });
+
+  it('does not silently drop selected style or character references when planning production video', () => {
+    const base = project();
+    const character = base.characters[0]!;
+    const shot = base.shots[0]!;
+    const withCharacter = addCharacterReference(base, {
+      characterId: character.id, assetId: 'asset-character', referenceId: 'ref-character', label: 'Ari'
+    });
+    if (!withCharacter.ok) throw new Error(withCharacter.reason);
+    const withStyle = assignStyleReference(withCharacter.document, {
+      assetId: 'asset-style', referenceId: 'ref-style', label: 'World style'
+    });
+    if (!withStyle.ok) throw new Error(withStyle.reason);
+    const controls = { characterConsistency: true, styleConsistency: true, sceneConsistency: true, motionContinuity: false };
+    expect(planProductionVideoReferences(withStyle.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: true, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('storyboard first') });
+
+    const storyboard = assignStoryboardReference(withStyle.document, {
+      shotId: shot.id, assetId: 'asset-board', referenceId: 'ref-board', label: 'Storyboard'
+    });
+    if (!storyboard.ok) throw new Error(storyboard.reason);
+    expect(planProductionVideoReferences(storyboard.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: true, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'storyboard', reference: { id: 'ref-board' } });
+
+    expect(planProductionVideoReferences(withCharacter.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: false, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('cannot use the approved character references') });
   });
 
   it('carries the approved Writer visual style into every production image brief', () => {

@@ -815,15 +815,24 @@ async function attachImageReferences(
     let uploadChoiceSelected = false;
     let injected = false;
     while (Date.now() < deadline) {
-      if (await injectImageFile(webContents, references[index]!, index)) {
-        injected = true;
-        break;
-      }
-
       state = await readState(webContents);
       if (!uploadChoiceSelected && state.uploadChoice !== undefined) {
         clickAt(webContents, state.uploadChoice);
         uploadChoiceSelected = true;
+        await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
+        continue;
+      }
+
+      // Never reuse an input until this reference has opened its own upload
+      // action. Otherwise a persistent input from the previous reference can
+      // replace that image instead of appending the next one. Older Flow
+      // layouts create the input directly from the launcher, so they are still
+      // supported when no second-stage Upload choice appears.
+      if (uploadChoiceSelected || state.uploadChoice === undefined) {
+        if (await injectImageFile(webContents, references[index]!, index)) {
+          injected = true;
+          break;
+        }
       }
       await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
     }

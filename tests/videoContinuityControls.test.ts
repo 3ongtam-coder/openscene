@@ -127,7 +127,8 @@ describe('video continuity controls', () => {
     expect(source).toContain('Continuity controls');
     expect(source).toContain('role="switch"');
     expect(source).toContain('videoContinuityPreferencesStorageKey(projectId)');
-    expect(source).toContain('continuityControls: targetContinuityControls');
+    expect(source).toContain('continuityControls: effectiveContinuityControls');
+    expect(source).toContain('compiledContinuity.applied.includes(key)');
     expect(source).toContain('sourceCandidate?.continuityControls ?? jobContinuityControls[job.id]');
     expect(css).toContain('.studio-toggle-list');
     expect(css).toContain('@media (max-width: 760px)');
@@ -141,6 +142,7 @@ describe('video continuity controls', () => {
     expect(source).toContain('await waitForVideoTerminal(job.id)');
     expect(source).toContain('writerShotId: item.shotId');
     expect(source).toContain('referenceAssetIds: item.referenceAssetIds');
+    expect(source).toContain('planProductionVideoReferences(current, row.shotId');
     expect(source).toContain('continuityControls');
   });
 });

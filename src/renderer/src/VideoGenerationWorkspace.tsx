@@ -47,7 +47,13 @@ import { useProjectResultImport } from './ProjectResultImportContext';
 import { getVideoModelCapabilities, getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
 import { ProductionBoard } from './ProductionBoard';
-import { batchableProductionVideoShotIds, productionShotRows, PRODUCTION_BATCH_LIMIT, type ProductionImageTarget } from '../../shared/productionWorkflow';
+import {
+  batchableProductionVideoShotIds,
+  planProductionVideoReferences,
+  productionShotRows,
+  PRODUCTION_BATCH_LIMIT,
+  type ProductionImageTarget
+} from '../../shared/productionWorkflow';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
@@ -502,9 +508,13 @@ export function VideoGenerationWorkspace({
     const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
     const editablePrompt = overrides?.prompt ?? prompt;
     const targetContinuityControls = overrides?.continuityControls ?? continuityControls;
-    const promptText = targetWriterShotId !== '' && documentRef.current !== null
-      ? compileVideoContinuityPrompt(editablePrompt, documentRef.current, targetWriterShotId, targetContinuityControls).prompt
-      : editablePrompt;
+    const compiledContinuity = targetWriterShotId !== '' && documentRef.current !== null
+      ? compileVideoContinuityPrompt(editablePrompt, documentRef.current, targetWriterShotId, targetContinuityControls)
+      : null;
+    const promptText = compiledContinuity?.prompt ?? editablePrompt;
+    const effectiveContinuityControls = compiledContinuity === null
+      ? targetContinuityControls
+      : Object.fromEntries(VIDEO_CONTINUITY_CONTROL_KEYS.map((key) => [key, compiledContinuity.applied.includes(key)])) as VideoContinuityControls;
     if (promptText.trim().length === 0 && candidateOperation !== 'motion_control') {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
       return null;
@@ -583,7 +593,7 @@ export function VideoGenerationWorkspace({
         const job = response.value as VideoGenerationJob;
         setJobs((prev) => [job, ...prev]);
         setJobInputs((current) => ({ ...current, [job.id]: inputs }));
-        setJobContinuityControls((current) => ({ ...current, [job.id]: targetContinuityControls }));
+        setJobContinuityControls((current) => ({ ...current, [job.id]: effectiveContinuityControls }));
         if (targetWriterShotId !== '') {
           const recorded = await persistCandidateChange((document) => addGenerationCandidate(document, {
             id: job.id,
@@ -599,7 +609,7 @@ export function VideoGenerationWorkspace({
                 ? loadedReferenceAssetIds
                 : []
             ),
-            continuityControls: targetContinuityControls,
+            continuityControls: effectiveContinuityControls,
             ...(overrides?.parentGenerationId === undefined ? {} : { parentGenerationId: overrides.parentGenerationId })
           }));
           if (!recorded) {
@@ -843,15 +853,18 @@ export function VideoGenerationWorkspace({
       const nearestDurationFor = (operation: VideoOperation): number => durationOptionsForOperation(operation).reduce((best, candidate) =>
         Math.abs(candidate - writerShot.durationSeconds) < Math.abs(best - writerShot.durationSeconds) ? candidate : best
       );
-      const startReference = persistedShot.referenceAssetIds
-        .map((id) => current.referenceAssets.find((entry) => entry.id === id))
-        .find((entry) => entry?.role === 'start_frame');
-      if (startReference !== undefined) {
-        if (!isVideoOperationImplemented(videoModel.id, 'image_to_video')) {
-          skipped.push(`${row.label}: selected model cannot use its storyboard image.`);
-          continue;
-        }
-        const loaded = await window.videoTool.aiGetProjectImageReference({ projectId, assetId: startReference.assetId });
+      const referencePlan = planProductionVideoReferences(current, row.shotId, {
+        controls: continuityControls,
+        supportsImageToVideo: isVideoOperationImplemented(videoModel.id, 'image_to_video'),
+        supportsReferenceToVideo: isVideoOperationImplemented(videoModel.id, 'reference_to_video'),
+        supportsTextToVideo: isVideoOperationImplemented(videoModel.id, 'text_to_video')
+      });
+      if (referencePlan.kind === 'blocked') {
+        skipped.push(`${row.label}: ${referencePlan.reason}`);
+        continue;
+      }
+      if (referencePlan.kind === 'storyboard') {
+        const loaded = await window.videoTool.aiGetProjectImageReference({ projectId, assetId: referencePlan.reference.assetId });
         if (!loaded.ok) {
           skipped.push(`${row.label}: storyboard image could not be loaded.`);
           continue;
@@ -862,18 +875,12 @@ export function VideoGenerationWorkspace({
           prompt: writerShot.prompt,
           durationSeconds: nearestDurationFor('image_to_video'),
           inputs: { operation: 'image_to_video', referenceImage: loaded.value },
-          referenceAssetIds: [startReference.id]
+          referenceAssetIds: [referencePlan.reference.id]
         });
         continue;
       }
-      const scene = current.scenes.find((entry) => entry.id === persistedShot.sceneId);
-      const characterReferences = (scene?.characterIds ?? []).flatMap((characterId) =>
-        current.characters.find((entry) => entry.id === characterId)?.referenceAssetIds ?? []
-      ).map((id) => current.referenceAssets.find((entry) => entry.id === id))
-        .filter((entry): entry is NonNullable<typeof entry> => entry?.role === 'character')
-        .slice(0, 3);
-      if (continuityControls.characterConsistency && characterReferences.length > 0 && isVideoOperationImplemented(videoModel.id, 'reference_to_video')) {
-        const loaded = await Promise.all(characterReferences.map(async (reference) => ({
+      if (referencePlan.kind === 'characters') {
+        const loaded = await Promise.all(referencePlan.references.map(async (reference) => ({
           reference,
           response: await window.videoTool.aiGetProjectImageReference({ projectId, assetId: reference.assetId })
         })));
@@ -887,12 +894,8 @@ export function VideoGenerationWorkspace({
           prompt: writerShot.prompt,
           durationSeconds: nearestDurationFor('reference_to_video'),
           inputs: { operation: 'reference_to_video', referenceImages: loaded.flatMap((entry) => entry.response.ok ? [entry.response.value] : []) },
-          referenceAssetIds: characterReferences.map((entry) => entry.id)
+          referenceAssetIds: referencePlan.references.map((entry) => entry.id)
         });
-        continue;
-      }
-      if (!isVideoOperationImplemented(videoModel.id, 'text_to_video')) {
-        skipped.push(`${row.label}: selected model has no usable production input mode.`);
         continue;
       }
       items.push({

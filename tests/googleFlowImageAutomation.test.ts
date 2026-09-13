@@ -145,7 +145,7 @@ describe('Google Flow browser image automation', () => {
     });
   });
 
-  it('uploads an approved reference before filling the storyboard prompt', async () => {
+  it('uploads world style first and every character reference through a separate Flow menu cycle', async () => {
     vi.useFakeTimers();
     const input = { x: 10, y: 700, width: 300, height: 50 };
     const config = { x: 20, y: 800, width: 260, height: 40 };
@@ -173,14 +173,14 @@ describe('Google Flow browser image automation', () => {
     const states = [
       editorState, editorState, editorState, editorState,
       panelState, panelState, panelState, panelState,
-      editorState, uploadMenuState, editorState, { ...editorState, submit }, { ...editorState, submit, images: [oldImage, newImage] }
+      editorState, uploadMenuState, editorState,
+      editorState, uploadMenuState, editorState,
+      editorState, uploadMenuState, editorState,
+      editorState,
+      { ...editorState, submit }, { ...editorState, submit, images: [oldImage, newImage] }
     ];
-    let injectionAttempts = 0;
     const executeJavaScript = vi.fn().mockImplementation(async (script: string) => {
-      if (script.includes('input[type="file"]')) {
-        injectionAttempts += 1;
-        return injectionAttempts >= 2;
-      }
+      if (script.includes('input[type="file"]')) return true;
       return states.shift() ?? { ...editorState, submit, images: [oldImage, newImage] };
     });
     const insertText = vi.fn(async () => undefined);
@@ -191,18 +191,26 @@ describe('Google Flow browser image automation', () => {
       sendInputEvent
     } as unknown as WebContents, {
       prompt: 'Create a storyboard frame', model: 'nano-banana-2', aspectRatio: '16:9', timeoutMs: 10_000,
-      referenceImages: [{ displayName: 'thok.jpeg', mimeType: 'image/jpeg', base64: 'VEhPSw==' }]
+      referenceImages: [
+        { displayName: 'world-style.png', mimeType: 'image/png', base64: 'V09STEQ=' },
+        { displayName: 'thok.jpeg', mimeType: 'image/jpeg', base64: 'VEhPSw==' },
+        { displayName: 'buk.webp', mimeType: 'image/webp', base64: 'QlVL' }
+      ]
     });
 
     await vi.runAllTimersAsync();
     await expect(operation).resolves.toBe(newImage.src);
-    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('VEhPSw=='), true);
-    expect(sendInputEvent).toHaveBeenCalledWith({
-      type: 'mouseDown', x: 53, y: 828, button: 'left', clickCount: 1
-    });
-    expect(sendInputEvent).toHaveBeenCalledWith({
-      type: 'mouseDown', x: 105, y: 708, button: 'left', clickCount: 1
-    });
+    const uploadScripts = executeJavaScript.mock.calls
+      .map(([script]) => script as string)
+      .filter((script) => script.includes('input[type="file"]'));
+    expect(uploadScripts).toHaveLength(3);
+    expect(uploadScripts[0]).toContain('V09STEQ=');
+    expect(uploadScripts[1]).toContain('VEhPSw==');
+    expect(uploadScripts[2]).toContain('QlVL');
+    const mouseDownEvents = sendInputEvent.mock.calls.map(([event]) => event)
+      .filter((event) => event.type === 'mouseDown');
+    expect(mouseDownEvents.filter((event) => event.x === 53 && event.y === 828)).toHaveLength(3);
+    expect(mouseDownEvents.filter((event) => event.x === 105 && event.y === 708)).toHaveLength(3);
     expect(insertText).toHaveBeenCalledWith('Create a storyboard frame');
   });
 });

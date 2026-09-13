@@ -331,7 +331,7 @@ export const ImageGenerationWorkspace = forwardRef<ImageGenerationWorkspaceHandl
           <StatusCard tone="neutral">
             <strong>{productionHandoff.targetLabel}</strong><br />
             This is a reviewed production handoff. {productionHandoff.referenceAssetIds.length > 0
-              ? `${productionHandoff.referenceAssetIds.length} approved character reference image(s) will be uploaded to the image worker.`
+              ? `${productionHandoff.referenceAssetIds.length} approved production reference image(s) will be uploaded in the saved order (world/style first when assigned, then character identity).`
               : 'No approved image reference is attached to this target.'} Generate an image, inspect it, then explicitly attach it to return to the production board.
           </StatusCard>
         )}
