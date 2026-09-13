@@ -74,6 +74,8 @@ export type GoogleFlowImageGenerationInput = {
   readonly aspectRatio: string;
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
   readonly showBrowserWindow?: boolean;
   readonly projectName?: string;
 };
@@ -702,6 +704,8 @@ export class BrowserSessionService {
           prompt,
           model: googleFlowImageModelFor(input.modelId),
           aspectRatio: input.aspectRatio,
+          ...(input.referenceImages === undefined ? {} : { referenceImages: input.referenceImages }),
+          ...(input.referenceImage === undefined ? {} : { referenceImage: input.referenceImage }),
           ...(projectName === undefined ? {} : { projectName }),
           timeoutMs: GOOGLE_FLOW_IMAGE_TIMEOUT_MS,
           onProgress: (stage, elapsedMs, details = {}) => log(`browser.${stage}`, {

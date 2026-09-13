@@ -541,6 +541,27 @@ const VIDEO_STYLE_GUIDES: Record<WriterVideoStyle, string> = {
     'VIDEO STYLE - TRADITIONAL 2D CEL ANIMATION: use hand-drawn linework, expressive key poses, readable in-betweens, painted cel fills, deliberate limited animation where it strengthens the rhythm, and layered multiplane depth. Favor graphic silhouettes, drawn effects and practical-looking animation texture over photorealism or 3D CGI.'
 };
 
+/**
+ * Returns the approved visual direction in a form that can be reused by image
+ * and video provider boundaries. Keeping this beside the Writer registry
+ * prevents production tools from inventing a second, drifting style table.
+ */
+export function writerVideoStyleDirection(request: Pick<WriterRequest, 'videoStyle' | 'customVideoStyle'>): {
+  readonly label: string;
+  readonly direction: string;
+} | null {
+  const custom = request.customVideoStyle?.trim() ?? '';
+  const preset = request.videoStyle;
+  if (preset === undefined && custom.length === 0) return null;
+  return {
+    label: preset === undefined ? 'Custom Writer style' : WRITER_VIDEO_STYLE_LABELS[preset],
+    direction: [
+      preset === undefined ? '' : VIDEO_STYLE_GUIDES[preset],
+      custom.length === 0 ? '' : `CUSTOM VIDEO STYLE DIRECTION: ${custom}`
+    ].filter(Boolean).join(' ')
+  };
+}
+
 /** Generative shot planning is approximate; allow a small total-duration drift. */
 export const WRITER_DURATION_TOLERANCE_SECONDS = 10;
 

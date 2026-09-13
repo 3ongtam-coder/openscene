@@ -6602,6 +6602,15 @@ button {
   gap: var(--space-3);
 }
 
+.production-board__actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.production-board__actions > span {
+  flex-basis: 100%;
+}
+
 .production-board__header h3,
 .production-board__characters h4 {
   margin: 0;

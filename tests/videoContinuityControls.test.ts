@@ -127,9 +127,22 @@ describe('video continuity controls', () => {
     expect(source).toContain('Continuity controls');
     expect(source).toContain('role="switch"');
     expect(source).toContain('videoContinuityPreferencesStorageKey(projectId)');
-    expect(source).toContain('continuityControls: targetContinuityControls');
+    expect(source).toContain('continuityControls: effectiveContinuityControls');
+    expect(source).toContain('compiledContinuity.applied.includes(key)');
     expect(source).toContain('sourceCandidate?.continuityControls ?? jobContinuityControls[job.id]');
     expect(css).toContain('.studio-toggle-list');
     expect(css).toContain('@media (max-width: 760px)');
+  });
+
+  it('queues production videos sequentially with cost confirmation and per-shot snapshots', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/VideoGenerationWorkspace.tsx'), 'utf8');
+    expect(source).toContain('batchableProductionVideoShotIds(current)');
+    expect(source).toContain('estimateVideoPlanCost(');
+    expect(source).toContain('const confirmed = window.confirm(');
+    expect(source).toContain('await waitForVideoTerminal(job.id)');
+    expect(source).toContain('writerShotId: item.shotId');
+    expect(source).toContain('referenceAssetIds: item.referenceAssetIds');
+    expect(source).toContain('planProductionVideoReferences(current, row.shotId');
+    expect(source).toContain('continuityControls');
   });
 });

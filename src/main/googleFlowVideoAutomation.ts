@@ -8,6 +8,10 @@ import type { ReferenceImageSelection } from '../shared/providerSeams';
 import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
 import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 import {
+  uploadReferencesThroughChromiumFileChooser,
+  type ChromiumFileChooserUpload
+} from './chromiumFileChooserUpload';
+import {
   buildGoogleFlowStateProbeScript,
   rememberGoogleFlowProjectUrl,
   renameGoogleFlowProject,
@@ -99,21 +103,23 @@ function choiceAny(state: AutomationState, expected: readonly string[]): Rectang
 
 async function selectChoice(webContents: WebContents, configButton: Rectangle, expected: string | readonly string[]): Promise<void> {
   const labels = typeof expected === 'string' ? [expected] : expected;
-  let state = await readState(webContents);
-  throwForAction(state);
-  let target = choiceAny(state, labels);
-  if (target === undefined) {
-    clickAt(webContents, configButton);
-    await delay(350);
-    state = await readState(webContents);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const state = await readState(webContents);
     throwForAction(state);
-    target = choiceAny(state, labels);
+    const target = choiceAny(state, labels);
+    if (target !== undefined) {
+      if (!target.selected) {
+        clickAt(webContents, target.rectangle);
+        await delay(450);
+      }
+      return;
+    }
+    if (attempt === 3 || attempt === 7) {
+      clickAt(webContents, state.configButton?.rectangle ?? configButton);
+    }
+    await delay(250);
   }
-  if (target === undefined) throw new Error(`Google Flow configuration did not expose ${labels[0]}.`);
-  if (!target.selected) {
-    clickAt(webContents, target.rectangle);
-    await delay(450);
-  }
+  throw new Error(`Google Flow configuration did not expose ${labels[0]} after waiting for the menu to load.`);
 }
 
 export function validateGoogleFlowVideoAutomationInput(input: Pick<GoogleFlowVideoAutomationInput, 'model' | 'operation' | 'aspectRatio' | 'durationSeconds' | 'referenceImage' | 'lastFrame' | 'referenceImages'>): void {
@@ -198,20 +204,39 @@ async function injectImageFile(webContents: WebContents, reference: ReferenceIma
   await delay(800);
 }
 
-async function attachReferences(webContents: WebContents, input: GoogleFlowVideoAutomationInput): Promise<void> {
+async function attachReferences(webContents: WebContents, input: GoogleFlowVideoAutomationInput): Promise<ChromiumFileChooserUpload> {
   const references = input.operation === 'reference_to_video'
     ? input.referenceImages ?? []
     : [input.referenceImage, input.lastFrame].filter((entry): entry is ReferenceImageSelection => entry !== undefined);
-  for (let index = 0; index < references.length; index += 1) {
-    const state = await readState(webContents);
-    const targetLabels = input.operation === 'reference_to_video'
-      ? ['Component', 'Components', 'Thanh phan']
-      : index === 0 ? ['Start', 'Bat dau'] : ['End', 'Ket thuc'];
-    const target = choiceAny(state, targetLabels);
-    if (target === undefined) throw new Error(`Google Flow did not expose the ${targetLabels[0]} reference control.`);
-    clickAt(webContents, target.rectangle);
-    await delay(500);
-    await injectImageFile(webContents, references[index]!, index);
+  const uploads: ChromiumFileChooserUpload[] = [];
+  try {
+    for (let index = 0; index < references.length; index += 1) {
+      const state = await readState(webContents);
+      const targetLabels = input.operation === 'reference_to_video'
+        ? ['Component', 'Components', 'Thanh phan']
+        : index === 0 ? ['Start', 'Bat dau'] : ['End', 'Ket thuc'];
+      const target = choiceAny(state, targetLabels);
+      if (target === undefined) throw new Error(`Google Flow did not expose the ${targetLabels[0]} reference control.`);
+      const upload = await uploadReferencesThroughChromiumFileChooser(
+        webContents,
+        [references[index]!],
+        () => clickAt(webContents, target.rectangle)
+      );
+      if (upload !== null) {
+        uploads.push(upload);
+      } else {
+        await delay(500);
+        await injectImageFile(webContents, references[index]!, index);
+      }
+    }
+    return {
+      cleanup: async () => {
+        await Promise.all(uploads.map((upload) => upload.cleanup().catch(() => undefined)));
+      }
+    };
+  } catch (error) {
+    await Promise.all(uploads.map((upload) => upload.cleanup().catch(() => undefined)));
+    throw error;
   }
 }
 
@@ -240,52 +265,57 @@ export async function automateGoogleFlowVideoGeneration(webContents: WebContents
   const startedAt = Date.now();
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
-  const project = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
-    input.onProgress?.('project', Date.now() - startedAt, details);
-  });
-  let ready = project.state;
-  if (input.projectName !== undefined) {
-    await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
-  }
-  if (project.createdProject && input.projectName !== undefined) {
-    const renamed = await renameGoogleFlowProject(webContents, input.projectName, Math.min(deadline, Date.now() + 15_000));
-    input.onProgress?.('project', Date.now() - startedAt, {
-      projectName: input.projectName,
-      projectCreated: true,
-      projectRenamed: renamed,
-      projectReuseStored: true
+  let referenceUpload: ChromiumFileChooserUpload | null = null;
+  try {
+    const project = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
+      input.onProgress?.('project', Date.now() - startedAt, details);
     });
-    ready = await readState(webContents);
-  }
-  input.onProgress?.('ready', Date.now() - startedAt);
-  await configure(webContents, ready, input);
-  input.onProgress?.('configuring', Date.now() - startedAt, { model: googleFlowVideoModelLabel(input.model) });
-  if (input.operation !== 'text_to_video') {
-    input.onProgress?.('uploading', Date.now() - startedAt, { referenceCount: input.operation === 'reference_to_video' ? input.referenceImages?.length ?? 0 : input.operation === 'start_end' ? 2 : 1 });
-    await attachReferences(webContents, input);
-  }
-  ready = await fillPrompt(webContents, input.prompt, deadline);
-  const existingVideos = new Set((ready.videos ?? []).map((video) => video.src));
-  clickAt(webContents, ready.submit!);
-  input.onProgress?.('submitted', Date.now() - startedAt);
+    let ready = project.state;
+    if (input.projectName !== undefined) {
+      await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
+    }
+    if (project.createdProject && input.projectName !== undefined) {
+      const renamed = await renameGoogleFlowProject(webContents, input.projectName, Math.min(deadline, Date.now() + 15_000));
+      input.onProgress?.('project', Date.now() - startedAt, {
+        projectName: input.projectName,
+        projectCreated: true,
+        projectRenamed: renamed,
+        projectReuseStored: true
+      });
+      ready = await readState(webContents);
+    }
+    input.onProgress?.('ready', Date.now() - startedAt);
+    await configure(webContents, ready, input);
+    input.onProgress?.('configuring', Date.now() - startedAt, { model: googleFlowVideoModelLabel(input.model) });
+    if (input.operation !== 'text_to_video') {
+      input.onProgress?.('uploading', Date.now() - startedAt, { referenceCount: input.operation === 'reference_to_video' ? input.referenceImages?.length ?? 0 : input.operation === 'start_end' ? 2 : 1 });
+      referenceUpload = await attachReferences(webContents, input);
+    }
+    ready = await fillPrompt(webContents, input.prompt, deadline);
+    const existingVideos = new Set((ready.videos ?? []).map((video) => video.src));
+    clickAt(webContents, ready.submit!);
+    input.onProgress?.('submitted', Date.now() - startedAt);
 
-  let lastHeartbeat = 0;
-  while (Date.now() < deadline) {
-    await delay(POLL_INTERVAL_MS);
-    const state = await readState(webContents);
-    throwForAction(state);
-    const elapsed = Date.now() - startedAt;
-    if (elapsed - lastHeartbeat >= 10_000) {
-      lastHeartbeat = elapsed;
-      input.onProgress?.('generating', elapsed);
+    let lastHeartbeat = 0;
+    while (Date.now() < deadline) {
+      await delay(POLL_INTERVAL_MS);
+      const state = await readState(webContents);
+      throwForAction(state);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed - lastHeartbeat >= 10_000) {
+        lastHeartbeat = elapsed;
+        input.onProgress?.('generating', elapsed);
+      }
+      const generated = (state.videos ?? []).find((video) => !existingVideos.has(video.src));
+      if (generated !== undefined) {
+        input.onProgress?.('downloading', elapsed);
+        return generated.src;
+      }
     }
-    const generated = (state.videos ?? []).find((video) => !existingVideos.has(video.src));
-    if (generated !== undefined) {
-      input.onProgress?.('downloading', elapsed);
-      return generated.src;
-    }
+    throw new Error('Google Flow did not produce a video before the timeout. Check credits, model access, and the prompt, then retry.');
+  } finally {
+    await referenceUpload?.cleanup().catch(() => undefined);
   }
-  throw new Error('Google Flow did not produce a video before the timeout. Check credits, model access, and the prompt, then retry.');
 }
 
 export function detectDownloadedMp4(bytes: Uint8Array): boolean {

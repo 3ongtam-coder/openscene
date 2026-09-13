@@ -95,6 +95,7 @@ describe('still-to-video handoff', () => {
 describe('Writer production-image handoff', () => {
   const app = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.tsx'), 'utf8');
   const imageStudio = readFileSync(resolve(process.cwd(), 'src/renderer/src/ImageGenerationWorkspace.tsx'), 'utf8');
+  const productionWorkflow = readFileSync(resolve(process.cwd(), 'src/shared/productionWorkflow.ts'), 'utf8');
 
   it('imports a reviewed generated still before attaching it to the exact Writer target', () => {
     expect(app).toContain('const [productionImageHandoff, setProductionImageHandoff]');
@@ -104,9 +105,18 @@ describe('Writer production-image handoff', () => {
   });
 
   it('snapshots each paid image job target and requires an explicit attach action', () => {
-    expect(imageStudio).toContain('[job.id]: productionHandoff');
+    expect(imageStudio).toContain('[started.id]: handoff');
+    expect(imageStudio).toContain('generateProductionBriefs');
+    expect(imageStudio).toContain('Sync Writer ·');
+    expect(imageStudio).toContain('Custom image style');
+    expect(imageStudio).toContain('aiGetProjectImageReference');
+    expect(imageStudio).toContain('referenceImages');
+    expect(productionWorkflow).toContain('reference.assetId');
     expect(imageStudio).toContain('nothing is attached until you approve a completed image');
     expect(imageStudio).toContain('handleAttachToProduction(job)');
     expect(imageStudio).toContain('Attach to ${productionTargetByJob[job.id]!.targetLabel}');
+    expect(app).toContain('window.confirm(');
+    expect(app).toContain('controller.generateProductionBriefs(handoffs)');
+    expect(app).toContain('Every result remains unapproved and must be reviewed and attached manually.');
   });
 });

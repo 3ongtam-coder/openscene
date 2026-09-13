@@ -1,11 +1,18 @@
 import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { GoogleFlowImageModel } from '../shared/browserSession';
+import type { ReferenceImageSelection } from '../shared/providerSeams';
 import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
+import {
+  uploadReferencesThroughChromiumFileChooser,
+  type ChromiumFileChooserUpload
+} from './chromiumFileChooserUpload';
 
 const POLL_INTERVAL_MS = 1_000;
 const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
 const FLOW_PROJECT_RENAME_TIMEOUT_MS = 5_000;
 const FLOW_PROJECT_DISCOVERY_GRACE_MS = 4_000;
+const FLOW_REFERENCE_UPLOAD_TIMEOUT_MS = 5_000;
+const FLOW_REFERENCE_UPLOAD_POLL_MS = 250;
 
 type RectangleWithText = {
   readonly rectangle: Rectangle;
@@ -37,6 +44,8 @@ export type GoogleFlowAutomationState = {
   readonly agentSettingsClose?: Rectangle;
   readonly agentToggle?: RectangleWithText;
   readonly configButton?: RectangleWithText;
+  readonly uploadLauncher?: Rectangle;
+  readonly uploadChoice?: Rectangle;
   readonly modelDropdown?: RectangleWithText;
   readonly tabs: readonly RectangleWithText[];
   readonly menuItems: readonly RectangleWithText[];
@@ -59,6 +68,8 @@ export type GoogleFlowAutomationInput = {
   readonly prompt: string;
   readonly model: GoogleFlowImageModel;
   readonly aspectRatio: string;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
   readonly timeoutMs: number;
   readonly projectName?: string;
   readonly onProgress?: (
@@ -176,6 +187,22 @@ export function buildGoogleFlowStateProbeScript(): string {
     const buttons = visible('button');
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
+    const uploadLauncherEntry = buttons.find(({ element, rectangle }) => {
+      if (rectangle.y < viewH * 0.55) return false;
+      const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+      return text === '+'
+        || /add media|media menu|them noi dung nghe nhin|trinh don them noi dung nghe nhin/.test(text)
+        || (rectangle.x < window.innerWidth * 0.3 && rectangle.width < 100 && rectangle.height < 100);
+    });
+    // The current Flow composer opens a second menu after the + button. Its
+    // explicit Upload/Tai len action must be selected before Flow creates the
+    // file input used by the reference importer.
+    const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex="0"]')
+      .filter(({ element }) => {
+        const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+        return /^(upload|upload image|tai len)$/.test(text);
+      })
+      .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
 
     // Flow may open its Agent composer by default. Its Settings button and
     // media defaults resemble the classic generation configuration, but they
@@ -320,6 +347,23 @@ export function buildGoogleFlowStateProbeScript(): string {
     });
 
     const body = (document.body?.innerText || '').toLowerCase();
+    // Do not classify a Flow account as rate-limited from arbitrary page text.
+    // The page can keep old job history, help text, or hidden bootstrap content
+    // mounted while the composer is ready. Only visible status surfaces are
+    // actionable provider signals; this also keeps prompt/history text out of
+    // the returned state and logs.
+    const attentionText = visible([
+      '[role="alert"]',
+      '[role="alertdialog"]',
+      '[role="status"]',
+      '[aria-live="assertive"]',
+      '[aria-live="polite"]',
+      '[data-testid*="toast" i]',
+      '[data-testid*="snackbar" i]',
+      '[class*="toast" i]',
+      '[class*="snackbar" i]',
+      '[class*="banner" i]'
+    ].join(',')).map(({ element }) => (element.textContent || '').trim()).join(' ').toLowerCase();
     // Google can keep invisible reCAPTCHA/bootstrap elements mounted on an
     // already authenticated Flow page. Only stop for a challenge which is
     // actually visible to the user; otherwise the project list is incorrectly
@@ -347,9 +391,9 @@ export function buildGoogleFlowStateProbeScript(): string {
       actionRequired = 'verification';
     } else if (location.hostname === 'accounts.google.com' || (/sign in|đăng nhập/.test(body) && !input && !projectLink)) {
       actionRequired = 'sign_in';
-    } else if (/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)) {
+    } else if (/rate limit|usage limit|not enough credits|insufficient credits|quota exceeded|hết tín dụng|đã đạt giới hạn/.test(attentionText)) {
       actionRequired = 'rate_limit';
-    } else if (/flow is not available|isn't available in your country|not available in your country/.test(body)) {
+    } else if (/flow is not available|isn't available in your country|not available in your country/.test(attentionText)) {
       actionRequired = 'unavailable';
     }
 
@@ -373,6 +417,8 @@ export function buildGoogleFlowStateProbeScript(): string {
       ...(agentSettingsCloseEntry ? { agentSettingsClose: agentSettingsCloseEntry.rectangle } : {}),
       ...(agentToggle ? { agentToggle } : {}),
       ...(configButton ? { configButton } : {}),
+      ...(uploadLauncherEntry ? { uploadLauncher: uploadLauncherEntry.rectangle } : {}),
+      ...(uploadChoiceEntry ? { uploadChoice: uploadChoiceEntry.rectangle } : {}),
       ...(modelDropdown ? { modelDropdown } : {}),
       tabs,
       menuItems,
@@ -653,23 +699,28 @@ async function selectConfigurationChoice(
   expected: string | readonly string[]
 ): Promise<void> {
   const expectedLabel = typeof expected === 'string' ? expected : expected[0]!;
-  let state = await readState(webContents);
-  throwForAction(state);
-  let choice = findChoice(state, expected);
-  if (choice === undefined) {
-    // Some Flow revisions close the popover after each selection. Reopen the
-    // same bottom configuration pill before declaring the option unavailable.
-    clickAt(webContents, configButton);
-    await delay(300);
-    state = await readState(webContents);
+  // Flow sometimes paints the configuration pill before its menu entries.
+  // Poll briefly before reopening it; clicking a half-painted pill can close
+  // the menu and was the source of the intermittent "Image option" error.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let state = await readState(webContents);
     throwForAction(state);
-    choice = findChoice(state, expected);
+    const choice = findChoice(state, expected);
+    if (choice !== undefined) {
+      if (!choice.selected) {
+        clickAt(webContents, choice.rectangle);
+        await delay(500);
+      }
+      return;
+    }
+    if (attempt === 3 || attempt === 7) {
+      // Some Flow revisions close the popover after each selection. Reopen the
+      // current pill, not the stale rectangle from before the selection.
+      clickAt(webContents, state.configButton?.rectangle ?? configButton);
+    }
+    await delay(250);
   }
-  if (choice === undefined) throw new Error(`Google Flow configuration did not expose the ${expectedLabel} option.`);
-  if (!choice.selected) {
-    clickAt(webContents, choice.rectangle);
-    await delay(500);
-  }
+  throw new Error(`Google Flow configuration did not expose the ${expectedLabel} option after waiting for the menu to load.`);
 }
 
 async function configureGeneration(
@@ -726,6 +777,72 @@ async function configureGeneration(
   onConfiguration({ step: 'complete' });
 }
 
+function safeReferenceName(reference: ReferenceImageSelection, index: number): string {
+  const extension = reference.mimeType === 'image/png' ? 'png' : reference.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const base = reference.displayName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 70).replace(/\.+$/, '');
+  return `${base || `reference-${index + 1}`}.${extension}`;
+}
+
+async function injectImageFiles(webContents: WebContents, references: readonly ReferenceImageSelection[]): Promise<boolean> {
+  const injected = await webContents.executeJavaScript(`(() => {
+    const input = [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !candidate.disabled && (!candidate.accept || candidate.accept.includes('image')));
+    if (!(input instanceof HTMLInputElement)) return false;
+    const transfer = new DataTransfer();
+    const references = ${JSON.stringify(references.map((reference, index) => ({
+      base64: reference.base64,
+      displayName: safeReferenceName(reference, index),
+      mimeType: reference.mimeType
+    })))};
+    for (const reference of references) {
+      const binary = atob(reference.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      transfer.items.add(new File([bytes], reference.displayName, { type: reference.mimeType }));
+    }
+    if (references.length > 1 && !input.multiple) return false;
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`, true) as boolean;
+  if (injected) await delay(800);
+  return injected;
+}
+
+async function attachImageReferences(
+  webContents: WebContents,
+  references: readonly ReferenceImageSelection[]
+): Promise<ChromiumFileChooserUpload | null> {
+  let state = await readState(webContents);
+  if (state.uploadLauncher === undefined && state.uploadChoice === undefined) {
+    throw new Error('Google Flow Image does not expose an upload control for the selected reference images.');
+  }
+
+  if (state.uploadChoice === undefined) clickAt(webContents, state.uploadLauncher!);
+
+  const deadline = Date.now() + FLOW_REFERENCE_UPLOAD_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    state = await readState(webContents);
+    if (state.uploadChoice !== undefined) {
+      const upload = await uploadReferencesThroughChromiumFileChooser(
+        webContents,
+        references,
+        () => clickAt(webContents, state.uploadChoice!),
+        Math.max(1, deadline - Date.now())
+      );
+      if (upload !== null) return upload;
+      // Older Flow builds expose a page-owned multiple file input. Keep that
+      // compatibility path, but never upload references one-by-one because a
+      // persistent single slot can replace the style/identity image before it.
+      if (await injectImageFiles(webContents, references)) return null;
+      break;
+    }
+    await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
+  }
+
+  throw new Error('Google Flow opened its image picker, but Chromium could not assign the selected reference images. Retry after closing Flow DevTools or import the references manually.');
+}
+
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
   let promptInserted = false;
   while (Date.now() < deadline) {
@@ -765,51 +882,64 @@ export async function automateGoogleFlowImageGeneration(
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
 
-  const projectResult = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
-    input.onProgress?.('project', Date.now() - startedAt, details);
-  });
-  let ready = projectResult.state;
-  if (input.projectName !== undefined) {
-    await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
-  }
-  if (projectResult.createdProject && input.projectName !== undefined) {
-    const renameDeadline = Math.min(deadline, Date.now() + FLOW_PROJECT_RENAME_TIMEOUT_MS);
-    const renamed = await renameGoogleFlowProject(webContents, input.projectName, renameDeadline);
-    input.onProgress?.('project', Date.now() - startedAt, {
-      projectName: input.projectName,
-      projectCreated: true,
-      projectRenamed: renamed
+  let referenceUpload: ChromiumFileChooserUpload | null = null;
+  try {
+    const projectResult = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
+      input.onProgress?.('project', Date.now() - startedAt, details);
     });
-  }
-  input.onProgress?.('ready', Date.now() - startedAt);
-  input.onProgress?.('configuring', Date.now() - startedAt);
-  await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
-    input.onProgress?.('configuring', Date.now() - startedAt, details);
-  });
-
-  ready = await fillPrompt(webContents, input.prompt, deadline);
-  input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });
-  const existingImages = new Set(ready.images.map((image) => image.src));
-  clickAt(webContents, ready.submit!);
-  input.onProgress?.('submitted', Date.now() - startedAt);
-
-  let lastHeartbeat = 0;
-  while (Date.now() < deadline) {
-    await delay(POLL_INTERVAL_MS);
-    const state = await readState(webContents);
-    throwForAction(state);
-    const elapsed = Date.now() - startedAt;
-    if (elapsed - lastHeartbeat >= 10_000) {
-      lastHeartbeat = elapsed;
-      input.onProgress?.('generating', elapsed);
+    let ready = projectResult.state;
+    if (input.projectName !== undefined) {
+      await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
     }
-    const generated = state.images.find((image) => !existingImages.has(image.src));
-    if (generated !== undefined) {
-      input.onProgress?.('downloading', elapsed);
-      return generated.src;
+    if (projectResult.createdProject && input.projectName !== undefined) {
+      const renameDeadline = Math.min(deadline, Date.now() + FLOW_PROJECT_RENAME_TIMEOUT_MS);
+      const renamed = await renameGoogleFlowProject(webContents, input.projectName, renameDeadline);
+      input.onProgress?.('project', Date.now() - startedAt, {
+        projectName: input.projectName,
+        projectCreated: true,
+        projectRenamed: renamed
+      });
     }
+    input.onProgress?.('ready', Date.now() - startedAt);
+    input.onProgress?.('configuring', Date.now() - startedAt);
+    await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
+      input.onProgress?.('configuring', Date.now() - startedAt, details);
+    });
+
+    const references = input.referenceImages?.length
+      ? input.referenceImages
+      : input.referenceImage === undefined ? [] : [input.referenceImage];
+    if (references.length > 0) {
+      input.onProgress?.('configuring', Date.now() - startedAt, { step: 'references', referenceCount: references.length });
+      referenceUpload = await attachImageReferences(webContents, references);
+    }
+
+    ready = await fillPrompt(webContents, input.prompt, deadline);
+    input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });
+    const existingImages = new Set(ready.images.map((image) => image.src));
+    clickAt(webContents, ready.submit!);
+    input.onProgress?.('submitted', Date.now() - startedAt);
+
+    let lastHeartbeat = 0;
+    while (Date.now() < deadline) {
+      await delay(POLL_INTERVAL_MS);
+      const state = await readState(webContents);
+      throwForAction(state);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed - lastHeartbeat >= 10_000) {
+        lastHeartbeat = elapsed;
+        input.onProgress?.('generating', elapsed);
+      }
+      const generated = state.images.find((image) => !existingImages.has(image.src));
+      if (generated !== undefined) {
+        input.onProgress?.('downloading', elapsed);
+        return generated.src;
+      }
+    }
+    throw new Error('Google Flow did not produce an image before the timeout. Check the prompt, account credits, and Flow access, then retry.');
+  } finally {
+    await referenceUpload?.cleanup().catch(() => undefined);
   }
-  throw new Error('Google Flow did not produce an image before the timeout. Check the prompt, account credits, and Flow access, then retry.');
 }
 
 export function detectDownloadedImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | null {

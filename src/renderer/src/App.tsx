@@ -15,12 +15,14 @@ import {
   attachGeneratedProductionImage,
   buildCharacterReferenceImageBrief,
   buildStoryboardImageBrief,
+  productionVisualStyle,
+  PRODUCTION_BATCH_LIMIT,
   type ProductionImageHandoff,
   type ProductionImageTarget
 } from '../../shared/productionWorkflow';
 import type { StatusMessage } from './appTypes';
 import { timelineDurationMs } from '../../shared/timelineLogic';
-import { ImageGenerationWorkspace } from './ImageGenerationWorkspace';
+import { ImageGenerationWorkspace, type ImageGenerationWorkspaceHandle } from './ImageGenerationWorkspace';
 import { VideoGenerationWorkspace } from './VideoGenerationWorkspace';
 import { WriterWorkspace } from './WriterWorkspace';
 import {
@@ -274,6 +276,7 @@ export function App(): ReactElement {
   // A generated image must remember the exact Character or Shot that requested
   // it. Composer state alone is not enough once several image jobs overlap.
   const [productionImageHandoff, setProductionImageHandoff] = useState<ProductionImageHandoff | null>(null);
+  const imageGenerationRef = useRef<ImageGenerationWorkspaceHandle | null>(null);
 
   useEffect(() => {
     const projectId = editor.project?.id;
@@ -306,6 +309,41 @@ export function App(): ReactElement {
     });
     selectWorkspaceTab('image');
     return null;
+  };
+
+  const generateProductionImages = async (
+    targets: readonly ProductionImageTarget[],
+    aspectRatio?: ImageAspectRatio
+  ): Promise<StatusMessage> => {
+    const project = editor.project;
+    if (project === null) return { tone: 'warning', text: 'Open a local project before creating production images.' };
+    if (targets.length === 0) return { tone: 'neutral', text: 'No missing production images need generation.' };
+    if (targets.length > PRODUCTION_BATCH_LIMIT) return { tone: 'warning', text: `A production image batch is limited to ${PRODUCTION_BATCH_LIMIT} targets.` };
+    const handoffs: ProductionImageHandoff[] = [];
+    const skipped: string[] = [];
+    for (const target of targets) {
+      const result = target.kind === 'character_reference'
+        ? buildCharacterReferenceImageBrief(project.ai, target.characterId)
+        : buildStoryboardImageBrief(project.ai, target.shotId, aspectRatio ?? '16:9');
+      if (!result.ok) {
+        skipped.push(result.reason);
+        continue;
+      }
+      handoffs.push({ ...result.brief, requestId: crypto.randomUUID(), projectId: project.id });
+    }
+    if (handoffs.length === 0) return { tone: 'warning', text: skipped[0] ?? 'No eligible production images need generation.' };
+    const accepted = window.confirm(
+      `Generate ${handoffs.length} production image${handoffs.length === 1 ? '' : 's'} now?\n\n` +
+      'Provider credits may be charged. Browser-session jobs run one at a time. Every result remains unapproved and must be reviewed and attached manually.'
+    );
+    if (!accepted) return { tone: 'neutral', text: 'Production image generation was cancelled before any provider request.' };
+    const controller = imageGenerationRef.current;
+    if (controller === null) return { tone: 'danger', text: 'Image Generation is not ready. Reopen the project and try again.' };
+    const batch = await controller.generateProductionBriefs(handoffs);
+    return {
+      tone: batch.failed === 0 ? 'success' : batch.completed > 0 ? 'warning' : 'danger',
+      text: `${batch.message}${skipped.length > 0 ? ` ${skipped.length} ineligible target(s) were skipped.` : ''}`
+    };
   };
 
   const attachProductionImage = async (
@@ -471,6 +509,8 @@ export function App(): ReactElement {
                   referenceImage={videoReferenceImage}
                   onReferenceImageChange={setVideoReferenceImage}
                   onGenerateProductionImage={openProductionImageBrief}
+                  onGenerateProductionImages={generateProductionImages}
+                  onOpenImageResults={() => selectWorkspaceTab('image')}
                 />
               </section>
               <section
@@ -482,9 +522,11 @@ export function App(): ReactElement {
                 tabIndex={-1}
               >
                 <ImageGenerationWorkspace
+                  ref={imageGenerationRef}
                   key={editor.project?.id ?? 'no-project'}
                   projectName={editor.projects.find((item) => item.id === editor.project?.id)?.folderName ?? editor.project?.name}
                   productionHandoff={productionImageHandoff}
+                  synchronizedStyle={editor.project === null ? null : productionVisualStyle(editor.project.ai)}
                   onAttachToProduction={attachProductionImage}
                   onUseForVideo={(reference) => {
                     setVideoReferenceImage(reference);

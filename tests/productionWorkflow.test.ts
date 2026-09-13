@@ -5,14 +5,20 @@ import { applyWriterPipeline, artifactFromWriterDraft, saveWriterArtifact, start
 import type { WriterDraft, WriterRequest } from '../src/shared/writerWorkflow';
 import type { WriterStageArtifact } from '../src/shared/writerStages';
 import {
+  activeStyleReference,
   addCharacterReference,
   assembleApprovedProductionCut,
   attachGeneratedProductionImage,
   assignStoryboardReference,
+  assignStyleReference,
   buildCharacterReferenceImageBrief,
   buildApprovedProductionAssemblyPlan,
   buildStoryboardImageBrief,
+  batchableProductionVideoShotIds,
   clearStoryboardReference,
+  clearStyleReference,
+  missingProductionImageTargets,
+  planProductionVideoReferences,
   productionShotRows,
   removeCharacterReference
 } from '../src/shared/productionWorkflow';
@@ -30,8 +36,8 @@ const draft: WriterDraft = {
 };
 const artifact = (stage: 'concept' | 'screenplay' | 'breakdown', content = stage): WriterStageArtifact => ({ stage, title: 'Film', content, modelId: 'test', approved: false });
 
-function project() {
-  let state = startWriterPipeline(request);
+function project(writerRequest: WriterRequest = request) {
+  let state = startWriterPipeline(writerRequest);
   for (const stage of ['concept', 'screenplay', 'breakdown'] as const) state = saveWriterArtifact(state, artifact(stage), true);
   state = saveWriterArtifact(state, artifactFromWriterDraft('prompts', draft, 'test'), true);
   const applied = applyWriterPipeline(createEmptyAiProjectDocument(), state, '2026-09-07T00:00:00.000Z', 'production');
@@ -64,7 +70,8 @@ describe('production storyboard workflow', () => {
         target: { kind: 'character_reference', characterId: character.id },
         targetLabel: 'Character reference for Ari',
         aspectRatio: '3:4',
-        stylePreset: 'Cinematic'
+        stylePreset: 'Cinematic narrative',
+        styleSource: 'writer'
       }
     });
     if (characterBrief.ok) {
@@ -73,7 +80,20 @@ describe('production storyboard workflow', () => {
       expect(characterBrief.brief.negativePrompt).toContain('watermark');
     }
 
-    const storyboardBrief = buildStoryboardImageBrief(base, shot.id, '9:16');
+    const withCharacterReference = addCharacterReference(base, {
+      characterId: character.id,
+      assetId: 'asset-thok',
+      referenceId: 'reference-thok',
+      label: 'thok.jpeg'
+    });
+    if (!withCharacterReference.ok) throw new Error(withCharacterReference.reason);
+
+    const withStyleReference = assignStyleReference(withCharacterReference.document, {
+      assetId: 'asset-world-style', referenceId: 'reference-world-style', label: 'world style.jpeg'
+    });
+    if (!withStyleReference.ok) throw new Error(withStyleReference.reason);
+
+    const storyboardBrief = buildStoryboardImageBrief(withStyleReference.document, shot.id, '9:16');
     expect(storyboardBrief).toMatchObject({
       ok: true,
       brief: {
@@ -85,7 +105,123 @@ describe('production storyboard workflow', () => {
       expect(storyboardBrief.brief.prompt).toContain('Ari: Red coat');
       expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
       expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
+      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['asset-world-style', 'asset-thok']);
+      expect(storyboardBrief.brief.prompt).toContain('first attached image as the authoritative world/style reference');
     }
+  });
+
+  it('persists one replaceable project-wide world/style reference', () => {
+    const base = project();
+    const assigned = assignStyleReference(base, {
+      assetId: 'style-one', referenceId: 'style-reference-one', label: 'World one'
+    });
+    expect(assigned.ok).toBe(true);
+    if (!assigned.ok) return;
+    expect(activeStyleReference(assigned.document)?.assetId).toBe('style-one');
+    const replaced = assignStyleReference(assigned.document, {
+      assetId: 'style-two', referenceId: 'style-reference-two', label: 'World two'
+    });
+    expect(replaced.ok).toBe(true);
+    if (!replaced.ok) return;
+    expect(replaced.document.referenceAssets.filter((entry) => entry.role === 'style')).toHaveLength(1);
+    expect(activeStyleReference(replaced.document)?.assetId).toBe('style-two');
+    const cleared = clearStyleReference(replaced.document);
+    expect(cleared.ok && activeStyleReference(cleared.document)).toBeUndefined();
+  });
+
+  it('allocates limited storyboard slots across characters instead of letting the first character consume them', () => {
+    const base = project();
+    const firstCharacter = base.characters[0]!;
+    const firstScene = base.scenes[0]!;
+    const firstShot = base.shots[0]!;
+    const document = {
+      ...base,
+      characters: [
+        { ...firstCharacter, referenceAssetIds: ['ref-ari-a', 'ref-ari-b'] },
+        { id: 'character-bex', name: 'Bex', invariantDescription: 'Blue scarf', referenceAssetIds: ['ref-bex-a', 'ref-bex-b'] }
+      ],
+      scenes: base.scenes.map((scene) => scene.id === firstScene.id
+        ? { ...scene, characterIds: [firstCharacter.id, 'character-bex'] }
+        : scene),
+      referenceAssets: [
+        { id: 'ref-style', assetId: 'asset-style', role: 'style' as const, label: 'World style' },
+        { id: 'ref-ari-a', assetId: 'asset-ari-a', role: 'character' as const, label: 'Ari front' },
+        { id: 'ref-ari-b', assetId: 'asset-ari-b', role: 'character' as const, label: 'Ari side' },
+        { id: 'ref-bex-a', assetId: 'asset-bex-a', role: 'character' as const, label: 'Bex front' },
+        { id: 'ref-bex-b', assetId: 'asset-bex-b', role: 'character' as const, label: 'Bex side' }
+      ]
+    };
+    const brief = buildStoryboardImageBrief(document, firstShot.id);
+    expect(brief.ok && brief.brief.referenceAssetIds).toEqual(['asset-style', 'asset-ari-a', 'asset-bex-a']);
+  });
+
+  it('does not silently drop selected style or character references when planning production video', () => {
+    const base = project();
+    const character = base.characters[0]!;
+    const shot = base.shots[0]!;
+    const withCharacter = addCharacterReference(base, {
+      characterId: character.id, assetId: 'asset-character', referenceId: 'ref-character', label: 'Ari'
+    });
+    if (!withCharacter.ok) throw new Error(withCharacter.reason);
+    const withStyle = assignStyleReference(withCharacter.document, {
+      assetId: 'asset-style', referenceId: 'ref-style', label: 'World style'
+    });
+    if (!withStyle.ok) throw new Error(withStyle.reason);
+    const controls = { characterConsistency: true, styleConsistency: true, sceneConsistency: true, motionContinuity: false };
+    expect(planProductionVideoReferences(withStyle.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: true, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('storyboard first') });
+
+    const storyboard = assignStoryboardReference(withStyle.document, {
+      shotId: shot.id, assetId: 'asset-board', referenceId: 'ref-board', label: 'Storyboard'
+    });
+    if (!storyboard.ok) throw new Error(storyboard.reason);
+    expect(planProductionVideoReferences(storyboard.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: true, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'storyboard', reference: { id: 'ref-board' } });
+
+    expect(planProductionVideoReferences(withCharacter.document, shot.id, {
+      controls, supportsImageToVideo: true, supportsReferenceToVideo: false, supportsTextToVideo: true
+    })).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('cannot use the approved character references') });
+  });
+
+  it('carries the approved Writer visual style into every production image brief', () => {
+    const styled = project({
+      ...request,
+      videoStyle: 'traditional-2d-cel-animation',
+      customVideoStyle: 'Muted ochre paper texture and hand-inked outlines.'
+    });
+    const character = styled.characters[0];
+    const shot = styled.shots[0];
+    if (!character || !shot) throw new Error('fixture missing');
+    const characterBrief = buildCharacterReferenceImageBrief(styled, character.id);
+    const storyboardBrief = buildStoryboardImageBrief(styled, shot.id);
+    expect(characterBrief.ok && characterBrief.brief).toMatchObject({
+      stylePreset: 'Traditional 2D Cel Animation',
+      styleSource: 'writer'
+    });
+    expect(storyboardBrief.ok && storyboardBrief.brief.styleDescription).toContain('hand-drawn linework');
+    expect(storyboardBrief.ok && storyboardBrief.brief.prompt).toContain('Muted ochre paper texture');
+    expect(storyboardBrief.ok && storyboardBrief.brief.prompt).not.toContain('Cinematic production image');
+  });
+
+  it('plans only missing images and shots without active or reviewable video takes', () => {
+    const base = project();
+    expect(missingProductionImageTargets(base, 'character_reference')).toHaveLength(1);
+    expect(missingProductionImageTargets(base, 'storyboard')).toHaveLength(2);
+    expect(batchableProductionVideoShotIds(base)).toEqual(base.shots.map((shot) => shot.id));
+
+    const firstShot = base.shots[0]!;
+    const withRunning = {
+      ...base,
+      shots: base.shots.map((shot, index) => index === 0 ? { ...shot, generationIds: ['running-take'] } : shot),
+      generations: [{
+        id: 'running-take', shotId: firstShot.id, providerId: 'gemini_veo', modelId: 'veo',
+        capability: 'text_to_video' as const, status: 'running' as const, prompt: 'running',
+        referenceAssetIds: [], outputAssetIds: [], createdAt: '2026-09-07T00:00:00.000Z', updatedAt: '2026-09-07T00:00:01.000Z'
+      }]
+    };
+    expect(batchableProductionVideoShotIds(withRunning)).toEqual([base.shots[1]!.id]);
   });
 
   it('attaches a reviewed generated image to its snapshotted production target', () => {

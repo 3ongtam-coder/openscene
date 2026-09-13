@@ -14,7 +14,7 @@ import {
   type ContinuityReviewValue
 } from '@openvideo/shared/aiProjectDomain';
 import { candidateApprovalBlockReason, emptyContinuityReview } from '@openvideo/shared/generationReview';
-import { productionShotRows } from '@openvideo/shared/productionWorkflow';
+import { activeStyleReference, productionShotRows } from '@openvideo/shared/productionWorkflow';
 import { getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '@openvideo/shared/mediaCapabilityRegistry';
 import { ModelSelect } from '../components/ModelSelect';
 import { supportsReferenceImage, type VideoAspectRatio, type VideoProgressStage } from '@openvideo/shared/videoGeneration';
@@ -99,6 +99,8 @@ export function PlanScreen({
   const activeProject = projectId === null ? null : readProject(projectId);
   const writerShots = approvedWriterShots(activeProject?.ai);
   const productionRows = productionShotRows(activeProject?.ai);
+  const styleReference = activeProject === null || activeProject === undefined ? undefined : activeStyleReference(activeProject.ai);
+  const styleReferenceAsset = activeProject?.assets.find((asset) => asset.id === styleReference?.assetId);
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
   const [shotStates, setShotStates] = useState<readonly ShotState[]>([]);
   // Keyed by shot index, because the plan can change under them and an array
@@ -423,6 +425,7 @@ export function PlanScreen({
       {productionRows.length > 0 && <View style={styles.reviewCard}>
         <Text style={styles.label}>Storyboard production board</Text>
         <Text style={styles.body}>{productionRows.filter((row) => row.state === 'approved').length}/{productionRows.length} Writer shots approved. Opening and generation remain manual.</Text>
+        <Text style={styles.body}>World/style reference: {styleReferenceAsset?.displayName ?? styleReference?.label ?? 'Not assigned'}</Text>
         {productionRows.map((row, index) => <View style={styles.shot} key={row.shotId}>
           <Text style={styles.shotIndex}>{String(index + 1).padStart(2, '0')}</Text>
           <Text style={styles.shotBody}>{row.label}</Text>
@@ -438,7 +441,7 @@ export function PlanScreen({
           }} style={press([styles.approve, (running || activeProject === null) && styles.approveOff])}>
           <Text style={styles.approveText}>Assemble approved Writer cut</Text>
         </Pressable>
-        <Text style={styles.footnote}>Assigning imported storyboard and character images is currently done in the desktop production board; mobile reads the same saved mapping and assembly rules.</Text>
+        <Text style={styles.footnote}>Assigning the world/style image and imported storyboard or character images is currently done in the desktop production board; mobile reads the same saved mapping and assembly rules. Batch image/video generation and signed-in browser automation remain desktop-only, so this screen never starts a hidden queue or silently charges a provider.</Text>
       </View>}
       {writerShots.length > 0 && <View>
         <Text style={styles.label}>Approved Writer shots — choose one to load, not generate</Text>
