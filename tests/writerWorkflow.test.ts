@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyAiProjectDocument, parseAiProjectDocument } from '../src/shared/aiProjectDomain';
 import {
   WRITER_RESPONSE_JSON_SCHEMA,
+  WRITER_VIDEO_STYLE_LABELS,
   applyWriterDraft,
   compileWriterPrompt,
   parseWriterDraft,
@@ -70,6 +71,20 @@ describe('Writer workflow', () => {
     expect(shotSchema.minItems).toBe(1);
     expect(shotSchema.maxItems).toBe(100);
     expect(shotSchema.items.properties.durationSeconds).toMatchObject({ type: 'integer', minimum: 1, maximum: 120 });
+  });
+
+  it('supports the Traditional 2D Cel Animation preset and bounded custom style direction', () => {
+    const styled = {
+      ...request,
+      videoStyle: 'traditional-2d-cel-animation' as const,
+      customVideoStyle: 'Hand-drawn ink contours, painted cel fills, and visible frame-by-frame timing.'
+    };
+    expect(WRITER_VIDEO_STYLE_LABELS[styled.videoStyle]).toBe('Traditional 2D Cel Animation');
+    expect(parseWriterRequest(styled)).toEqual(styled);
+    const prompt = compileWriterPrompt(styled);
+    expect(prompt).toContain('TRADITIONAL 2D CEL ANIMATION');
+    expect(prompt).toContain(styled.customVideoStyle);
+    expect(parseWriterRequest({ ...styled, customVideoStyle: 'x'.repeat(1_001) })).toBeNull();
   });
 
   it('rejects partial drafts, duplicate characters, and unknown scene characters', () => {

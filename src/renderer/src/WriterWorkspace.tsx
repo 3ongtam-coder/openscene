@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { AiProjectDocument } from '../../shared/aiProjectDomain';
 import {
-  WRITER_MODEL_IDS, WRITER_VIDEO_STYLES, WRITER_EMOTIONAL_GOALS,
+  WRITER_MODEL_IDS, WRITER_VIDEO_STYLES, WRITER_VIDEO_STYLE_LABELS, WRITER_EMOTIONAL_GOALS,
   type WriterMode, type WriterRequest, type WriterVideoStyle, type WriterEmotionalGoal
 } from '../../shared/writerWorkflow';
 import { pipelineBaseRequest, pipelineMatchesBrief } from '../../shared/writerPipeline';
@@ -32,6 +32,7 @@ export function WriterWorkspace({ document, onSave }: {
   const [tone, setTone] = useState(initial?.tone ?? 'Cinematic and engaging');
   const [targetDurationSeconds, setTargetDurationSeconds] = useState(initial?.targetDurationSeconds ?? 60);
   const [videoStyle, setVideoStyle] = useState<WriterVideoStyle | ''>(initial?.videoStyle ?? '');
+  const [customVideoStyle, setCustomVideoStyle] = useState(initial?.customVideoStyle ?? '');
   const [emotionalGoal, setEmotionalGoal] = useState<WriterEmotionalGoal | ''>(initial?.emotionalGoal ?? '');
   const [parentScriptId, setParentScriptId] = useState(initial?.parentScriptId ?? '');
   const [notes, setNotes] = useState('');
@@ -41,7 +42,7 @@ export function WriterWorkspace({ document, onSave }: {
   const connected = provider?.credentialKey !== undefined && credentialStatus[provider.credentialKey] === true;
   const base: WriterRequest = {
     mode, sourceText: sourceText.trim(), language: language.trim(), audience: audience.trim(), tone: tone.trim(), targetDurationSeconds,
-    ...(videoStyle ? { videoStyle } : {}), ...(emotionalGoal ? { emotionalGoal } : {}),
+    ...(videoStyle ? { videoStyle } : {}), ...(customVideoStyle.trim() ? { customVideoStyle: customVideoStyle.trim() } : {}), ...(emotionalGoal ? { emotionalGoal } : {}),
     ...(mode === 'rewrite' && selectedParent ? { parentScriptId: selectedParent.id, currentScreenplay: selectedParent.screenplay } : {})
   };
   const briefChanged = flow.state !== undefined && !pipelineMatchesBrief(flow.state, base);
@@ -102,8 +103,11 @@ export function WriterWorkspace({ document, onSave }: {
             <label className="studio-field"><span className="studio-field__label">Audience</span><input value={audience} onChange={(e) => setAudience(e.target.value)} /></label>
             <label className="studio-field"><span className="studio-field__label">Tone</span><input value={tone} onChange={(e) => setTone(e.target.value)} /></label>
             <label className="studio-field"><span className="studio-field__label">Video style</span><select value={videoStyle} onChange={(e) => setVideoStyle(e.target.value as WriterVideoStyle | '')}>
-              <option value="">Auto</option>{WRITER_VIDEO_STYLES.map((style) => <option key={style} value={style}>{style.replaceAll('-', ' ')}</option>)}
+              <option value="">Auto</option>{WRITER_VIDEO_STYLES.map((style) => <option key={style} value={style}>{WRITER_VIDEO_STYLE_LABELS[style]}</option>)}
             </select></label>
+            <label className="studio-field"><span className="studio-field__label">Custom video style (optional)</span>
+              <input value={customVideoStyle} maxLength={1000} onChange={(e) => setCustomVideoStyle(e.target.value)} placeholder="e.g. Traditional 2D Cel Animation with hand-drawn ink lines" />
+            </label>
             <label className="studio-field"><span className="studio-field__label">Emotional goal</span><select value={emotionalGoal} onChange={(e) => setEmotionalGoal(e.target.value as WriterEmotionalGoal | '')}>
               <option value="">Auto</option>{WRITER_EMOTIONAL_GOALS.map((goal) => <option key={goal} value={goal}>{goal}</option>)}
             </select></label>

@@ -153,6 +153,8 @@ describe('manual Writer pipeline', () => {
     expect(compileWriterPrompt(request)).toContain('Manually revised');
     expect(compileWriterPrompt(request)).not.toContain('BRIEF (source data)');
     expect(compileWriterPrompt(request)).not.toContain(brief.sourceText);
+    const styledRequest = { ...request, customVideoStyle: 'Traditional 2D Cel Animation with hand-painted cels.' };
+    expect(compileWriterPrompt(styledRequest)).toContain('CUSTOM VIDEO STYLE DIRECTION: Traditional 2D Cel Animation');
   });
 
   it('regenerates from the saved current stage, not just the original brief', () => {

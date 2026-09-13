@@ -14,11 +14,15 @@ describe('Writer surface parity', () => {
     ]);
     expect(desktop).toContain("from '../../shared/writerWorkflow'");
     expect(desktop).toContain('useWriterPipeline(document, onSave)');
+    expect(desktop).toContain('customVideoStyle');
+    expect(desktop).toContain('WRITER_VIDEO_STYLE_LABELS');
     expect(mobile).toContain("from '@openvideo/shared/writerWorkflow'");
     expect(mobile).toContain("from '@openvideo/shared/writerGeneration'");
     expect(mobile).toContain("isDomainModelAvailableOnRuntime(model, 'mobile')");
     expect(mobile).toContain('requestWriter({');
     expect(mobile).toContain('useWriterPipeline(project?.ai');
+    expect(mobile).toContain('customVideoStyle');
+    expect(mobile).toContain('WRITER_VIDEO_STYLE_LABELS');
     for (const surface of [desktop, mobile]) {
       expect(surface).toContain('createUseWriterPipeline({ useEffect, useRef, useState })');
       expect(surface).toContain('canOpenWriterStage(');
