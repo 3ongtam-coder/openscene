@@ -5,15 +5,18 @@ import { applyWriterPipeline, artifactFromWriterDraft, saveWriterArtifact, start
 import type { WriterDraft, WriterRequest } from '../src/shared/writerWorkflow';
 import type { WriterStageArtifact } from '../src/shared/writerStages';
 import {
+  activeStyleReference,
   addCharacterReference,
   assembleApprovedProductionCut,
   attachGeneratedProductionImage,
   assignStoryboardReference,
+  assignStyleReference,
   buildCharacterReferenceImageBrief,
   buildApprovedProductionAssemblyPlan,
   buildStoryboardImageBrief,
   batchableProductionVideoShotIds,
   clearStoryboardReference,
+  clearStyleReference,
   missingProductionImageTargets,
   productionShotRows,
   removeCharacterReference
@@ -84,7 +87,12 @@ describe('production storyboard workflow', () => {
     });
     if (!withCharacterReference.ok) throw new Error(withCharacterReference.reason);
 
-    const storyboardBrief = buildStoryboardImageBrief(withCharacterReference.document, shot.id, '9:16');
+    const withStyleReference = assignStyleReference(withCharacterReference.document, {
+      assetId: 'asset-world-style', referenceId: 'reference-world-style', label: 'world style.jpeg'
+    });
+    if (!withStyleReference.ok) throw new Error(withStyleReference.reason);
+
+    const storyboardBrief = buildStoryboardImageBrief(withStyleReference.document, shot.id, '9:16');
     expect(storyboardBrief).toMatchObject({
       ok: true,
       brief: {
@@ -96,8 +104,28 @@ describe('production storyboard workflow', () => {
       expect(storyboardBrief.brief.prompt).toContain('Ari: Red coat');
       expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
       expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
-      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['asset-thok']);
+      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['asset-world-style', 'asset-thok']);
+      expect(storyboardBrief.brief.prompt).toContain('first attached image as the authoritative world/style reference');
     }
+  });
+
+  it('persists one replaceable project-wide world/style reference', () => {
+    const base = project();
+    const assigned = assignStyleReference(base, {
+      assetId: 'style-one', referenceId: 'style-reference-one', label: 'World one'
+    });
+    expect(assigned.ok).toBe(true);
+    if (!assigned.ok) return;
+    expect(activeStyleReference(assigned.document)?.assetId).toBe('style-one');
+    const replaced = assignStyleReference(assigned.document, {
+      assetId: 'style-two', referenceId: 'style-reference-two', label: 'World two'
+    });
+    expect(replaced.ok).toBe(true);
+    if (!replaced.ok) return;
+    expect(replaced.document.referenceAssets.filter((entry) => entry.role === 'style')).toHaveLength(1);
+    expect(activeStyleReference(replaced.document)?.assetId).toBe('style-two');
+    const cleared = clearStyleReference(replaced.document);
+    expect(cleared.ok && activeStyleReference(cleared.document)).toBeUndefined();
   });
 
   it('carries the approved Writer visual style into every production image brief', () => {

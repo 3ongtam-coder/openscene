@@ -20,6 +20,8 @@ describe('production board surface parity', () => {
     expect(desktop).toContain("missingProductionImageTargets(document, 'character_reference')");
     expect(desktop).toContain('onGenerateImages(targets)');
     expect(desktop).toContain('Generate now');
+    expect(desktop).toContain('World/style reference');
+    expect(desktop).toContain('assignStyleReference');
     expect(desktop).toContain('Generate image now');
     expect(desktop).toContain('Generate missing storyboards');
     expect(desktop).toContain('Generate production videos');
@@ -27,6 +29,8 @@ describe('production board surface parity', () => {
     expect(desktopEditor).toContain('buildApprovedProductionAssemblyPlan(project.ai');
     expect(desktopEditor).toContain('assembleApprovedProductionCut({');
     expect(mobile).toContain('productionShotRows(activeProject?.ai)');
+    expect(mobile).toContain('activeStyleReference(activeProject.ai)');
+    expect(mobile).toContain('World/style reference:');
     expect(mobile).toContain('assembleApprovedWriterShots(activeProject)');
     expect(mobile).toContain('Batch image/video generation and signed-in browser automation remain desktop-only');
     expect(mobileStore).toContain('buildApprovedProductionAssemblyPlan(project.ai');

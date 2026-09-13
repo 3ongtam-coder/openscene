@@ -2,10 +2,13 @@ import { useState, type ReactElement } from 'react';
 
 import type { AiProjectDocument } from '../../shared/aiProjectDomain';
 import {
+  activeStyleReference,
   addCharacterReference,
+  assignStyleReference,
   assignStoryboardReference,
   buildApprovedProductionAssemblyPlan,
   clearStoryboardReference,
+  clearStyleReference,
   missingProductionImageTargets,
   productionShotRows,
   removeCharacterReference,
@@ -48,6 +51,7 @@ export function ProductionBoard({
   const images = assets.filter((asset) => asset.kind === 'image');
   const imageById = new Map(images.map((asset) => [asset.id, asset]));
   const referenceById = new Map(document.referenceAssets.map((entry) => [entry.id, entry]));
+  const styleReference = activeStyleReference(document);
   const assembly = buildApprovedProductionAssemblyPlan(document, assets.map((asset) => ({
     id: asset.id, kind: asset.kind, durationMs: asset.metadata?.durationMs ?? null
   })));
@@ -109,6 +113,31 @@ export function ProductionBoard({
       </header>
 
       {message !== null && <StatusCard tone={message.tone}>{message.text}</StatusCard>}
+
+      <div className="production-board__characters">
+        <h4>World/style reference</h4>
+        <p>Choose one approved image as the visual source of truth for every character sheet and storyboard frame in this project. It is attached first; up to two character images fill the remaining provider reference slots.</p>
+        <select
+          aria-label="World and visual style reference"
+          disabled={busy || saving || batchBusy || images.length === 0}
+          value={styleReference?.assetId ?? ''}
+          onChange={(event) => {
+            const asset = imageById.get(event.target.value);
+            void persist(asset === undefined
+              ? clearStyleReference(document)
+              : assignStyleReference(document, {
+                assetId: asset.id,
+                referenceId: `style-reference-${crypto.randomUUID()}`,
+                label: `World style · ${asset.displayName}`
+              }), asset === undefined
+                ? 'Cleared the world/style reference.'
+                : `${asset.displayName} is now the world/style reference for this project.`);
+          }}
+        >
+          <option value="">{images.length === 0 ? 'Import a style image in Editing first' : 'No world/style image'}</option>
+          {images.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}</option>)}
+        </select>
+      </div>
 
       <div className="production-board__characters">
         <h4>Character reference library</h4>

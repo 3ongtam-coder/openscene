@@ -123,6 +123,46 @@ function projectAssetIdsForCharacterReferences(
   });
 }
 
+export function activeStyleReference(document: AiProjectDocument): ReferenceAsset | undefined {
+  return document.referenceAssets.find((reference) => reference.role === 'style');
+}
+
+function productionReferenceAssetIds(
+  document: AiProjectDocument,
+  characterReferenceIds: readonly string[]
+): readonly string[] {
+  const styleAssetId = activeStyleReference(document)?.assetId;
+  return [...new Set([
+    ...(styleAssetId === undefined ? [] : [styleAssetId]),
+    ...projectAssetIdsForCharacterReferences(document, characterReferenceIds)
+  ])].slice(0, 3);
+}
+
+export function assignStyleReference(document: AiProjectDocument, input: {
+  readonly assetId: string;
+  readonly referenceId: string;
+  readonly label: string;
+}): ProductionMutationResult {
+  if (document.referenceAssets.some((reference) => reference.id === input.referenceId && reference.role !== 'style')) {
+    return { ok: false, reason: 'The world/style reference id is already in use.' };
+  }
+  const reference: ReferenceAsset = { id: input.referenceId, assetId: input.assetId, role: 'style', label: input.label };
+  return {
+    ok: true,
+    document: {
+      ...document,
+      referenceAssets: [...document.referenceAssets.filter((entry) => entry.role !== 'style'), reference]
+    }
+  };
+}
+
+export function clearStyleReference(document: AiProjectDocument): ProductionMutationResult {
+  return {
+    ok: true,
+    document: { ...document, referenceAssets: document.referenceAssets.filter((entry) => entry.role !== 'style') }
+  };
+}
+
 function productionNegativePrompt(document: AiProjectDocument, extra: readonly string[]): string {
   return compactParts([
     ...extra,
@@ -143,6 +183,7 @@ export function buildCharacterReferenceImageBrief(
   }
   const style = styleBiblePrompt(document);
   const visualStyle = productionVisualStyle(document);
+  const styleReference = activeStyleReference(document);
   return {
     ok: true,
     brief: {
@@ -153,6 +194,7 @@ export function buildCharacterReferenceImageBrief(
         `Preserve these invariant identity and wardrobe traits exactly: ${character.invariantDescription}.`,
         'Show one person only in a neutral full-body three-quarter pose, with the face unobstructed and the complete outfit clearly visible.',
         'Use a simple uncluttered background and even reference lighting so this image can guide later storyboard and video generations.',
+        styleReference === undefined ? undefined : 'Use the first attached image only as the authoritative world/style reference for linework, palette, lighting, texture and environment design; do not copy its character identity.',
         visualStyle.description,
         style
       ]).join(' '),
@@ -163,7 +205,7 @@ export function buildCharacterReferenceImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: projectAssetIdsForCharacterReferences(document, character.referenceAssetIds)
+      referenceAssetIds: productionReferenceAssetIds(document, character.referenceAssetIds)
     }
   };
 }
@@ -184,10 +226,8 @@ export function buildStoryboardImageBrief(
     const character = document.characters.find((entry) => entry.id === characterId);
     return character === undefined ? [] : [`${character.name}: ${character.invariantDescription}`];
   });
-  const characterReferenceAssetIds = projectAssetIdsForCharacterReferences(document, scene.characterIds.flatMap((characterId) =>
-    document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
-  )).slice(0, 3);
   const visualStyle = productionVisualStyle(document);
+  const styleReference = activeStyleReference(document);
   return {
     ok: true,
     brief: {
@@ -197,6 +237,7 @@ export function buildStoryboardImageBrief(
         `Create a single production storyboard keyframe that can be used as the first frame for ${writerShot.label}.`,
         `Scene: ${scene.title}. Setting: ${scene.setting}. Time of day: ${scene.timeOfDay}.`,
         characters.length > 0 ? `Characters must preserve these approved identities: ${characters.join(' | ')}.` : undefined,
+        styleReference === undefined ? undefined : 'Use the first attached image as the authoritative world/style reference for linework, palette, lighting, texture and environment design. Use the remaining attached images only for character identity.',
         `Framing: ${shot.framing}. Camera: ${shot.cameraMotion}. Visible action at this first frame: ${shot.action}.`,
         scene.continuityNotes.length > 0 ? `Continuity: ${scene.continuityNotes}.` : undefined,
         visualStyle.description,
@@ -208,7 +249,9 @@ export function buildStoryboardImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: characterReferenceAssetIds
+      referenceAssetIds: productionReferenceAssetIds(document, scene.characterIds.flatMap((characterId) =>
+        document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
+      ))
     }
   };
 }
