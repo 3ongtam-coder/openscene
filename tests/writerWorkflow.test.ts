@@ -10,6 +10,7 @@ import {
   parseWriterGenerationInput,
   parseWriterRequest,
   validateWriterDraft,
+  writerDraftDurationMatchesTarget,
   writerDraftDurationSeconds,
   type WriterDraft,
   type WriterRequest
@@ -127,6 +128,8 @@ describe('Writer workflow', () => {
     expect(result.document.scenes[0]?.characterIds).toEqual(['writer-first-character-1']);
     expect(parseAiProjectDocument(result.document)).toEqual(result.document);
     expect(writerDraftDurationSeconds(draft)).toBe(12);
+    expect(writerDraftDurationMatchesTarget(draft, 22)).toBe(true);
+    expect(writerDraftDurationMatchesTarget(draft, 23)).toBe(false);
   });
 
   it('creates a child revision and supersedes its parent only in the applied document', () => {

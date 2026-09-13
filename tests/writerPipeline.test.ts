@@ -240,6 +240,13 @@ describe('manual Writer pipeline', () => {
     expect(() => saveWriterArtifact(state, draft, true)).toThrow('Shot total is 16s');
   });
 
+  it('accepts a shot total within ten seconds of the requested duration', () => {
+    const within = { ...approvedWriting(), requestJson: JSON.stringify({ ...brief, targetDurationSeconds: 26 }) };
+    expect(saveWriterArtifact(within, artifactFromWriterDraft('prompts', production, 'test'), true).artifacts[3]?.approved).toBe(true);
+    const outside = { ...approvedWriting(), requestJson: JSON.stringify({ ...brief, targetDurationSeconds: 27 }) };
+    expect(() => saveWriterArtifact(outside, artifactFromWriterDraft('prompts', production, 'test'), true)).toThrow('within ±10s');
+  });
+
   it('requires exact canonical character names when approving production prompts', () => {
     const changed = { ...production, scenes: [{ ...production.scenes[0]!, characterNames: ['grog'] }] };
     expect(() => saveWriterArtifact(approvedWriting(), artifactFromWriterDraft('prompts', changed, 'test'), true)).toThrow('canonical');

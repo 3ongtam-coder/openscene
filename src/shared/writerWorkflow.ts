@@ -541,6 +541,9 @@ const VIDEO_STYLE_GUIDES: Record<WriterVideoStyle, string> = {
     'VIDEO STYLE - TRADITIONAL 2D CEL ANIMATION: use hand-drawn linework, expressive key poses, readable in-betweens, painted cel fills, deliberate limited animation where it strengthens the rhythm, and layered multiplane depth. Favor graphic silhouettes, drawn effects and practical-looking animation texture over photorealism or 3D CGI.'
 };
 
+/** Generative shot planning is approximate; allow a small total-duration drift. */
+export const WRITER_DURATION_TOLERANCE_SECONDS = 10;
+
 const EMOTIONAL_GOAL_GUIDES: Record<WriterEmotionalGoal, string> = {
   'inspire':
     'EMOTIONAL GOAL — INSPIRE: build toward a moment of genuine possibility. The viewer should leave feeling that something previously out of reach is now attainable. Use aspiration, never motivation-speak.',
@@ -594,6 +597,10 @@ export function writerDraftDurationSeconds(draft: WriterDraft): number {
     (sceneTotal, scene) => sceneTotal + scene.shots.reduce((shotTotal, shot) => shotTotal + shot.durationSeconds, 0),
     0
   );
+}
+
+export function writerDraftDurationMatchesTarget(draft: WriterDraft, targetSeconds: number): boolean {
+  return Math.abs(writerDraftDurationSeconds(draft) - targetSeconds) <= WRITER_DURATION_TOLERANCE_SECONDS;
 }
 
 // Writing-only stages use a small response schema. The bridge keeps its existing
