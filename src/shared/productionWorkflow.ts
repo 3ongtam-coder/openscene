@@ -64,7 +64,7 @@ export type ProductionImageBrief = {
   /** Full Writer direction, separate from the editable subject prompt. */
   readonly styleDescription: string;
   readonly styleSource: 'writer' | 'fallback';
-  /** Approved Character/Shot reference IDs to load into the provider request. */
+  /** Project media asset IDs for approved images to load into the provider request. */
   readonly referenceAssetIds: readonly string[];
 };
 
@@ -112,6 +112,17 @@ export function productionVisualStyle(document: AiProjectDocument | null | undef
   };
 }
 
+function projectAssetIdsForCharacterReferences(
+  document: AiProjectDocument,
+  referenceIds: readonly string[]
+): readonly string[] {
+  const referenceById = new Map(document.referenceAssets.map((reference) => [reference.id, reference]));
+  return referenceIds.flatMap((referenceId) => {
+    const reference = referenceById.get(referenceId);
+    return reference?.role === 'character' ? [reference.assetId] : [];
+  });
+}
+
 function productionNegativePrompt(document: AiProjectDocument, extra: readonly string[]): string {
   return compactParts([
     ...extra,
@@ -152,7 +163,7 @@ export function buildCharacterReferenceImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: character.referenceAssetIds.filter((referenceId) => document.referenceAssets.some((reference) => reference.id === referenceId && reference.role === 'character'))
+      referenceAssetIds: projectAssetIdsForCharacterReferences(document, character.referenceAssetIds)
     }
   };
 }
@@ -173,9 +184,9 @@ export function buildStoryboardImageBrief(
     const character = document.characters.find((entry) => entry.id === characterId);
     return character === undefined ? [] : [`${character.name}: ${character.invariantDescription}`];
   });
-  const characterReferenceIds = scene.characterIds.flatMap((characterId) =>
+  const characterReferenceAssetIds = projectAssetIdsForCharacterReferences(document, scene.characterIds.flatMap((characterId) =>
     document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
-  ).filter((referenceId) => document.referenceAssets.some((reference) => reference.id === referenceId && reference.role === 'character')).slice(0, 3);
+  )).slice(0, 3);
   const visualStyle = productionVisualStyle(document);
   return {
     ok: true,
@@ -197,7 +208,7 @@ export function buildStoryboardImageBrief(
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
       styleSource: visualStyle.source,
-      referenceAssetIds: characterReferenceIds
+      referenceAssetIds: characterReferenceAssetIds
     }
   };
 }

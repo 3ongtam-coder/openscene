@@ -96,7 +96,7 @@ describe('production storyboard workflow', () => {
       expect(storyboardBrief.brief.prompt).toContain('Ari: Red coat');
       expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
       expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
-      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['reference-thok']);
+      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['asset-thok']);
     }
   });
 

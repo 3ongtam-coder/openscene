@@ -95,6 +95,7 @@ describe('still-to-video handoff', () => {
 describe('Writer production-image handoff', () => {
   const app = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.tsx'), 'utf8');
   const imageStudio = readFileSync(resolve(process.cwd(), 'src/renderer/src/ImageGenerationWorkspace.tsx'), 'utf8');
+  const productionWorkflow = readFileSync(resolve(process.cwd(), 'src/shared/productionWorkflow.ts'), 'utf8');
 
   it('imports a reviewed generated still before attaching it to the exact Writer target', () => {
     expect(app).toContain('const [productionImageHandoff, setProductionImageHandoff]');
@@ -110,6 +111,7 @@ describe('Writer production-image handoff', () => {
     expect(imageStudio).toContain('Custom image style');
     expect(imageStudio).toContain('aiGetProjectImageReference');
     expect(imageStudio).toContain('referenceImages');
+    expect(productionWorkflow).toContain('reference.assetId');
     expect(imageStudio).toContain('nothing is attached until you approve a completed image');
     expect(imageStudio).toContain('handleAttachToProduction(job)');
     expect(imageStudio).toContain('Attach to ${productionTargetByJob[job.id]!.targetLabel}');

@@ -108,6 +108,8 @@ export function ProductionBoard({
         <StatusCard tone={assembly.ok ? 'success' : 'neutral'}>{rows.filter((row) => row.state === 'approved').length}/{rows.length} shots approved</StatusCard>
       </header>
 
+      {message !== null && <StatusCard tone={message.tone}>{message.text}</StatusCard>}
+
       <div className="production-board__characters">
         <h4>Character reference library</h4>
         {activeCharacters.length === 0 && <span>This Writer version has no named characters.</span>}
@@ -187,7 +189,6 @@ export function ProductionBoard({
         </li>)}
       </ol>
 
-      {message !== null && <StatusCard tone={message.tone}>{message.text}</StatusCard>}
       {!assembly.ok && <StatusCard tone="neutral">Assembly blocked: {assembly.reason}</StatusCard>}
       <div className="production-board__actions">
         <Button variant="default" disabled={busy || saving || batchBusy || missingCharacterTargets.length === 0}
