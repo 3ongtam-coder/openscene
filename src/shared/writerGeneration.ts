@@ -65,12 +65,22 @@ export async function requestGeminiWriter(input: GeminiWriterInput): Promise<Wri
           contents: [{ role: 'user', parts: [{ text: compileWriterPrompt(request) }] }],
           generationConfig: {
             responseMimeType: 'application/json',
-            responseJsonSchema: writerResponseSchema(request)
+            // The nested scene/shot schema may exceed Gemini's structured
+            // output complexity limit and fail with a generic 400. For the
+            // final production stage JSON mode plus the prompt contract keeps
+            // the request small; validateWriterResponse remains authoritative.
+            ...(request.stage === 'prompts' ? {} : { responseJsonSchema: writerResponseSchema(request) })
           }
         })
       }
     );
     if (!response.ok) {
+      if (response.status === 400 && request.stage === 'prompts') {
+        // Gemini can echo pieces of submitted content in an error body. Do not
+        // surface it, and do not retry a potentially billable request for the
+        // user. The approved upstream artifacts remain available for a retry.
+        throw new Error('Gemini rejected Video prompts (HTTP 400). The approved stages are unchanged. Try a shorter approved breakdown or another Writer model; no automatic retry was sent.');
+      }
       const detail = await providerError(response, input.apiKey.trim());
       throw new Error(`Gemini Writer failed with status ${response.status}${detail.length > 0 ? `: ${detail}` : ''}.`);
     }

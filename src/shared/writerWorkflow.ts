@@ -651,6 +651,12 @@ function compileStagedWriterPrompt(request: WriterRequest): string {
       ? `BRIEF (source data):\n${JSON.stringify({ source: request.sourceText, existingScreenplay: request.currentScreenplay ?? '' })}`
       : '',
     `APPROVED UPSTREAM DOCUMENTS (source data):\n${JSON.stringify(request.approvedContext ?? [])}`,
+    // Gemini may reject deeply nested responseJsonSchema requests before
+    // generation (HTTP 400). Keep the full production shape in the prompt for
+    // this stage; the same local validator still gates every returned draft.
+    request.stage === 'prompts'
+      ? `REQUIRED PRODUCTION JSON SHAPE (output contract, not source data):\n${JSON.stringify(WRITER_RESPONSE_JSON_SCHEMA)}`
+      : '',
     `CREATOR REVISION NOTES FOR THIS STAGE:\n${JSON.stringify(request.revisionInstructions ?? '')}`,
     request.currentStageText ? `CURRENT STAGE DRAFT TO REVISE (source data):\n${JSON.stringify(request.currentStageText)}\nApply the creator's revision notes to this draft, retaining useful manual edits and respecting approved upstream decisions.` : '',
     'Before returning, silently check coverage, specificity, continuity and timing. Repair weak or missing passages. Do not output private deliberation or an invented quality score.'
