@@ -1,5 +1,6 @@
 import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { ReferenceImageSelection } from '../shared/providerSeams';
+import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 
 const POLL_INTERVAL_MS = 1_000;
 
@@ -132,10 +133,10 @@ async function readState(webContents: WebContents): Promise<GrokImagineAutomatio
 }
 
 function throwForAction(state: GrokImagineAutomationState): void {
-  if (state.actionRequired === 'sign_in') throw new Error('The Grok browser session has expired. Sign in again in Settings, then retry.');
-  if (state.actionRequired === 'verification') throw new Error('Grok requires CAPTCHA or account verification. Complete it manually in the signed-in session, then retry.');
-  if (state.actionRequired === 'rate_limit') throw new Error('Grok has reached the account usage or credit limit. Check the account, then retry.');
-  if (state.actionRequired === 'unavailable') throw new Error('Grok Imagine is unavailable for this account or region.');
+  if (state.actionRequired === 'sign_in') throw new BrowserGenerationActionRequiredError('sign_in', 'The Grok browser session has expired. Sign in again in Settings, then start a new generation.');
+  if (state.actionRequired === 'verification') throw new BrowserGenerationActionRequiredError('verification', 'Grok requires CAPTCHA or account verification. Complete it manually in the signed-in session, then start a new generation.');
+  if (state.actionRequired === 'rate_limit') throw new BrowserGenerationActionRequiredError('rate_limit', 'Grok has reached the account usage or credit limit. Check the account before starting a new generation.');
+  if (state.actionRequired === 'unavailable') throw new BrowserGenerationActionRequiredError('unavailable', 'Grok Imagine is unavailable for this account or region.');
 }
 
 async function selectMenuText(webContents: WebContents, button: Rectangle | undefined, expected: string): Promise<void> {

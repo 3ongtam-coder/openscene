@@ -12,7 +12,9 @@ export type ImageGenerationProviderId =
   | 'stability_image'
   | 'flux_image'
   | 'alibaba_wan_image';
-export type ProviderJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+export const BROWSER_GENERATION_ACTIONS = ['sign_in', 'verification', 'rate_limit', 'unavailable'] as const;
+export type BrowserGenerationAction = (typeof BROWSER_GENERATION_ACTIONS)[number];
+export type ProviderJobStatus = 'queued' | 'running' | 'needs_user_action' | 'completed' | 'failed';
 /** Media generation can use a cloud API, an isolated signed-in browser, or a user-managed local runtime. */
 export type ProviderExecutionMode = 'api' | 'browser_session' | 'local';
 
@@ -94,6 +96,8 @@ export interface VideoGenerationJob {
   modelId?: string;
   outputAssetId?: string;
   previewUrl?: string;
+  /** Why a signed-in browser job stopped without being retried automatically. */
+  actionRequired?: BrowserGenerationAction;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -188,6 +192,8 @@ export interface ImageGenerationJob {
   /** Inline preview so the renderer can show the result without a file path. */
   previewMimeType?: string;
   previewBase64?: string;
+  /** Why a signed-in browser job stopped without being retried automatically. */
+  actionRequired?: BrowserGenerationAction;
   error?: string;
   createdAt: string;
   updatedAt: string;

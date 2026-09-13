@@ -12,6 +12,7 @@ import {
   setAiJobManagerBrowserVideoGenerator
 } from '../src/main/aiJobManager';
 import { createVoiceDeliverySettings } from '../src/shared/voiceDelivery';
+import { BrowserGenerationActionRequiredError } from '../src/main/browserGenerationAction';
 
 describe('AI Job Manager and cloud provider seams', () => {
   it('rejects a cross-domain model id before creating a video job', async () => {
@@ -223,6 +224,42 @@ describe('AI Job Manager and cloud provider seams', () => {
       expect(videoGenerate).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-imagine-video-1.5', operation: 'text_to_video', durationSeconds: 6 }));
       expect(getImageGenerationJob(imageJob.id)?.status).toBe('completed');
       expect(getVideoGenerationJob(videoJob.id)?.status).toBe('completed');
+    } finally {
+      setAiJobManagerBrowserImageGenerator(undefined);
+      setAiJobManagerBrowserVideoGenerator(undefined);
+    }
+  }, 10_000);
+
+  it('preserves browser account interventions as needs_user_action without exposing private output state', async () => {
+    const imageGenerate = vi.fn(async () => {
+      throw new BrowserGenerationActionRequiredError('verification', 'Complete the provider verification, then start a new generation.');
+    });
+    const videoGenerate = vi.fn(async () => {
+      throw new BrowserGenerationActionRequiredError('rate_limit', 'Check the provider account limit before starting a new generation.');
+    });
+    setAiJobManagerBrowserImageGenerator(imageGenerate);
+    setAiJobManagerBrowserVideoGenerator(videoGenerate);
+    try {
+      const imageJob = await createImageGenerationJob({
+        prompt: 'An image requiring account verification', aspectRatio: '1:1', modelId: 'grok-imagine-image'
+      });
+      const videoJob = await createVideoGenerationJob({
+        prompt: 'A video at an account limit', aspectRatio: '16:9', durationSeconds: 6, modelId: 'grok-imagine-video-1.5'
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+      expect(getImageGenerationJob(imageJob.id)).toMatchObject({
+        status: 'needs_user_action', actionRequired: 'verification',
+        error: 'Complete the provider verification, then start a new generation.'
+      });
+      expect(getVideoGenerationJob(videoJob.id)).toMatchObject({
+        status: 'needs_user_action', actionRequired: 'rate_limit',
+        error: 'Check the provider account limit before starting a new generation.'
+      });
+      expect(getImageGenerationJob(imageJob.id)).not.toHaveProperty('outputFilePath');
+      expect(getVideoGenerationJob(videoJob.id)).not.toHaveProperty('outputFilePath');
+      expect(getCompletedAiSource(imageJob.id)).toBeNull();
+      expect(getCompletedAiSource(videoJob.id)).toBeNull();
     } finally {
       setAiJobManagerBrowserImageGenerator(undefined);
       setAiJobManagerBrowserVideoGenerator(undefined);

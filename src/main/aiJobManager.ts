@@ -48,6 +48,7 @@ import type { VieNeuRuntimeController } from './managedVieNeuRuntime';
 import { googleFlowVideoDurationOptions, googleFlowVideoModelFor } from '../shared/browserSession';
 import { recoverVideoJobAfterRestart } from '../shared/videoJobRecovery';
 import { VideoJobRecoveryStore, type PersistedVideoGenerationJob } from './videoJobRecoveryStore';
+import { browserGenerationActionFromError } from './browserGenerationAction';
 
 const videoJobs = new Map<string, PersistedVideoGenerationJob>();
 type InternalSpeechGenerationJob = TextToSpeechJob & { outputFilePath?: string };
@@ -624,15 +625,18 @@ export async function createVideoGenerationJob(request: VideoGenerationRequest):
       // release only takes back a reservation that is still pending, so a
       // failure after the request went out leaves the charge standing.
       await settleSpend(reservationId, 'released');
-      job.status = 'failed';
+      const actionRequired = browserGenerationActionFromError(err);
+      job.status = actionRequired === undefined ? 'failed' : 'needs_user_action';
+      if (actionRequired === undefined) delete job.actionRequired;
+      else job.actionRequired = actionRequired;
       job.error = err instanceof Error ? err.message : 'Video generation failed';
       job.updatedAt = new Date().toISOString();
       videoJobs.set(id, job);
       await persistVideoJobsBestEffort(id);
-      logVideoJob(id, 'request.failed', {
+      logVideoJob(id, actionRequired === undefined ? 'request.failed' : 'request.needs_user_action', {
         elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
-        error: job.error
-      }, 'error');
+        ...(actionRequired === undefined ? { error: job.error } : { actionRequired })
+      }, actionRequired === undefined ? 'error' : 'info');
     }
   }, 1000);
 
@@ -749,16 +753,20 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
       // release only takes back a reservation that is still pending, so a
       // failure after the request went out leaves the charge standing.
       await settleSpend(reservationId, 'released');
+      const actionRequired = browserGenerationActionFromError(err);
       imageJobs.set(id, {
         ...running,
-        status: 'failed',
+        status: actionRequired === undefined ? 'failed' : 'needs_user_action',
+        ...(actionRequired === undefined ? {} : { actionRequired }),
         error: err instanceof Error ? err.message : 'Image generation failed',
         updatedAt: new Date().toISOString()
       });
-      logImageJob(id, 'request.failed', {
+      logImageJob(id, actionRequired === undefined ? 'request.failed' : 'request.needs_user_action', {
         elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
-        error: err instanceof Error ? err.message : 'Image generation failed'
-      }, 'error');
+        ...(actionRequired === undefined
+          ? { error: err instanceof Error ? err.message : 'Image generation failed' }
+          : { actionRequired })
+      }, actionRequired === undefined ? 'error' : 'info');
     }
   }, 0);
 

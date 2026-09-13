@@ -184,6 +184,12 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
           if (updated.status === 'completed') {
             stopPolling();
             setStatusMsg({ text: 'Image ready.', tone: 'success' });
+          } else if (updated.status === 'needs_user_action') {
+            stopPolling();
+            setStatusMsg({
+              text: updated.error ?? 'The signed-in browser session needs attention. Resolve it in Settings, then start a new generation.',
+              tone: 'warning'
+            });
           } else if (updated.status === 'failed') {
             stopPolling();
             setStatusMsg({ text: updated.error ?? 'Image generation failed.', tone: 'danger' });
@@ -375,7 +381,7 @@ export function ImageGenerationWorkspace({ onUseForVideo, projectName, productio
                     />
                   )}
                   <p className="studio-job__prompt">{job.prompt}</p>
-                  {job.status === 'failed' && job.error !== undefined && (
+                  {(job.status === 'failed' || job.status === 'needs_user_action') && job.error !== undefined && (
                     <p className="studio-job__error">{job.error}</p>
                   )}
                   {job.status === 'completed' && (

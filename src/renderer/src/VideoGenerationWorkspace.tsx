@@ -314,6 +314,16 @@ export function VideoGenerationWorkspace({
             status: 'completed', updatedAt: updatedJob.updatedAt
           }));
           setStatusMsg({ text: 'Video generation completed! Asset ready.', tone: 'success' });
+        } else if (updatedJob.status === 'needs_user_action') {
+          stopPolling(intervalId);
+          setIsGenerating(activePollJobs.current.size > 0);
+          if (targetWriterShotId !== '') await persistCandidateChange((document) => updateGenerationCandidate(document, job.id, {
+            status: 'needs_user_action', error: updatedJob.error ?? 'Browser session action is required.', updatedAt: updatedJob.updatedAt
+          }));
+          setStatusMsg({
+            text: updatedJob.error ?? 'The signed-in browser session needs attention. Resolve it in Settings, then start a new generation.',
+            tone: 'warning'
+          });
         } else if (updatedJob.status === 'failed') {
           stopPolling(intervalId);
           setIsGenerating(activePollJobs.current.size > 0);
@@ -382,7 +392,7 @@ export function VideoGenerationWorkspace({
           setStatusMsg({ tone: 'danger', text: 'Interrupted candidate recovery could not be saved. Reopen the project to retry recovery.' });
           continue;
         }
-        if (saved && (recoveredJob === null || recoveredJob.status === 'failed')) {
+        if (saved && (recoveredJob === null || recoveredJob.status === 'failed' || recoveredJob.status === 'needs_user_action')) {
           setStatusMsg({
             tone: 'warning',
             text: recoveredJob?.error ?? 'An interrupted candidate was recovered without resubmitting it to the provider.'
@@ -1118,7 +1128,10 @@ export function VideoGenerationWorkspace({
                       {(writerDocument?.generations.find((entry) => entry.id === job.id)?.outputAssetIds.length ?? 0) > 0 ? 'Imported' : 'Import to project'}
                     </Button>
                   )}
-                  {(job.status === 'completed' || job.status === 'failed') && (
+                  {(job.status === 'failed' || job.status === 'needs_user_action') && job.error !== undefined && (
+                    <p className="studio-job__error">{job.error}</p>
+                  )}
+                  {(job.status === 'completed' || job.status === 'failed' || job.status === 'needs_user_action') && (
                     <Button
                       variant="ghost"
                       disabled={isGenerating}
@@ -1179,7 +1192,7 @@ export function VideoGenerationWorkspace({
                     {outputNames.length === 0
                       ? <p className="studio-reference__empty">Not imported. Import the completed job above before approval.</p>
                       : <p className="studio-reference__empty">Project asset: {outputNames.join(', ')}</p>}
-                    {candidate.status === 'failed' && candidate.error !== undefined && <p className="studio-job__error">{candidate.error}</p>}
+                    {(candidate.status === 'failed' || candidate.status === 'needs_user_action') && candidate.error !== undefined && <p className="studio-job__error">{candidate.error}</p>}
                     <div className="studio-candidate__checklist" aria-label="Human continuity review">
                       {CONTINUITY_REVIEW_FIELDS.map((field) => (
                         <div className="studio-candidate__check" key={field}>

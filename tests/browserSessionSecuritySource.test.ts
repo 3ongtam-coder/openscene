@@ -58,6 +58,7 @@ describe('browser session security wiring', () => {
     expect(service).toContain("partition: partitionFor(providerId)");
     expect(service).toContain("isolatedSession!.on('will-download'");
     expect(service).not.toMatch(/fetch\(|batchexecute|StreamGenerate/);
+    expect(automation).toContain('BrowserGenerationActionRequiredError');
     expect(automation).toContain("a[href*=\"/fx/tools/flow/project/\"]");
     expect(automation).toContain("button, [role=\"button\"], a, [tabindex=\"0\"]");
     expect(automation).toContain('projectCandidates');
@@ -85,6 +86,7 @@ describe('browser session security wiring', () => {
     expect(studio).toContain('showBrowserWindow: flowWindowVisible');
     expect(studio).toContain('flowProjectName');
     expect(mobile).toContain('Signed-in Google Flow automation is desktop-only');
+    expect(studio).toContain("updated.status === 'needs_user_action'");
   });
 
   it('keeps Flow video generation on the same isolated session boundary and validates MP4 bytes', async () => {
@@ -101,6 +103,7 @@ describe('browser session security wiring', () => {
     expect(service).toContain('item.getReceivedBytes() <= MAX_BROWSER_VIDEO_BYTES');
     expect(service).toContain('webContents.downloadURL(generatedVideoUrl)');
     expect(service).not.toMatch(/batchexecute|StreamGenerate/);
+    expect(automation).toContain('BrowserGenerationActionRequiredError');
     expect(automation).toContain("input[type=\"file\"]");
     expect(automation).toContain("input.operation === 'start_end'");
     expect(automation).toContain('googleFlowVideoModelLabel(input.model)');
@@ -111,5 +114,23 @@ describe('browser session security wiring', () => {
     expect(studio).toContain('showBrowserWindow: flowWindowVisible');
     expect(jobs).toContain('setAiJobManagerBrowserVideoGenerator');
     expect(mobile).toContain('Signed-in Google Flow video automation is desktop-only');
+    expect(mobile).toContain('Grok Imagine browser automation is desktop-only too');
+    expect(studio).toContain("updatedJob.status === 'needs_user_action'");
+    expect(studio).toContain("job.status === 'needs_user_action'");
+  });
+
+  it('maps Grok browser challenges to the same explicit user-action boundary', async () => {
+    const [automation, jobs, imageStudio, videoStudio] = await Promise.all([
+      readRepo('src/main/grokImagineAutomation.ts'),
+      readRepo('src/main/aiJobManager.ts'),
+      readRepo('src/renderer/src/ImageGenerationWorkspace.tsx'),
+      readRepo('src/renderer/src/VideoGenerationWorkspace.tsx')
+    ]);
+    expect(automation).toContain('BrowserGenerationActionRequiredError');
+    expect(automation).toContain("'verification'");
+    expect(automation).toContain("'rate_limit'");
+    expect(jobs).toContain("'request.needs_user_action'");
+    expect(imageStudio).toContain("updated.status === 'needs_user_action'");
+    expect(videoStudio).toContain("updatedJob.status === 'needs_user_action'");
   });
 });

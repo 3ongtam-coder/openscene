@@ -1,5 +1,6 @@
 import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { GoogleFlowImageModel } from '../shared/browserSession';
+import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 
 const POLL_INTERVAL_MS = 1_000;
 const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
@@ -393,15 +394,15 @@ function normalizedLabel(value: string): string {
 
 function actionRequiredError(kind: NonNullable<AutomationState['actionRequired']>): Error {
   if (kind === 'sign_in') {
-    return new Error('The Google Flow session has expired. Open Settings, sign in to Google Flow again, then retry.');
+    return new BrowserGenerationActionRequiredError('sign_in', 'The Google Flow session has expired. Open Settings, sign in to Google Flow again, then start a new generation.');
   }
   if (kind === 'verification') {
-    return new Error('Google requires a CAPTCHA or account verification. Open the Flow session in Settings and complete it manually, then retry.');
+    return new BrowserGenerationActionRequiredError('verification', 'Google requires a CAPTCHA or account verification. Open the Flow session in Settings, complete it manually, then start a new generation.');
   }
   if (kind === 'unavailable') {
-    return new Error('Google Flow is not available for this account or region. Open the Flow session in Settings to check access.');
+    return new BrowserGenerationActionRequiredError('unavailable', 'Google Flow is not available for this account or region. Open the Flow session in Settings to check access.');
   }
-  return new Error('Google Flow has reached the account usage or credit limit. Wait for it to reset or check the Google plan, then retry.');
+  return new BrowserGenerationActionRequiredError('rate_limit', 'Google Flow has reached the account usage or credit limit. Wait for it to reset or check the Google plan before starting a new generation.');
 }
 
 function throwForAction(state: AutomationState): void {

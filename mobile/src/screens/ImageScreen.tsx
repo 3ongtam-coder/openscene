@@ -158,7 +158,12 @@ export function ImageScreen({
       />
       {model?.providerId === 'google_gemini' && (
         <Text style={styles.sessionNote}>
-          Signed-in Google Flow automation is desktop-only. Mobile continues to use the official Gemini API key.
+          Signed-in Google Flow automation is desktop-only. Manual login or verification must be resolved on desktop; mobile continues to use the official Gemini API key.
+        </Text>
+      )}
+      {model?.providerId === 'xai' && (
+        <Text style={styles.sessionNote}>
+          Signed-in Grok Imagine automation is desktop-only. Manual login or verification must be resolved on desktop; mobile uses supported official API-key routes only.
         </Text>
       )}
 

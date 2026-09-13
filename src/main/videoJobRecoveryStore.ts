@@ -4,16 +4,16 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { VIDEO_OPERATIONS } from '../shared/mediaCapabilityRegistry';
-import type { VideoGenerationJob, VideoGenerationProviderId } from '../shared/providerSeams';
+import { BROWSER_GENERATION_ACTIONS, type VideoGenerationJob, type VideoGenerationProviderId } from '../shared/providerSeams';
 
 const VIDEO_JOB_JOURNAL_SCHEMA_VERSION = 1;
 const MAXIMUM_RETAINED_VIDEO_JOBS = 200;
 const MAXIMUM_JOURNAL_BYTES = 4 * 1024 * 1024;
 const PROVIDERS: readonly VideoGenerationProviderId[] = [
-  'gemini_veo', 'gemini_omni', 'openai_sora', 'runway_gen4', 'kling_v3',
+  'gemini_veo', 'gemini_omni', 'grok_imagine', 'openai_sora', 'runway_gen4', 'kling_v3',
   'luma_dream', 'minimax_hailuo', 'comfyui_wan'
 ];
-const STATUSES = ['queued', 'running', 'completed', 'failed'] as const;
+const STATUSES = ['queued', 'running', 'needs_user_action', 'completed', 'failed'] as const;
 const MODES = ['api', 'browser_session', 'local'] as const;
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'] as const;
 
@@ -56,6 +56,9 @@ export function parsePersistedVideoJob(value: unknown): PersistedVideoGeneration
     !optionalBoundedString(job.modelId, 500) ||
     !optionalBoundedString(job.outputAssetId, 160) ||
     !optionalBoundedString(job.error, 10_000) ||
+    (job.actionRequired !== undefined && !BROWSER_GENERATION_ACTIONS.includes(job.actionRequired as (typeof BROWSER_GENERATION_ACTIONS)[number])) ||
+    ((job.status === 'needs_user_action') !== (job.actionRequired !== undefined)) ||
+    (job.status === 'needs_user_action' && job.mode !== 'browser_session') ||
     (job.operation !== undefined && !VIDEO_OPERATIONS.includes(job.operation as (typeof VIDEO_OPERATIONS)[number])) ||
     (job.outputFilePath !== undefined && (!boundedString(job.outputFilePath, 32_768) || !isAbsolute(job.outputFilePath)))
   ) return null;
@@ -76,6 +79,7 @@ export function parsePersistedVideoJob(value: unknown): PersistedVideoGeneration
     ...(job.modelId === undefined ? {} : { modelId: job.modelId as string }),
     ...(job.outputAssetId === undefined ? {} : { outputAssetId: job.outputAssetId as string }),
     ...(job.outputFilePath === undefined ? {} : { outputFilePath: resolve(job.outputFilePath as string) }),
+    ...(job.actionRequired === undefined ? {} : { actionRequired: job.actionRequired as NonNullable<PersistedVideoGenerationJob['actionRequired']> }),
     ...(job.error === undefined ? {} : { error: job.error as string })
   };
 }
