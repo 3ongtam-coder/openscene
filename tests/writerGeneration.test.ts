@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { requestAgentRouterWriter, requestGeminiWriter } from '../src/shared/writerGeneration';
+import { extractWriterJson, requestAgentRouterWriter, requestGeminiWriter } from '../src/shared/writerGeneration';
 import { WRITER_RESPONSE_JSON_SCHEMA, type WriterDraft, type WriterRequest } from '../src/shared/writerWorkflow';
 
 const request: WriterRequest = {
@@ -26,6 +26,23 @@ describe('Gemini Writer generation', () => {
       { stage: 'breakdown', content: 'Approved scene budgets' }
     ]
   };
+
+  it('extracts a complete object from a JSON fence or short model preamble', () => {
+    expect(extractWriterJson('Here is the requested JSON:\n```json\n{"title":"ok"}\n```\n')).toBe('{"title":"ok"}');
+    expect(extractWriterJson('{"title":"brace } in string"} trailing text')).toBe('{"title":"brace } in string"}');
+    expect(extractWriterJson('{"title":"unfinished"')).toBeNull();
+  });
+
+  it('ignores thought parts when a visible JSON part is present', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ candidates: [{
+      content: { parts: [{ text: 'internal thought', thought: true }, { text: JSON.stringify(draft) }] },
+      finishReason: 'STOP'
+    }] }), { status: 200 }));
+
+    await expect(requestGeminiWriter({
+      apiKey: 'test-key', modelId: 'gemini-3.1-flash-lite', request: promptsRequest, fetchImpl
+    })).resolves.toMatchObject({ title: draft.title });
+  });
 
   it('uses JSON mode without the deeply nested response schema at video prompts', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -54,6 +71,16 @@ describe('Gemini Writer generation', () => {
       apiKey: 'test-key', modelId: 'gemini-3.1-flash-lite', request: promptsRequest, fetchImpl
     })).rejects.toThrow('invalid project draft');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a truncated response instead of the misleading invalid JSON error', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ candidates: [{
+      content: { parts: [{ text: '{"title":"cut off' }] }, finishReason: 'MAX_TOKENS'
+    }] }), { status: 200 }));
+
+    await expect(requestGeminiWriter({
+      apiKey: 'test-key', modelId: 'gemini-3.1-flash-lite', request: promptsRequest, fetchImpl
+    })).rejects.toThrow(/truncated before valid JSON.*MAX_TOKENS/);
   });
 
   it('does not expose a prompt echoed by a stage-4 HTTP 400 or retry automatically', async () => {
