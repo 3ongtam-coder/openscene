@@ -320,6 +320,23 @@ export function buildGoogleFlowStateProbeScript(): string {
     });
 
     const body = (document.body?.innerText || '').toLowerCase();
+    // Do not classify a Flow account as rate-limited from arbitrary page text.
+    // The page can keep old job history, help text, or hidden bootstrap content
+    // mounted while the composer is ready. Only visible status surfaces are
+    // actionable provider signals; this also keeps prompt/history text out of
+    // the returned state and logs.
+    const attentionText = visible([
+      '[role="alert"]',
+      '[role="alertdialog"]',
+      '[role="status"]',
+      '[aria-live="assertive"]',
+      '[aria-live="polite"]',
+      '[data-testid*="toast" i]',
+      '[data-testid*="snackbar" i]',
+      '[class*="toast" i]',
+      '[class*="snackbar" i]',
+      '[class*="banner" i]'
+    ].join(',')).map(({ element }) => (element.textContent || '').trim()).join(' ').toLowerCase();
     // Google can keep invisible reCAPTCHA/bootstrap elements mounted on an
     // already authenticated Flow page. Only stop for a challenge which is
     // actually visible to the user; otherwise the project list is incorrectly
@@ -347,9 +364,9 @@ export function buildGoogleFlowStateProbeScript(): string {
       actionRequired = 'verification';
     } else if (location.hostname === 'accounts.google.com' || (/sign in|đăng nhập/.test(body) && !input && !projectLink)) {
       actionRequired = 'sign_in';
-    } else if (/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)) {
+    } else if (/rate limit|usage limit|not enough credits|insufficient credits|quota exceeded|hết tín dụng|đã đạt giới hạn/.test(attentionText)) {
       actionRequired = 'rate_limit';
-    } else if (/flow is not available|isn't available in your country|not available in your country/.test(body)) {
+    } else if (/flow is not available|isn't available in your country|not available in your country/.test(attentionText)) {
       actionRequired = 'unavailable';
     }
 
@@ -653,23 +670,28 @@ async function selectConfigurationChoice(
   expected: string | readonly string[]
 ): Promise<void> {
   const expectedLabel = typeof expected === 'string' ? expected : expected[0]!;
-  let state = await readState(webContents);
-  throwForAction(state);
-  let choice = findChoice(state, expected);
-  if (choice === undefined) {
-    // Some Flow revisions close the popover after each selection. Reopen the
-    // same bottom configuration pill before declaring the option unavailable.
-    clickAt(webContents, configButton);
-    await delay(300);
-    state = await readState(webContents);
+  // Flow sometimes paints the configuration pill before its menu entries.
+  // Poll briefly before reopening it; clicking a half-painted pill can close
+  // the menu and was the source of the intermittent "Image option" error.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let state = await readState(webContents);
     throwForAction(state);
-    choice = findChoice(state, expected);
+    const choice = findChoice(state, expected);
+    if (choice !== undefined) {
+      if (!choice.selected) {
+        clickAt(webContents, choice.rectangle);
+        await delay(500);
+      }
+      return;
+    }
+    if (attempt === 3 || attempt === 7) {
+      // Some Flow revisions close the popover after each selection. Reopen the
+      // current pill, not the stale rectangle from before the selection.
+      clickAt(webContents, state.configButton?.rectangle ?? configButton);
+    }
+    await delay(250);
   }
-  if (choice === undefined) throw new Error(`Google Flow configuration did not expose the ${expectedLabel} option.`);
-  if (!choice.selected) {
-    clickAt(webContents, choice.rectangle);
-    await delay(500);
-  }
+  throw new Error(`Google Flow configuration did not expose the ${expectedLabel} option after waiting for the menu to load.`);
 }
 
 async function configureGeneration(

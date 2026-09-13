@@ -1,6 +1,7 @@
 import type { AiProjectDocument, GenerationRecord, ReferenceAsset } from './aiProjectDomain';
 import type { ImageAspectRatio } from './providerSeams';
-import { approvedWriterShots } from './writerPipeline';
+import { approvedWriterShots, pipelineBaseRequest } from './writerPipeline';
+import { writerVideoStyleDirection } from './writerWorkflow';
 import { DEFAULT_CLIP_EFFECTS, type TimelineDocument } from './timelineTypes';
 import { placeClip } from './timelineClipLogic';
 import { trackAppendStartMs } from './timelineClipPlacement';
@@ -50,13 +51,19 @@ export type ProductionImageTarget =
   | { readonly kind: 'character_reference'; readonly characterId: string }
   | { readonly kind: 'storyboard'; readonly shotId: string };
 
+export const PRODUCTION_BATCH_LIMIT = 50;
+
 export type ProductionImageBrief = {
   readonly target: ProductionImageTarget;
   readonly targetLabel: string;
   readonly prompt: string;
   readonly negativePrompt: string;
   readonly aspectRatio: ImageAspectRatio;
-  readonly stylePreset: 'Cinematic';
+  /** Exact style label recorded with the provider job for later audit. */
+  readonly stylePreset: string;
+  /** Full Writer direction, separate from the editable subject prompt. */
+  readonly styleDescription: string;
+  readonly styleSource: 'writer' | 'fallback';
 };
 
 /** Transient navigation state; it is deliberately not stored in the project. */
@@ -83,6 +90,26 @@ function styleBiblePrompt(document: AiProjectDocument): string {
   ]).join(' ');
 }
 
+export type ProductionVisualStyle = {
+  readonly label: string;
+  readonly description: string;
+  readonly source: 'writer' | 'fallback';
+};
+
+/** One authoritative style snapshot for Image Generation and production jobs. */
+export function productionVisualStyle(document: AiProjectDocument | null | undefined): ProductionVisualStyle {
+  const request = pipelineBaseRequest(document?.writerPipeline);
+  const writerStyle = request === null ? null : writerVideoStyleDirection(request);
+  if (writerStyle !== null) {
+    return { label: writerStyle.label, description: writerStyle.direction, source: 'writer' };
+  }
+  return {
+    label: 'Cinematic',
+    description: 'Cinematic production image with deliberate composition and lighting.',
+    source: 'fallback'
+  };
+}
+
 function productionNegativePrompt(document: AiProjectDocument, extra: readonly string[]): string {
   return compactParts([
     ...extra,
@@ -102,6 +129,7 @@ export function buildCharacterReferenceImageBrief(
     return { ok: false, reason: `${character.name} already has the maximum of three active reference images.` };
   }
   const style = styleBiblePrompt(document);
+  const visualStyle = productionVisualStyle(document);
   return {
     ok: true,
     brief: {
@@ -112,13 +140,16 @@ export function buildCharacterReferenceImageBrief(
         `Preserve these invariant identity and wardrobe traits exactly: ${character.invariantDescription}.`,
         'Show one person only in a neutral full-body three-quarter pose, with the face unobstructed and the complete outfit clearly visible.',
         'Use a simple uncluttered background and even reference lighting so this image can guide later storyboard and video generations.',
+        visualStyle.description,
         style
       ]).join(' '),
       negativePrompt: productionNegativePrompt(document, [
         'extra people', 'duplicate person', 'multiple views', 'collage', 'cropped face', 'cropped body', 'occluded face'
       ]),
       aspectRatio: '3:4',
-      stylePreset: 'Cinematic'
+      stylePreset: visualStyle.label,
+      styleDescription: visualStyle.description,
+      styleSource: visualStyle.source
     }
   };
 }
@@ -139,6 +170,7 @@ export function buildStoryboardImageBrief(
     const character = document.characters.find((entry) => entry.id === characterId);
     return character === undefined ? [] : [`${character.name}: ${character.invariantDescription}`];
   });
+  const visualStyle = productionVisualStyle(document);
   return {
     ok: true,
     brief: {
@@ -150,12 +182,15 @@ export function buildStoryboardImageBrief(
         characters.length > 0 ? `Characters must preserve these approved identities: ${characters.join(' | ')}.` : undefined,
         `Framing: ${shot.framing}. Camera: ${shot.cameraMotion}. Visible action at this first frame: ${shot.action}.`,
         scene.continuityNotes.length > 0 ? `Continuity: ${scene.continuityNotes}.` : undefined,
+        visualStyle.description,
         styleBiblePrompt(document),
         'Compose one finished frame only, without storyboard borders or annotations.'
       ]).join(' '),
       negativePrompt: productionNegativePrompt(document, compactParts([shot.negativePrompt])),
       aspectRatio,
-      stylePreset: 'Cinematic'
+      stylePreset: visualStyle.label,
+      styleDescription: visualStyle.description,
+      styleSource: visualStyle.source
     }
   };
 }
@@ -225,6 +260,32 @@ export function productionShotRows(document: AiProjectDocument | null | undefine
       ...(approvedGeneration === undefined ? {} : { approvedGeneration })
     }];
   });
+}
+
+/** Targets that are actually missing; existing reviewed mappings are never overwritten by a batch. */
+export function missingProductionImageTargets(
+  document: AiProjectDocument,
+  kind: ProductionImageTarget['kind']
+): readonly ProductionImageTarget[] {
+  const rows = productionShotRows(document);
+  if (kind === 'storyboard') {
+    return rows.filter((row) => row.storyboardReference === undefined)
+      .slice(0, PRODUCTION_BATCH_LIMIT)
+      .map((row) => ({ kind: 'storyboard' as const, shotId: row.shotId }));
+  }
+  const activeCharacterIds = new Set(rows.flatMap((row) => row.characterIds));
+  return document.characters
+    .filter((character) => activeCharacterIds.has(character.id) && character.referenceAssetIds.length === 0)
+    .slice(0, PRODUCTION_BATCH_LIMIT)
+    .map((character) => ({ kind: 'character_reference' as const, characterId: character.id }));
+}
+
+/** Shots safe to enqueue without duplicating an active, reviewable, or approved take. */
+export function batchableProductionVideoShotIds(document: AiProjectDocument): readonly string[] {
+  return productionShotRows(document)
+    .filter((row) => row.state === 'not_started' || row.state === 'failed')
+    .slice(0, PRODUCTION_BATCH_LIMIT)
+    .map((row) => row.shotId);
 }
 
 export function assignStoryboardReference(document: AiProjectDocument, input: {

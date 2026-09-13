@@ -99,21 +99,23 @@ function choiceAny(state: AutomationState, expected: readonly string[]): Rectang
 
 async function selectChoice(webContents: WebContents, configButton: Rectangle, expected: string | readonly string[]): Promise<void> {
   const labels = typeof expected === 'string' ? [expected] : expected;
-  let state = await readState(webContents);
-  throwForAction(state);
-  let target = choiceAny(state, labels);
-  if (target === undefined) {
-    clickAt(webContents, configButton);
-    await delay(350);
-    state = await readState(webContents);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const state = await readState(webContents);
     throwForAction(state);
-    target = choiceAny(state, labels);
+    const target = choiceAny(state, labels);
+    if (target !== undefined) {
+      if (!target.selected) {
+        clickAt(webContents, target.rectangle);
+        await delay(450);
+      }
+      return;
+    }
+    if (attempt === 3 || attempt === 7) {
+      clickAt(webContents, state.configButton?.rectangle ?? configButton);
+    }
+    await delay(250);
   }
-  if (target === undefined) throw new Error(`Google Flow configuration did not expose ${labels[0]}.`);
-  if (!target.selected) {
-    clickAt(webContents, target.rectangle);
-    await delay(450);
-  }
+  throw new Error(`Google Flow configuration did not expose ${labels[0]} after waiting for the menu to load.`);
 }
 
 export function validateGoogleFlowVideoAutomationInput(input: Pick<GoogleFlowVideoAutomationInput, 'model' | 'operation' | 'aspectRatio' | 'durationSeconds' | 'referenceImage' | 'lastFrame' | 'referenceImages'>): void {

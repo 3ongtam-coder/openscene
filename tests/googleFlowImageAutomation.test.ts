@@ -16,7 +16,10 @@ afterEach(() => {
 
 describe('Google Flow browser image automation', () => {
   it('emits syntactically valid JavaScript for the live Flow DOM probe', () => {
-    expect(() => new Function(buildGoogleFlowStateProbeScript())).not.toThrow();
+    const script = buildGoogleFlowStateProbeScript();
+    expect(() => new Function(script)).not.toThrow();
+    expect(script).toContain('attentionText');
+    expect(script).not.toContain("/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)");
   });
 
   it('recognizes supported image signatures rather than trusting a filename', () => {
@@ -104,6 +107,8 @@ describe('Google Flow browser image automation', () => {
     const executeJavaScript = vi.fn()
       .mockResolvedValueOnce(agentSettingsState)
       .mockResolvedValueOnce(agentComposerState)
+      .mockResolvedValueOnce(editorState)
+      // The pill can be visible one frame before the Image menu entries.
       .mockResolvedValueOnce(editorState)
       .mockResolvedValueOnce(panelState)
       .mockResolvedValueOnce(panelState)

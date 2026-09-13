@@ -20,9 +20,9 @@ describe('bounded renderer busy states', () => {
 
     expect(image).toContain('IMAGE_JOB_UI_TIMEOUT_MS');
     expect(image).toContain('Stopped waiting after 12 minutes');
-    expect(image).toContain("'Image job polling failed.'");
-    expect(image).toContain('if (pollTimerRef.current !== null) clearInterval(pollTimerRef.current)');
-    expect(image.indexOf('Date.now() >= pollingDeadline')).toBeLessThan(image.indexOf('if (pollInFlightRef.current) return;'));
+    expect(image).toContain('while (mountedRef.current && Date.now() < deadline)');
+    expect(image).toContain('queueActiveRef.current = false');
+    expect(image).toContain('mountedRef.current = false');
 
     expect(speech).toContain('speechPollInFlightRef');
     expect(speech).toContain('speechPollGenerationRef');

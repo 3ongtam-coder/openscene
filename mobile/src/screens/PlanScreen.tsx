@@ -438,7 +438,7 @@ export function PlanScreen({
           }} style={press([styles.approve, (running || activeProject === null) && styles.approveOff])}>
           <Text style={styles.approveText}>Assemble approved Writer cut</Text>
         </Pressable>
-        <Text style={styles.footnote}>Assigning imported storyboard and character images is currently done in the desktop production board; mobile reads the same saved mapping and assembly rules.</Text>
+        <Text style={styles.footnote}>Assigning imported storyboard and character images is currently done in the desktop production board; mobile reads the same saved mapping and assembly rules. Batch image/video generation and signed-in browser automation remain desktop-only, so this screen never starts a hidden queue or silently charges a provider.</Text>
       </View>}
       {writerShots.length > 0 && <View>
         <Text style={styles.label}>Approved Writer shots — choose one to load, not generate</Text>

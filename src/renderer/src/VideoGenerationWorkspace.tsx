@@ -30,6 +30,7 @@ import {
 import { originalOf, refineShotPrompt, revisionsOf } from '../../shared/shotPrompt';
 import type { ImageAspectRatio, ProviderExecutionMode, ReferenceImageSelection, VideoGenerationJob } from '../../shared/providerSeams';
 import { reconcileVideoCandidateAfterRestart } from '../../shared/videoJobRecovery';
+import { estimateVideoPlanCost } from '../../shared/mediaGenerationPricing';
 import {
   DEFAULT_GOOGLE_FLOW_PREFERENCES,
   GOOGLE_FLOW_PREFERENCES_STORAGE_KEY,
@@ -46,7 +47,7 @@ import { useProjectResultImport } from './ProjectResultImportContext';
 import { getVideoModelCapabilities, getVideoOperationConstraints, isVideoOperationImplemented, type VideoOperation } from '../../shared/mediaCapabilityRegistry';
 import { Button, StatusCard } from './ui';
 import { ProductionBoard } from './ProductionBoard';
-import type { ProductionImageTarget } from '../../shared/productionWorkflow';
+import { batchableProductionVideoShotIds, productionShotRows, PRODUCTION_BATCH_LIMIT, type ProductionImageTarget } from '../../shared/productionWorkflow';
 
 const STYLE_PRESETS = ['Cinematic', 'Anime', '3D Render', 'Photorealistic', 'Cyberpunk', 'Film Noir'] as const;
 const VIDEO_JOB_UI_TIMEOUT_MS = 12 * 60_000;
@@ -111,6 +112,9 @@ type VideoGenerationWorkspaceProps = {
   readonly onReferenceImageChange: (reference: ReferenceImageSelection | null) => void;
   /** Opens an editable Writer-derived image brief without submitting it. */
   readonly onGenerateProductionImage: (target: ProductionImageTarget, aspectRatio?: ImageAspectRatio) => string | null;
+  /** Starts one or more Writer-derived stills without leaving Video Generation. */
+  readonly onGenerateProductionImages: (targets: readonly ProductionImageTarget[], aspectRatio?: ImageAspectRatio) => Promise<{ readonly tone: 'neutral' | 'success' | 'warning' | 'danger'; readonly text: string }>;
+  readonly onOpenImageResults: () => void;
   /** Local project folder/name mirrored to the signed-in Flow workspace. */
   readonly projectName?: string | undefined;
 };
@@ -133,6 +137,8 @@ export function VideoGenerationWorkspace({
   referenceImage,
   onReferenceImageChange,
   onGenerateProductionImage,
+  onGenerateProductionImages,
+  onOpenImageResults,
   projectName
 }: VideoGenerationWorkspaceProps): ReactElement {
   const { selectedModel } = useAiDomainModel();
@@ -209,6 +215,7 @@ export function VideoGenerationWorkspace({
   const recoveryGeneration = useRef(0);
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
   const previousVideoModelId = useRef(videoModel.id);
   // Which take is being refined, and what to change about it. A note belongs to
   // one job: applying the last one to a different take would be a change nobody
@@ -486,7 +493,11 @@ export function VideoGenerationWorkspace({
     readonly referenceAssetIds?: readonly string[];
     readonly mode?: ProviderExecutionMode;
     readonly continuityControls?: VideoContinuityControls;
-  }): Promise<void> => {
+  }): Promise<VideoGenerationJob | null> => {
+    if (isBatchGenerating && overrides === undefined) {
+      setStatusMsg({ text: 'Wait for the production video batch to finish.', tone: 'warning' });
+      return null;
+    }
     const candidateOperation = overrides?.inputs?.operation ?? selectedOperation;
     const targetWriterShotId = overrides?.writerShotId ?? loadedWriterShotId;
     const editablePrompt = overrides?.prompt ?? prompt;
@@ -496,7 +507,7 @@ export function VideoGenerationWorkspace({
       : editablePrompt;
     if (promptText.trim().length === 0 && candidateOperation !== 'motion_control') {
       setStatusMsg({ text: 'Please enter a video generation prompt.', tone: 'warning' });
-      return;
+      return null;
     }
 
     const inputs: VideoInputSnapshot = overrides?.inputs ?? {
@@ -514,32 +525,32 @@ export function VideoGenerationWorkspace({
     const targetGenerationMode = overrides?.mode ?? generationMode;
     if (targetGenerationMode === 'browser_session' && googleFlowVideoModelFor(targetModelId) === null && targetModelId !== 'grok-imagine-video-1.5') {
       setStatusMsg({ text: 'The selected model has no exact counterpart in the signed-in browser UI. Choose API key or a supported browser model.', tone: 'warning' });
-      return;
+      return null;
     }
     if (!isVideoOperationImplemented(targetModelId, inputs.operation)) {
       setStatusMsg({ text: `${videoModel.label} does not implement ${inputs.operation} in this build.`, tone: 'warning' });
-      return;
+      return null;
     }
     if ((inputs.operation === 'image_to_video' || inputs.operation === 'start_end') && inputs.referenceImage === undefined) {
       setStatusMsg({ text: 'Choose the first frame before generating.', tone: 'warning' });
-      return;
+      return null;
     }
     if (inputs.operation === 'start_end' && inputs.lastFrame === undefined) {
       setStatusMsg({ text: 'Choose the last frame before generating Start-End motion.', tone: 'warning' });
-      return;
+      return null;
     }
     if (inputs.operation === 'reference_to_video' && (inputs.referenceImages?.length ?? 0) === 0) {
       setStatusMsg({ text: 'Choose at least one character or product reference.', tone: 'warning' });
-      return;
+      return null;
     }
     if (inputs.operation === 'motion_control') {
       if (!inputs.referenceImage || !inputs.projectId || !inputs.drivingVideoAssetId || !inputs.motionMode) {
         setStatusMsg({ text: 'Choose a character image and an imported driving video before Motion Control.', tone: 'warning' });
-        return;
+        return null;
       }
       if (motionWorker?.modes[inputs.motionMode].ready !== true) {
         setStatusMsg({ text: motionWorker?.modes[inputs.motionMode].reason ?? 'Check the ComfyUI worker before generating.', tone: 'warning' });
-        return;
+        return null;
       }
     }
 
@@ -602,13 +613,16 @@ export function VideoGenerationWorkspace({
           targetWriterShotId,
           inputs.operation === 'motion_control' ? MOTION_JOB_UI_TIMEOUT_MS : VIDEO_JOB_UI_TIMEOUT_MS
         );
+        return job;
       } else {
         setIsGenerating(false);
         setStatusMsg({ text: !response.ok ? response.error.message : 'Failed to start generation job.', tone: 'danger' });
+        return null;
       }
     } catch (err) {
       setIsGenerating(false);
       setStatusMsg({ text: err instanceof Error ? err.message : 'Unexpected error during generation.', tone: 'danger' });
+      return null;
     }
   };
 
@@ -781,6 +795,179 @@ export function VideoGenerationWorkspace({
     setStatusMsg({ tone: 'neutral', text: 'Shot loaded without a first frame. Review the prompt and choose inputs before generating.' });
   };
 
+  type ProductionVideoBatchItem = {
+    readonly shotId: string;
+    readonly label: string;
+    readonly prompt: string;
+    readonly durationSeconds: number;
+    readonly inputs: VideoInputSnapshot;
+    readonly referenceAssetIds: readonly string[];
+  };
+
+  const durationOptionsForOperation = (operation: VideoOperation): readonly number[] => {
+    if (generationMode === 'browser_session' && flowVideoModel !== null) return googleFlowVideoDurationOptions(flowVideoModel);
+    if (generationMode === 'browser_session' && grokImagineBrowser) return [6, 10, 15];
+    return getVideoOperationConstraints(videoModel.id, operation)?.durationSeconds ?? [4, 8];
+  };
+
+  const waitForVideoTerminal = async (jobId: string): Promise<'completed' | 'failed' | 'needs_user_action' | 'timeout'> => {
+    const deadline = Date.now() + VIDEO_JOB_UI_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      const response = await window.videoTool.aiGetVideoJob(jobId);
+      if (!response.ok || response.value === null) return 'failed';
+      if (response.value.status === 'completed') return 'completed';
+      if (response.value.status === 'failed') return 'failed';
+      if (response.value.status === 'needs_user_action') return 'needs_user_action';
+    }
+    return 'timeout';
+  };
+
+  const prepareProductionVideoBatch = async (): Promise<{
+    readonly items: readonly ProductionVideoBatchItem[];
+    readonly skipped: readonly string[];
+  }> => {
+    const current = documentRef.current;
+    if (current === null || projectId === null || projectId === undefined) return { items: [], skipped: ['Open a project first.'] };
+    const batchableShotIds = new Set(batchableProductionVideoShotIds(current));
+    const eligibleRows = productionShotRows(current).filter((row) => batchableShotIds.has(row.shotId));
+    const items: ProductionVideoBatchItem[] = [];
+    const skipped: string[] = [];
+    for (const row of eligibleRows.slice(0, PRODUCTION_BATCH_LIMIT)) {
+      const writerShot = approvedWriterShots(current).find((entry) => entry.id === row.shotId);
+      const persistedShot = current.shots.find((entry) => entry.id === row.shotId);
+      if (writerShot === undefined || persistedShot === undefined) {
+        skipped.push(`${row.label}: Writer data changed.`);
+        continue;
+      }
+      const nearestDurationFor = (operation: VideoOperation): number => durationOptionsForOperation(operation).reduce((best, candidate) =>
+        Math.abs(candidate - writerShot.durationSeconds) < Math.abs(best - writerShot.durationSeconds) ? candidate : best
+      );
+      const startReference = persistedShot.referenceAssetIds
+        .map((id) => current.referenceAssets.find((entry) => entry.id === id))
+        .find((entry) => entry?.role === 'start_frame');
+      if (startReference !== undefined) {
+        if (!isVideoOperationImplemented(videoModel.id, 'image_to_video')) {
+          skipped.push(`${row.label}: selected model cannot use its storyboard image.`);
+          continue;
+        }
+        const loaded = await window.videoTool.aiGetProjectImageReference({ projectId, assetId: startReference.assetId });
+        if (!loaded.ok) {
+          skipped.push(`${row.label}: storyboard image could not be loaded.`);
+          continue;
+        }
+        items.push({
+          shotId: row.shotId,
+          label: row.label,
+          prompt: writerShot.prompt,
+          durationSeconds: nearestDurationFor('image_to_video'),
+          inputs: { operation: 'image_to_video', referenceImage: loaded.value },
+          referenceAssetIds: [startReference.id]
+        });
+        continue;
+      }
+      const scene = current.scenes.find((entry) => entry.id === persistedShot.sceneId);
+      const characterReferences = (scene?.characterIds ?? []).flatMap((characterId) =>
+        current.characters.find((entry) => entry.id === characterId)?.referenceAssetIds ?? []
+      ).map((id) => current.referenceAssets.find((entry) => entry.id === id))
+        .filter((entry): entry is NonNullable<typeof entry> => entry?.role === 'character')
+        .slice(0, 3);
+      if (continuityControls.characterConsistency && characterReferences.length > 0 && isVideoOperationImplemented(videoModel.id, 'reference_to_video')) {
+        const loaded = await Promise.all(characterReferences.map(async (reference) => ({
+          reference,
+          response: await window.videoTool.aiGetProjectImageReference({ projectId, assetId: reference.assetId })
+        })));
+        if (loaded.some((entry) => !entry.response.ok)) {
+          skipped.push(`${row.label}: one or more character references could not be loaded.`);
+          continue;
+        }
+        items.push({
+          shotId: row.shotId,
+          label: row.label,
+          prompt: writerShot.prompt,
+          durationSeconds: nearestDurationFor('reference_to_video'),
+          inputs: { operation: 'reference_to_video', referenceImages: loaded.flatMap((entry) => entry.response.ok ? [entry.response.value] : []) },
+          referenceAssetIds: characterReferences.map((entry) => entry.id)
+        });
+        continue;
+      }
+      if (!isVideoOperationImplemented(videoModel.id, 'text_to_video')) {
+        skipped.push(`${row.label}: selected model has no usable production input mode.`);
+        continue;
+      }
+      items.push({
+        shotId: row.shotId,
+        label: row.label,
+        prompt: writerShot.prompt,
+        durationSeconds: nearestDurationFor('text_to_video'),
+        inputs: { operation: 'text_to_video' },
+        referenceAssetIds: []
+      });
+    }
+    return { items, skipped };
+  };
+
+  const generateProductionVideoBatch = async (): Promise<{ readonly tone: 'neutral' | 'success' | 'warning' | 'danger'; readonly text: string }> => {
+    if (isBatchGenerating || isGenerating) return { tone: 'warning', text: 'Another video generation job is already running.' };
+    const plan = await prepareProductionVideoBatch();
+    if (plan.items.length === 0) {
+      return { tone: 'neutral', text: plan.skipped[0] ?? 'No not-started or failed production shots need a new candidate.' };
+    }
+    const estimate = estimateVideoPlanCost(plan.items.map((item) => ({ modelId: videoModel.id, durationSeconds: item.durationSeconds })));
+    const adjusted = plan.items.filter((item) => {
+      const source = approvedWriterShots(documentRef.current).find((entry) => entry.id === item.shotId);
+      return source !== undefined && source.durationSeconds !== item.durationSeconds;
+    }).length;
+    const price = estimate.fullyPriced
+      ? generationMode === 'browser_session'
+        ? `API list-price reference: ~$${estimate.totalUsd?.toFixed(2)}; signed-in browser credits and limits may differ.`
+        : `Estimated provider total: ~$${estimate.totalUsd?.toFixed(2)}.`
+      : 'Provider total cannot be priced by OpenScene.';
+    const confirmed = window.confirm(
+      `Generate ${plan.items.length} production video(s) sequentially with ${videoModel.label}?\n\n${price}\n${adjusted > 0 ? `${adjusted} shot duration(s) will use the nearest supported model duration.\n` : ''}${plan.skipped.length > 0 ? `${plan.skipped.length} target(s) will be skipped.\n` : ''}\nEach result still requires import and continuity review. Browser-session credits may be consumed.`
+    );
+    if (!confirmed) return { tone: 'neutral', text: 'Production video batch cancelled before any provider job was submitted.' };
+    setIsBatchGenerating(true);
+    let completed = 0;
+    let failed = 0;
+    let attempted = 0;
+    try {
+      for (const [index, item] of plan.items.entries()) {
+        setStatusMsg({ tone: 'neutral', text: `Production video ${index + 1}/${plan.items.length}: ${item.label}.` });
+        const job = await handleGenerate({
+          prompt: item.prompt,
+          aspectRatio: effectiveAspectRatio,
+          durationSeconds: item.durationSeconds,
+          stylePreset: continuityControls.styleConsistency ? 'Writer Style Bible' : selectedStyle,
+          inputs: item.inputs,
+          modelId: videoModel.id,
+          writerShotId: item.shotId,
+          referenceAssetIds: item.referenceAssetIds,
+          mode: generationMode,
+          continuityControls
+        });
+        if (job === null) {
+          attempted += 1;
+          failed += 1;
+          continue;
+        }
+        attempted += 1;
+        const terminal = await waitForVideoTerminal(job.id);
+        if (terminal === 'completed') completed += 1;
+        else {
+          failed += 1;
+          if (terminal === 'needs_user_action' || terminal === 'timeout') break;
+        }
+      }
+    } finally {
+      setIsBatchGenerating(false);
+    }
+    const notSubmitted = plan.items.length - attempted;
+    const text = `${completed}/${attempted} submitted production video job(s) completed${failed > 0 ? `; ${failed} failed or need attention` : ''}${notSubmitted > 0 ? `; ${notSubmitted} not submitted after the queue stopped` : ''}${plan.skipped.length > 0 ? `; ${plan.skipped.length} ineligible target(s) skipped` : ''}. Import and review every candidate before approval.`;
+    setStatusMsg({ tone: failed === 0 ? 'success' : completed > 0 ? 'warning' : 'danger', text });
+    return { tone: failed === 0 ? 'success' : completed > 0 ? 'warning' : 'danger', text };
+  };
+
   const chainCandidateToNextShot = async (generationId: string): Promise<void> => {
     const current = documentRef.current;
     const candidate = current?.generations.find((entry) => entry.id === generationId);
@@ -858,11 +1045,14 @@ export function VideoGenerationWorkspace({
           <ProductionBoard
             document={writerDocument}
             assets={projectAssets}
-            busy={isGenerating || isSavingCandidate || isChainingFrame}
+            busy={isGenerating || isBatchGenerating || isSavingCandidate || isChainingFrame}
             onSave={onSaveAi}
             onOpenShot={openProductionShot}
             onGenerateCharacterImage={(characterId) => onGenerateProductionImage({ kind: 'character_reference', characterId })}
             onGenerateStoryboardImage={(shotId) => onGenerateProductionImage({ kind: 'storyboard', shotId }, effectiveAspectRatio)}
+            onGenerateImages={(targets) => onGenerateProductionImages(targets, effectiveAspectRatio)}
+            onOpenImageResults={onOpenImageResults}
+            onGenerateVideoBatch={generateProductionVideoBatch}
             onAssemble={assembleApprovedWriterShots}
           />}
         {browserSessionSupported && (
@@ -1275,12 +1465,12 @@ export function VideoGenerationWorkspace({
               ? `${Math.ceil(drivingVideo.metadata.durationMs / 1_000)}s · ${motionAspectRatio} · ${motionMode} · workflow controlled`
               : `${effectiveDuration}s · ${effectiveAspectRatio} · ${effectiveStylePreset} · ${selectedOperation}`}
           </span>
-          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || (prompt.trim().length === 0 && selectedOperation !== 'motion_control') || !operationAvailable
+          <Button variant="primary" onClick={() => void handleGenerate()} disabled={isGenerating || isBatchGenerating || (prompt.trim().length === 0 && selectedOperation !== 'motion_control') || !operationAvailable
             || ((selectedOperation === 'image_to_video' || selectedOperation === 'start_end' || selectedOperation === 'motion_control') && referenceImage === null)
             || (selectedOperation === 'start_end' && lastFrame === null)
             || (selectedOperation === 'reference_to_video' && referenceImages.length === 0)
             || (selectedOperation === 'motion_control' && (!projectId || !drivingVideoAssetId || !drivingVideo?.metadata || drivingVideo.metadata.durationMs > 30_000 || motionWorker?.modes[motionMode].ready !== true))}>
-            {isGenerating ? 'Generating…' : 'Generate'}
+            {isBatchGenerating ? 'Batch generating…' : isGenerating ? 'Generating…' : 'Generate'}
           </Button>
         </div>
       </div>

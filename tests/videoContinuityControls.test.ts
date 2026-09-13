@@ -132,4 +132,15 @@ describe('video continuity controls', () => {
     expect(css).toContain('.studio-toggle-list');
     expect(css).toContain('@media (max-width: 760px)');
   });
+
+  it('queues production videos sequentially with cost confirmation and per-shot snapshots', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/VideoGenerationWorkspace.tsx'), 'utf8');
+    expect(source).toContain('batchableProductionVideoShotIds(current)');
+    expect(source).toContain('estimateVideoPlanCost(');
+    expect(source).toContain('const confirmed = window.confirm(');
+    expect(source).toContain('await waitForVideoTerminal(job.id)');
+    expect(source).toContain('writerShotId: item.shotId');
+    expect(source).toContain('referenceAssetIds: item.referenceAssetIds');
+    expect(source).toContain('continuityControls');
+  });
 });

@@ -12,7 +12,9 @@ import {
   buildCharacterReferenceImageBrief,
   buildApprovedProductionAssemblyPlan,
   buildStoryboardImageBrief,
+  batchableProductionVideoShotIds,
   clearStoryboardReference,
+  missingProductionImageTargets,
   productionShotRows,
   removeCharacterReference
 } from '../src/shared/productionWorkflow';
@@ -30,8 +32,8 @@ const draft: WriterDraft = {
 };
 const artifact = (stage: 'concept' | 'screenplay' | 'breakdown', content = stage): WriterStageArtifact => ({ stage, title: 'Film', content, modelId: 'test', approved: false });
 
-function project() {
-  let state = startWriterPipeline(request);
+function project(writerRequest: WriterRequest = request) {
+  let state = startWriterPipeline(writerRequest);
   for (const stage of ['concept', 'screenplay', 'breakdown'] as const) state = saveWriterArtifact(state, artifact(stage), true);
   state = saveWriterArtifact(state, artifactFromWriterDraft('prompts', draft, 'test'), true);
   const applied = applyWriterPipeline(createEmptyAiProjectDocument(), state, '2026-09-07T00:00:00.000Z', 'production');
@@ -64,7 +66,8 @@ describe('production storyboard workflow', () => {
         target: { kind: 'character_reference', characterId: character.id },
         targetLabel: 'Character reference for Ari',
         aspectRatio: '3:4',
-        stylePreset: 'Cinematic'
+        stylePreset: 'Cinematic narrative',
+        styleSource: 'writer'
       }
     });
     if (characterBrief.ok) {
@@ -86,6 +89,45 @@ describe('production storyboard workflow', () => {
       expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
       expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
     }
+  });
+
+  it('carries the approved Writer visual style into every production image brief', () => {
+    const styled = project({
+      ...request,
+      videoStyle: 'traditional-2d-cel-animation',
+      customVideoStyle: 'Muted ochre paper texture and hand-inked outlines.'
+    });
+    const character = styled.characters[0];
+    const shot = styled.shots[0];
+    if (!character || !shot) throw new Error('fixture missing');
+    const characterBrief = buildCharacterReferenceImageBrief(styled, character.id);
+    const storyboardBrief = buildStoryboardImageBrief(styled, shot.id);
+    expect(characterBrief.ok && characterBrief.brief).toMatchObject({
+      stylePreset: 'Traditional 2D Cel Animation',
+      styleSource: 'writer'
+    });
+    expect(storyboardBrief.ok && storyboardBrief.brief.styleDescription).toContain('hand-drawn linework');
+    expect(storyboardBrief.ok && storyboardBrief.brief.prompt).toContain('Muted ochre paper texture');
+    expect(storyboardBrief.ok && storyboardBrief.brief.prompt).not.toContain('Cinematic production image');
+  });
+
+  it('plans only missing images and shots without active or reviewable video takes', () => {
+    const base = project();
+    expect(missingProductionImageTargets(base, 'character_reference')).toHaveLength(1);
+    expect(missingProductionImageTargets(base, 'storyboard')).toHaveLength(2);
+    expect(batchableProductionVideoShotIds(base)).toEqual(base.shots.map((shot) => shot.id));
+
+    const firstShot = base.shots[0]!;
+    const withRunning = {
+      ...base,
+      shots: base.shots.map((shot, index) => index === 0 ? { ...shot, generationIds: ['running-take'] } : shot),
+      generations: [{
+        id: 'running-take', shotId: firstShot.id, providerId: 'gemini_veo', modelId: 'veo',
+        capability: 'text_to_video' as const, status: 'running' as const, prompt: 'running',
+        referenceAssetIds: [], outputAssetIds: [], createdAt: '2026-09-07T00:00:00.000Z', updatedAt: '2026-09-07T00:00:01.000Z'
+      }]
+    };
+    expect(batchableProductionVideoShotIds(withRunning)).toEqual([base.shots[1]!.id]);
   });
 
   it('attaches a reviewed generated image to its snapshotted production target', () => {

@@ -104,9 +104,15 @@ describe('Writer production-image handoff', () => {
   });
 
   it('snapshots each paid image job target and requires an explicit attach action', () => {
-    expect(imageStudio).toContain('[job.id]: productionHandoff');
+    expect(imageStudio).toContain('[started.id]: handoff');
+    expect(imageStudio).toContain('generateProductionBriefs');
+    expect(imageStudio).toContain('Sync Writer ·');
+    expect(imageStudio).toContain('Custom image style');
     expect(imageStudio).toContain('nothing is attached until you approve a completed image');
     expect(imageStudio).toContain('handleAttachToProduction(job)');
     expect(imageStudio).toContain('Attach to ${productionTargetByJob[job.id]!.targetLabel}');
+    expect(app).toContain('window.confirm(');
+    expect(app).toContain('controller.generateProductionBriefs(handoffs)');
+    expect(app).toContain('Every result remains unapproved and must be reviewed and attached manually.');
   });
 });
