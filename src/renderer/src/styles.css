@@ -1058,6 +1058,10 @@ button {
   color: var(--color-danger);
 }
 
+.studio-job__status--needs_user_action {
+  color: var(--color-warning);
+}
+
 .studio-job__provider {
   color: var(--text-weaker);
   font-family: var(--font-mono);

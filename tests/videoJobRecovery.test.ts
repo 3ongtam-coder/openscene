@@ -42,6 +42,16 @@ describe('video generation crash recovery', () => {
     const recovered = recoverVideoJobAfterRestart(runningJob, '2026-09-10T06:00:00.000Z');
     expect(recovered).toMatchObject({ status: 'failed', error: INTERRUPTED_VIDEO_JOB_ERROR, updatedAt: '2026-09-10T06:00:00.000Z' });
     expect(recoverVideoJobAfterRestart({ ...runningJob, status: 'completed' }, '2026-09-10T06:00:00.000Z')).toMatchObject({ status: 'completed' });
+    expect(recoverVideoJobAfterRestart({
+      ...runningJob,
+      provider: 'grok_imagine',
+      mode: 'browser_session',
+      status: 'needs_user_action',
+      actionRequired: 'sign_in',
+      error: 'Sign in again, then start a new generation.'
+    }, '2026-09-10T06:00:00.000Z')).toMatchObject({
+      status: 'needs_user_action', actionRequired: 'sign_in', updatedAt: runningJob.updatedAt
+    });
   });
 
   it('reconciles a stranded Writer candidate and never invents completion', () => {
@@ -58,6 +68,42 @@ describe('video generation crash recovery', () => {
     expect(missing.ok && missing.document.generations[0]).toMatchObject({ status: 'failed', error: MISSING_VIDEO_JOB_ERROR });
     const stillRunning = reconcileVideoCandidateAfterRestart(document, runningJob.id, runningJob, '2026-09-10T06:00:00.000Z');
     expect(stillRunning.ok && stillRunning.document).toBe(document);
+    const needsAction = reconcileVideoCandidateAfterRestart(document, runningJob.id, {
+      ...runningJob,
+      provider: 'grok_imagine',
+      mode: 'browser_session',
+      status: 'needs_user_action',
+      actionRequired: 'verification',
+      error: 'Complete verification before starting a new generation.'
+    }, '2026-09-10T06:00:00.000Z');
+    expect(needsAction.ok && needsAction.document.generations[0]).toMatchObject({
+      status: 'needs_user_action', error: 'Complete verification before starting a new generation.'
+    });
+  });
+
+  it('round-trips Grok and typed browser intervention jobs while rejecting inconsistent action state', () => {
+    const grokNeedsAction: PersistedVideoGenerationJob = {
+      ...runningJob,
+      provider: 'grok_imagine',
+      mode: 'browser_session',
+      status: 'needs_user_action',
+      actionRequired: 'verification',
+      error: 'Complete verification before starting a new generation.'
+    };
+    const payload = JSON.stringify({ schemaVersion: 1, jobs: [grokNeedsAction] });
+    expect(parseVideoJobJournal(payload)).toEqual([grokNeedsAction]);
+    expect(parseVideoJobJournal(JSON.stringify({
+      schemaVersion: 1,
+      jobs: [{ ...grokNeedsAction, status: 'failed' }]
+    }))).toEqual([]);
+    expect(parseVideoJobJournal(JSON.stringify({
+      schemaVersion: 1,
+      jobs: [{ ...grokNeedsAction, actionRequired: 'unknown_challenge' }]
+    }))).toEqual([]);
+    expect(parseVideoJobJournal(JSON.stringify({
+      schemaVersion: 1,
+      jobs: [{ ...grokNeedsAction, mode: 'api' }]
+    }))).toEqual([]);
   });
 
   it('writes an atomic bounded journal and rejects corrupt or relative-path entries', async () => {

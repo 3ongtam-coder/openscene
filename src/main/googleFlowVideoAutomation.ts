@@ -6,6 +6,7 @@ import {
 } from '../shared/browserSession';
 import type { ReferenceImageSelection } from '../shared/providerSeams';
 import type { VideoOperation } from '../shared/mediaCapabilityRegistry';
+import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 import {
   buildGoogleFlowStateProbeScript,
   rememberGoogleFlowProjectUrl,
@@ -79,10 +80,10 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
 }
 
 function throwForAction(state: AutomationState): void {
-  if (state.actionRequired === 'sign_in') throw new Error('The Google Flow session has expired. Sign in again in Settings, then retry.');
-  if (state.actionRequired === 'verification') throw new Error('Google requires CAPTCHA or account verification. Complete it manually in the Flow session, then retry.');
-  if (state.actionRequired === 'rate_limit') throw new Error('Google Flow has reached the account usage or credit limit. Check the Google plan, then retry.');
-  if (state.actionRequired === 'unavailable') throw new Error('Google Flow video is unavailable for this account or region.');
+  if (state.actionRequired === 'sign_in') throw new BrowserGenerationActionRequiredError('sign_in', 'The Google Flow session has expired. Sign in again in Settings, then start a new generation.');
+  if (state.actionRequired === 'verification') throw new BrowserGenerationActionRequiredError('verification', 'Google requires CAPTCHA or account verification. Complete it manually in the Flow session, then start a new generation.');
+  if (state.actionRequired === 'rate_limit') throw new BrowserGenerationActionRequiredError('rate_limit', 'Google Flow has reached the account usage or credit limit. Check the Google plan before starting a new generation.');
+  if (state.actionRequired === 'unavailable') throw new BrowserGenerationActionRequiredError('unavailable', 'Google Flow video is unavailable for this account or region.');
 }
 
 function choice(state: AutomationState, expected: string): RectangleWithText | undefined {
