@@ -76,7 +76,15 @@ describe('production storyboard workflow', () => {
       expect(characterBrief.brief.negativePrompt).toContain('watermark');
     }
 
-    const storyboardBrief = buildStoryboardImageBrief(base, shot.id, '9:16');
+    const withCharacterReference = addCharacterReference(base, {
+      characterId: character.id,
+      assetId: 'asset-thok',
+      referenceId: 'reference-thok',
+      label: 'thok.jpeg'
+    });
+    if (!withCharacterReference.ok) throw new Error(withCharacterReference.reason);
+
+    const storyboardBrief = buildStoryboardImageBrief(withCharacterReference.document, shot.id, '9:16');
     expect(storyboardBrief).toMatchObject({
       ok: true,
       brief: {
@@ -88,6 +96,7 @@ describe('production storyboard workflow', () => {
       expect(storyboardBrief.brief.prompt).toContain('Ari: Red coat');
       expect(storyboardBrief.brief.prompt).toContain('Visible action at this first frame: Ari enters');
       expect(storyboardBrief.brief.prompt).toContain('Continuity: Same coat');
+      expect(storyboardBrief.brief.referenceAssetIds).toEqual(['reference-thok']);
     }
   });
 

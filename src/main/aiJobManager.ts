@@ -65,6 +65,8 @@ type BrowserImageGenerator = (input: {
   readonly aspectRatio: string;
   readonly stylePreset?: string;
   readonly negativePrompt?: string;
+  readonly referenceImage?: import('../shared/providerSeams').ReferenceImageSelection;
+  readonly referenceImages?: readonly import('../shared/providerSeams').ReferenceImageSelection[];
   readonly showBrowserWindow?: boolean;
   readonly projectName?: string;
 }) => Promise<GeneratedImage>;
@@ -410,7 +412,8 @@ async function invokeCloudImageProvider(
     prompt: request.prompt,
     aspectRatio: request.aspectRatio ?? ('1:1' as const),
     ...(request.negativePrompt === undefined ? {} : { negativePrompt: request.negativePrompt }),
-    ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage })
+    ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage }),
+    ...(request.referenceImages === undefined ? {} : { referenceImages: request.referenceImages })
   };
   try {
     let image: GeneratedImage;
@@ -688,7 +691,8 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
     provider: IMAGE_PROVIDER_LABELS[provider],
     mode,
     aspectRatio: job.aspectRatio,
-    promptCharacters: request.prompt.length
+    promptCharacters: request.prompt.length,
+    referenceCount: request.referenceImages?.length ?? (request.referenceImage === undefined ? 0 : 1)
   });
 
   setTimeout(async () => {
@@ -710,7 +714,9 @@ export async function createImageGenerationJob(request: ImageGenerationRequest):
           showBrowserWindow: request.showBrowserWindow !== false,
           ...(request.flowProjectName === undefined ? {} : { projectName: request.flowProjectName }),
           ...(request.stylePreset === undefined ? {} : { stylePreset: request.stylePreset }),
-          ...(request.negativePrompt === undefined ? {} : { negativePrompt: request.negativePrompt })
+          ...(request.negativePrompt === undefined ? {} : { negativePrompt: request.negativePrompt }),
+          ...(request.referenceImage === undefined ? {} : { referenceImage: request.referenceImage }),
+          ...(request.referenceImages === undefined ? {} : { referenceImages: request.referenceImages })
         });
       } else {
         let apiKey = request.apiKey?.trim();

@@ -19,6 +19,7 @@ describe('Google Flow browser image automation', () => {
     const script = buildGoogleFlowStateProbeScript();
     expect(() => new Function(script)).not.toThrow();
     expect(script).toContain('attentionText');
+    expect(script).toContain('uploadEntry');
     expect(script).not.toContain("/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)");
   });
 
@@ -141,5 +142,57 @@ describe('Google Flow browser image automation', () => {
     expect(sendInputEvent).toHaveBeenCalledWith({
       type: 'mouseDown', x: 1120, y: 820, button: 'left', clickCount: 1
     });
+  });
+
+  it('uploads an approved reference before filling the storyboard prompt', async () => {
+    vi.useFakeTimers();
+    const input = { x: 10, y: 700, width: 300, height: 50 };
+    const config = { x: 20, y: 800, width: 260, height: 40 };
+    const upload = { x: 35, y: 810, width: 36, height: 36 };
+    const submit = { x: 1100, y: 800, width: 40, height: 40 };
+    const oldImage = { rectangle: { x: 10, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/old' };
+    const newImage = { rectangle: { x: 420, y: 10, width: 400, height: 300 }, src: 'https://flow-content.google/image/new' };
+    const selectedTabs = [
+      { rectangle: { x: 1, y: 1, width: 20, height: 20 }, text: 'Image', selected: true },
+      { rectangle: { x: 2, y: 2, width: 20, height: 20 }, text: '16:9', selected: true },
+      { rectangle: { x: 3, y: 3, width: 20, height: 20 }, text: 'x1', selected: true }
+    ];
+    const editorState = {
+      url: 'https://labs.google/fx/tools/flow/project/example', input,
+      configButton: { rectangle: config, text: 'Video 720p 8s x2' },
+      upload, tabs: [], menuItems: [], images: [oldImage]
+    };
+    const panelState = {
+      ...editorState,
+      configButton: { rectangle: config, text: 'Nano Banana 2 Landscape x1' },
+      tabs: selectedTabs
+    };
+    const states = [
+      editorState, editorState, editorState, editorState,
+      panelState, panelState, panelState, panelState,
+      editorState, editorState, { ...editorState, submit }, { ...editorState, submit, images: [oldImage, newImage] }
+    ];
+    const executeJavaScript = vi.fn().mockImplementation(async (script: string) => {
+      if (script.includes('input[type="file"]')) return true;
+      return states.shift() ?? { ...editorState, submit, images: [oldImage, newImage] };
+    });
+    const insertText = vi.fn(async () => undefined);
+    const sendInputEvent = vi.fn();
+    const operation = automateGoogleFlowImageGeneration({
+      executeJavaScript,
+      insertText,
+      sendInputEvent
+    } as unknown as WebContents, {
+      prompt: 'Create a storyboard frame', model: 'nano-banana-2', aspectRatio: '16:9', timeoutMs: 10_000,
+      referenceImages: [{ displayName: 'thok.jpeg', mimeType: 'image/jpeg', base64: 'VEhPSw==' }]
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(operation).resolves.toBe(newImage.src);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('VEhPSw=='), true);
+    expect(sendInputEvent).toHaveBeenCalledWith({
+      type: 'mouseDown', x: 53, y: 828, button: 'left', clickCount: 1
+    });
+    expect(insertText).toHaveBeenCalledWith('Create a storyboard frame');
   });
 });

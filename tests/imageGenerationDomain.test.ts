@@ -108,6 +108,8 @@ describe('Writer production-image handoff', () => {
     expect(imageStudio).toContain('generateProductionBriefs');
     expect(imageStudio).toContain('Sync Writer ·');
     expect(imageStudio).toContain('Custom image style');
+    expect(imageStudio).toContain('aiGetProjectImageReference');
+    expect(imageStudio).toContain('referenceImages');
     expect(imageStudio).toContain('nothing is attached until you approve a completed image');
     expect(imageStudio).toContain('handleAttachToProduction(job)');
     expect(imageStudio).toContain('Attach to ${productionTargetByJob[job.id]!.targetLabel}');

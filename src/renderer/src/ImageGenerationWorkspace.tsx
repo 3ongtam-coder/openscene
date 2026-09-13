@@ -123,20 +123,28 @@ export const ImageGenerationWorkspace = forwardRef<ImageGenerationWorkspaceHandl
     return `${basePrompt.trim()}\n\nVisual style: ${trimmedStyle}`;
   };
 
-  const requestFor = (input: {
+  const requestFor = async (input: {
     readonly prompt: string;
     readonly negativePrompt: string;
     readonly aspectRatio: ImageAspectRatio;
     readonly styleLabel: string;
     readonly styleDescription: string;
-  }): ImageGenerationRequest => {
+  }, handoff: ProductionImageHandoff | null): Promise<ImageGenerationRequest> => {
     const flowWindowVisible = generationMode === 'browser_session' && showGoogleFlowWindow();
+    const referenceImages = handoff === null || handoff.referenceAssetIds.length === 0
+      ? []
+      : await Promise.all(handoff.referenceAssetIds.map(async (referenceId) => {
+        const reference = await window.videoTool.aiGetProjectImageReference({ projectId: handoff.projectId, assetId: referenceId });
+        if (!reference.ok) throw new Error(`Reference image ${referenceId} could not be loaded for this production frame.`);
+        return reference.value;
+      }));
     return {
       prompt: compileStyledPrompt(input.prompt, input.styleDescription),
       aspectRatio: input.aspectRatio,
       stylePreset: input.styleLabel,
       modelId: imageModel.id,
       mode: generationMode,
+      ...(referenceImages.length === 0 ? {} : { referenceImage: referenceImages[0], referenceImages }),
       ...(generationMode === 'browser_session'
         ? { showBrowserWindow: flowWindowVisible, ...(projectName === undefined ? {} : { flowProjectName: projectName }) }
         : {}),
@@ -192,13 +200,14 @@ export const ImageGenerationWorkspace = forwardRef<ImageGenerationWorkspaceHandl
       for (const [index, handoff] of handoffs.entries()) {
         if (!mountedRef.current) break;
         setStatusMsg({ tone: 'neutral', text: `Production image ${index + 1}/${handoffs.length}: ${handoff.targetLabel}. Browser jobs run one at a time.` });
-        const result = await submitAndWait(requestFor({
+        const request = await requestFor({
           prompt: handoff.prompt,
           negativePrompt: handoff.negativePrompt,
           aspectRatio: handoff.aspectRatio,
           styleLabel: handoff.stylePreset,
           styleDescription: handoff.styleDescription
-        }), handoff);
+        }, handoff);
+        const result = await submitAndWait(request, handoff);
         attempted += 1;
         if (result.ok) completed += 1;
         else {
@@ -246,7 +255,8 @@ export const ImageGenerationWorkspace = forwardRef<ImageGenerationWorkspaceHandl
         : `Starting the hidden signed-in ${browserLabel} image worker…`
       : `Submitting ${imageModel.providerLabel} image job…` });
     try {
-      const result = await submitAndWait(requestFor({ prompt, negativePrompt, aspectRatio, styleLabel, styleDescription }), productionHandoff);
+      const request = await requestFor({ prompt, negativePrompt, aspectRatio, styleLabel, styleDescription }, productionHandoff);
+      const result = await submitAndWait(request, productionHandoff);
       setStatusMsg(result.ok ? { text: 'Image ready.', tone: 'success' } : { text: result.error, tone: 'danger' });
     } finally {
       queueActiveRef.current = false;
@@ -320,7 +330,9 @@ export const ImageGenerationWorkspace = forwardRef<ImageGenerationWorkspaceHandl
         {productionHandoff !== null && (
           <StatusCard tone="neutral">
             <strong>{productionHandoff.targetLabel}</strong><br />
-            This is a reviewed production handoff. Generate an image, inspect it, then explicitly attach it to return to the production board.
+            This is a reviewed production handoff. {productionHandoff.referenceAssetIds.length > 0
+              ? `${productionHandoff.referenceAssetIds.length} approved character reference image(s) will be uploaded to the image worker.`
+              : 'No approved image reference is attached to this target.'} Generate an image, inspect it, then explicitly attach it to return to the production board.
           </StatusCard>
         )}
         {browserProvider && (

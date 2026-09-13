@@ -1,5 +1,6 @@
 import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { GoogleFlowImageModel } from '../shared/browserSession';
+import type { ReferenceImageSelection } from '../shared/providerSeams';
 import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 
 const POLL_INTERVAL_MS = 1_000;
@@ -37,6 +38,7 @@ export type GoogleFlowAutomationState = {
   readonly agentSettingsClose?: Rectangle;
   readonly agentToggle?: RectangleWithText;
   readonly configButton?: RectangleWithText;
+  readonly upload?: Rectangle;
   readonly modelDropdown?: RectangleWithText;
   readonly tabs: readonly RectangleWithText[];
   readonly menuItems: readonly RectangleWithText[];
@@ -59,6 +61,8 @@ export type GoogleFlowAutomationInput = {
   readonly prompt: string;
   readonly model: GoogleFlowImageModel;
   readonly aspectRatio: string;
+  readonly referenceImage?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
   readonly timeoutMs: number;
   readonly projectName?: string;
   readonly onProgress?: (
@@ -176,6 +180,12 @@ export function buildGoogleFlowStateProbeScript(): string {
     const buttons = visible('button');
     const newProjectEntry = buttons.find(({ element }) => /new project|dự án mới/i.test(label(element)));
     const dismissEntry = buttons.find(({ element }) => /^(close|đóng)$/i.test(label(element)));
+    const uploadEntry = buttons.find(({ element, rectangle }) => {
+      if (rectangle.y < viewH * 0.55) return false;
+      const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
+      return text === '+' || /upload|add image|reference|attach|them anh|tai len/.test(text)
+        || (rectangle.x < window.innerWidth * 0.3 && rectangle.width < 100 && rectangle.height < 100);
+    });
 
     // Flow may open its Agent composer by default. Its Settings button and
     // media defaults resemble the classic generation configuration, but they
@@ -390,6 +400,7 @@ export function buildGoogleFlowStateProbeScript(): string {
       ...(agentSettingsCloseEntry ? { agentSettingsClose: agentSettingsCloseEntry.rectangle } : {}),
       ...(agentToggle ? { agentToggle } : {}),
       ...(configButton ? { configButton } : {}),
+      ...(uploadEntry ? { upload: uploadEntry.rectangle } : {}),
       ...(modelDropdown ? { modelDropdown } : {}),
       tabs,
       menuItems,
@@ -748,6 +759,45 @@ async function configureGeneration(
   onConfiguration({ step: 'complete' });
 }
 
+function safeReferenceName(reference: ReferenceImageSelection, index: number): string {
+  const extension = reference.mimeType === 'image/png' ? 'png' : reference.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const base = reference.displayName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 70).replace(/\.+$/, '');
+  return `${base || `reference-${index + 1}`}.${extension}`;
+}
+
+async function injectImageFile(webContents: WebContents, reference: ReferenceImageSelection, index: number): Promise<void> {
+  const injected = await webContents.executeJavaScript(`(() => {
+    const input = [...document.querySelectorAll('input[type="file"]')]
+      .find((candidate) => !candidate.disabled && (!candidate.accept || candidate.accept.includes('image')));
+    if (!(input instanceof HTMLInputElement)) return false;
+    const binary = atob(${JSON.stringify(reference.base64)});
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], ${JSON.stringify(safeReferenceName(reference, index))}, { type: ${JSON.stringify(reference.mimeType)} }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`, true) as boolean;
+  if (!injected) throw new Error('Google Flow opened its image picker, but no image upload control was available. Import the reference manually and retry.');
+  await delay(800);
+}
+
+async function attachImageReferences(
+  webContents: WebContents,
+  references: readonly ReferenceImageSelection[]
+): Promise<void> {
+  for (let index = 0; index < references.length; index += 1) {
+    const state = await readState(webContents);
+    if (state.upload === undefined) {
+      throw new Error('Google Flow Image does not expose an upload control for the selected character reference.');
+    }
+    clickAt(webContents, state.upload);
+    await delay(400);
+    await injectImageFile(webContents, references[index]!, index);
+  }
+}
+
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
   let promptInserted = false;
   while (Date.now() < deadline) {
@@ -808,6 +858,14 @@ export async function automateGoogleFlowImageGeneration(
   await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
     input.onProgress?.('configuring', Date.now() - startedAt, details);
   });
+
+  const references = input.referenceImages?.length
+    ? input.referenceImages
+    : input.referenceImage === undefined ? [] : [input.referenceImage];
+  if (references.length > 0) {
+    input.onProgress?.('configuring', Date.now() - startedAt, { step: 'references', referenceCount: references.length });
+    await attachImageReferences(webContents, references);
+  }
 
   ready = await fillPrompt(webContents, input.prompt, deadline);
   input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });

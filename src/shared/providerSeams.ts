@@ -158,6 +158,8 @@ export interface ImageGenerationRequest {
   aspectRatio: ImageAspectRatio;
   /** Optional image-to-image seed, carried inline like the video reference. */
   referenceImage?: ReferenceImageSelection;
+  /** Additional approved references for providers that support multi-image input. */
+  referenceImages?: readonly ReferenceImageSelection[];
   stylePreset?: string;
   negativePrompt?: string;
   mode?: ProviderExecutionMode;

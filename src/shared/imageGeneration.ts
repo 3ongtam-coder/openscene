@@ -26,6 +26,7 @@ export type ImageRequestInput = {
   readonly aspectRatio: ImageAspectRatio;
   readonly negativePrompt?: string;
   readonly referenceImage?: ReferenceImageSelection;
+  readonly referenceImages?: readonly ReferenceImageSelection[];
   readonly fetchImpl?: typeof fetch;
   readonly baseUrl?: string;
 };
@@ -219,13 +220,11 @@ export async function requestNanoBananaImage(input: ImageRequestInput): Promise<
     : input.prompt;
   const interactionInput = [
     { type: 'text', text: prompt },
-    ...(input.referenceImage === undefined
-      ? []
-      : [{
-          type: 'image',
-          mime_type: input.referenceImage.mimeType,
-          data: input.referenceImage.base64
-        }])
+    ...(input.referenceImages?.length
+      ? input.referenceImages.map((reference) => ({ type: 'image', mime_type: reference.mimeType, data: reference.base64 }))
+      : input.referenceImage === undefined
+        ? []
+        : [{ type: 'image', mime_type: input.referenceImage.mimeType, data: input.referenceImage.base64 }])
   ];
   const parsed = (await postJson(
     `${input.baseUrl ?? 'https://generativelanguage.googleapis.com'}/v1beta/interactions`,

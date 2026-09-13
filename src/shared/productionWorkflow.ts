@@ -64,6 +64,8 @@ export type ProductionImageBrief = {
   /** Full Writer direction, separate from the editable subject prompt. */
   readonly styleDescription: string;
   readonly styleSource: 'writer' | 'fallback';
+  /** Approved Character/Shot reference IDs to load into the provider request. */
+  readonly referenceAssetIds: readonly string[];
 };
 
 /** Transient navigation state; it is deliberately not stored in the project. */
@@ -149,7 +151,8 @@ export function buildCharacterReferenceImageBrief(
       aspectRatio: '3:4',
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
-      styleSource: visualStyle.source
+      styleSource: visualStyle.source,
+      referenceAssetIds: character.referenceAssetIds.filter((referenceId) => document.referenceAssets.some((reference) => reference.id === referenceId && reference.role === 'character'))
     }
   };
 }
@@ -170,6 +173,9 @@ export function buildStoryboardImageBrief(
     const character = document.characters.find((entry) => entry.id === characterId);
     return character === undefined ? [] : [`${character.name}: ${character.invariantDescription}`];
   });
+  const characterReferenceIds = scene.characterIds.flatMap((characterId) =>
+    document.characters.find((character) => character.id === characterId)?.referenceAssetIds ?? []
+  ).filter((referenceId) => document.referenceAssets.some((reference) => reference.id === referenceId && reference.role === 'character')).slice(0, 3);
   const visualStyle = productionVisualStyle(document);
   return {
     ok: true,
@@ -190,7 +196,8 @@ export function buildStoryboardImageBrief(
       aspectRatio,
       stylePreset: visualStyle.label,
       styleDescription: visualStyle.description,
-      styleSource: visualStyle.source
+      styleSource: visualStyle.source,
+      referenceAssetIds: characterReferenceIds
     }
   };
 }

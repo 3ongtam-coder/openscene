@@ -185,6 +185,24 @@ describe('Google Nano Banana adapter', () => {
     });
   });
 
+  it('passes multiple approved references to Nano Banana in order', async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(JSON.parse(init.body as string).input).toEqual([
+        { type: 'text', text: 'keep both characters' },
+        { type: 'image', mime_type: 'image/jpeg', data: 'ONE' },
+        { type: 'image', mime_type: 'image/png', data: 'TWO' }
+      ]);
+      return new Response(JSON.stringify({ output_image: { type: 'image', data: PNG_BASE64 } }), { status: 200 });
+    });
+    await generateNanoBananaImage({
+      apiKey: 'k', modelId: 'gemini-3.1-flash-image', prompt: 'keep both characters', aspectRatio: '16:9',
+      referenceImages: [
+        { displayName: 'one.jpeg', mimeType: 'image/jpeg', base64: 'ONE' },
+        { displayName: 'two.png', mimeType: 'image/png', base64: 'TWO' }
+      ], fetchImpl: fetchMock as unknown as typeof fetch
+    });
+  });
+
   it('reports a missing output instead of writing an empty image', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'empty' }), { status: 200 }));
     await expect(generateNanoBananaImage({
