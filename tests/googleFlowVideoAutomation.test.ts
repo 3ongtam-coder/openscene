@@ -8,8 +8,8 @@ import {
 } from '../src/main/googleFlowVideoAutomation';
 import { waitForGoogleFlowProjectEditor } from '../src/main/googleFlowImageAutomation';
 
-const FIRST_FRAME = { displayName: 'first.png', mimeType: 'image/png', base64: 'FIRST' } as const;
-const LAST_FRAME = { displayName: 'last.png', mimeType: 'image/png', base64: 'LAST' } as const;
+const FIRST_FRAME = { displayName: 'first.png', mimeType: 'image/png', base64: 'RklSU1Q=' } as const;
+const LAST_FRAME = { displayName: 'last.png', mimeType: 'image/png', base64: 'TEFTVA==' } as const;
 
 afterEach(() => vi.useRealTimers());
 
@@ -180,4 +180,83 @@ describe('Google Flow browser video automation', () => {
       type: 'mouseDown', x: 1120, y: 820, button: 'left', clickCount: 1
     });
   });
+
+  it('assigns Start and End frames through separate Chromium file choosers', async () => {
+    const promptInput = { x: 10, y: 700, width: 300, height: 50 };
+    const config = { x: 20, y: 800, width: 300, height: 40 };
+    const start = { x: 100, y: 600, width: 100, height: 40 };
+    const end = { x: 250, y: 600, width: 100, height: 40 };
+    const submit = { x: 1100, y: 800, width: 40, height: 40 };
+    const oldVideo = { rectangle: { x: 10, y: 10, width: 400, height: 225 }, src: 'blob:https://flow.google.com/old' };
+    const newVideo = { rectangle: { x: 420, y: 10, width: 400, height: 225 }, src: 'blob:https://flow.google.com/new' };
+    const selectedTabs = [
+      { rectangle: { x: 1, y: 1, width: 20, height: 20 }, text: 'Video', selected: true },
+      { rectangle: { x: 2, y: 2, width: 20, height: 20 }, text: 'Frames', selected: true },
+      { rectangle: { x: 3, y: 3, width: 20, height: 20 }, text: '16:9', selected: true },
+      { rectangle: { x: 4, y: 4, width: 20, height: 20 }, text: 'x1', selected: true },
+      { rectangle: start, text: 'Start' },
+      { rectangle: end, text: 'End' }
+    ];
+    const state = {
+      url: 'https://flow.google.com/project/example', input: promptInput,
+      configButton: { rectangle: config, text: 'Veo 3.1 - Quality Video 720p 8 seconds x1' },
+      tabs: selectedTabs, menuItems: [], videos: [oldVideo]
+    };
+    const states = [
+      state, state, state, state, state, state,
+      state, state, state, { ...state, submit }, { ...state, submit, videos: [oldVideo, newVideo] }
+    ];
+    const executeJavaScript = vi.fn().mockImplementation(async (script: string) => {
+      if (script.includes('input[type="file"]')) return false;
+      return states.shift() ?? { ...state, submit, videos: [oldVideo, newVideo] };
+    });
+    let attached = false;
+    let interceptionEnabled = false;
+    let chooserIndex = 0;
+    const messageListeners = new Set<(event: unknown, method: string, params: unknown, sessionId: string) => void>();
+    const debuggerApi = {
+      isAttached: vi.fn(() => attached),
+      attach: vi.fn(() => { attached = true; }),
+      detach: vi.fn(() => { attached = false; }),
+      sendCommand: vi.fn(async (method: string, params?: { enabled?: boolean }) => {
+        if (method === 'Page.setInterceptFileChooserDialog') interceptionEnabled = params?.enabled === true;
+        return {};
+      }),
+      on: vi.fn((event: string, listener: (event: unknown, method: string, params: unknown, sessionId: string) => void) => {
+        if (event === 'message') messageListeners.add(listener);
+      }),
+      removeListener: vi.fn((event: string, listener: (event: unknown, method: string, params: unknown, sessionId: string) => void) => {
+        if (event === 'message') messageListeners.delete(listener);
+      })
+    };
+    const sendInputEvent = vi.fn((event: { type: string; x?: number; y?: number }) => {
+      if (event.type !== 'mouseDown' || !interceptionEnabled) return;
+      if ((event.x === 150 && event.y === 620) || (event.x === 300 && event.y === 620)) {
+        chooserIndex += 1;
+        for (const listener of messageListeners) {
+          listener({}, 'Page.fileChooserOpened', { backendNodeId: 100 + chooserIndex, mode: 'selectSingle' }, '');
+        }
+      }
+    });
+    const operation = automateGoogleFlowVideoGeneration({
+      executeJavaScript,
+      insertText: vi.fn(async () => undefined),
+      sendInputEvent,
+      debugger: debuggerApi
+    } as unknown as WebContents, {
+      prompt: 'Move between approved endpoints', model: 'veo-3.1-quality', operation: 'start_end',
+      aspectRatio: '16:9', durationSeconds: 8, timeoutMs: 10_000,
+      referenceImage: FIRST_FRAME, lastFrame: LAST_FRAME
+    });
+
+    await expect(operation).resolves.toBe(newVideo.src);
+    const setFileCalls = debuggerApi.sendCommand.mock.calls
+      .filter(([method]) => method === 'DOM.setFileInputFiles');
+    expect(setFileCalls).toHaveLength(2);
+    expect(setFileCalls.map(([, params]) => (params as { backendNodeId: number }).backendNodeId)).toEqual([101, 102]);
+    expect(setFileCalls.map(([, params]) => ((params as { files: string[] }).files[0] ?? '').replace(/\\/g, '/').split('/').at(-1)))
+      .toEqual(['01-first.png', '01-last.png']);
+    expect(debuggerApi.attach).toHaveBeenCalledTimes(2);
+    expect(debuggerApi.detach).toHaveBeenCalledTimes(2);
+  }, 15_000);
 });

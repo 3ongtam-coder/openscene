@@ -2,6 +2,10 @@ import type { KeyboardInputEvent, Rectangle, WebContents } from 'electron';
 import type { GoogleFlowImageModel } from '../shared/browserSession';
 import type { ReferenceImageSelection } from '../shared/providerSeams';
 import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
+import {
+  uploadReferencesThroughChromiumFileChooser,
+  type ChromiumFileChooserUpload
+} from './chromiumFileChooserUpload';
 
 const POLL_INTERVAL_MS = 1_000;
 const FLOW_PROJECT_MAP_STORAGE_KEY = 'openscene-flow-project-map-v1';
@@ -779,16 +783,24 @@ function safeReferenceName(reference: ReferenceImageSelection, index: number): s
   return `${base || `reference-${index + 1}`}.${extension}`;
 }
 
-async function injectImageFile(webContents: WebContents, reference: ReferenceImageSelection, index: number): Promise<boolean> {
+async function injectImageFiles(webContents: WebContents, references: readonly ReferenceImageSelection[]): Promise<boolean> {
   const injected = await webContents.executeJavaScript(`(() => {
     const input = [...document.querySelectorAll('input[type="file"]')]
       .find((candidate) => !candidate.disabled && (!candidate.accept || candidate.accept.includes('image')));
     if (!(input instanceof HTMLInputElement)) return false;
-    const binary = atob(${JSON.stringify(reference.base64)});
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     const transfer = new DataTransfer();
-    transfer.items.add(new File([bytes], ${JSON.stringify(safeReferenceName(reference, index))}, { type: ${JSON.stringify(reference.mimeType)} }));
+    const references = ${JSON.stringify(references.map((reference, index) => ({
+      base64: reference.base64,
+      displayName: safeReferenceName(reference, index),
+      mimeType: reference.mimeType
+    })))};
+    for (const reference of references) {
+      const binary = atob(reference.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      transfer.items.add(new File([bytes], reference.displayName, { type: reference.mimeType }));
+    }
+    if (references.length > 1 && !input.multiple) return false;
     input.files = transfer.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
@@ -800,47 +812,35 @@ async function injectImageFile(webContents: WebContents, reference: ReferenceIma
 async function attachImageReferences(
   webContents: WebContents,
   references: readonly ReferenceImageSelection[]
-): Promise<void> {
-  for (let index = 0; index < references.length; index += 1) {
-    let state = await readState(webContents);
-    if (state.uploadLauncher === undefined && state.uploadChoice === undefined) {
-      throw new Error('Google Flow Image does not expose an upload control for the selected character reference.');
-    }
-
-    if (state.uploadChoice === undefined) {
-      clickAt(webContents, state.uploadLauncher!);
-    }
-
-    const deadline = Date.now() + FLOW_REFERENCE_UPLOAD_TIMEOUT_MS;
-    let uploadChoiceSelected = false;
-    let injected = false;
-    while (Date.now() < deadline) {
-      state = await readState(webContents);
-      if (!uploadChoiceSelected && state.uploadChoice !== undefined) {
-        clickAt(webContents, state.uploadChoice);
-        uploadChoiceSelected = true;
-        await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
-        continue;
-      }
-
-      // Never reuse an input until this reference has opened its own upload
-      // action. Otherwise a persistent input from the previous reference can
-      // replace that image instead of appending the next one. Older Flow
-      // layouts create the input directly from the launcher, so they are still
-      // supported when no second-stage Upload choice appears.
-      if (uploadChoiceSelected || state.uploadChoice === undefined) {
-        if (await injectImageFile(webContents, references[index]!, index)) {
-          injected = true;
-          break;
-        }
-      }
-      await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
-    }
-
-    if (!injected) {
-      throw new Error('Google Flow opened its image picker, but no image upload control was available after selecting Upload. Import the reference manually and retry.');
-    }
+): Promise<ChromiumFileChooserUpload | null> {
+  let state = await readState(webContents);
+  if (state.uploadLauncher === undefined && state.uploadChoice === undefined) {
+    throw new Error('Google Flow Image does not expose an upload control for the selected reference images.');
   }
+
+  if (state.uploadChoice === undefined) clickAt(webContents, state.uploadLauncher!);
+
+  const deadline = Date.now() + FLOW_REFERENCE_UPLOAD_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    state = await readState(webContents);
+    if (state.uploadChoice !== undefined) {
+      const upload = await uploadReferencesThroughChromiumFileChooser(
+        webContents,
+        references,
+        () => clickAt(webContents, state.uploadChoice!),
+        Math.max(1, deadline - Date.now())
+      );
+      if (upload !== null) return upload;
+      // Older Flow builds expose a page-owned multiple file input. Keep that
+      // compatibility path, but never upload references one-by-one because a
+      // persistent single slot can replace the style/identity image before it.
+      if (await injectImageFiles(webContents, references)) return null;
+      break;
+    }
+    await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
+  }
+
+  throw new Error('Google Flow opened its image picker, but Chromium could not assign the selected reference images. Retry after closing Flow DevTools or import the references manually.');
 }
 
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
@@ -882,59 +882,64 @@ export async function automateGoogleFlowImageGeneration(
   const deadline = startedAt + input.timeoutMs;
   input.onProgress?.('loading', 0);
 
-  const projectResult = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
-    input.onProgress?.('project', Date.now() - startedAt, details);
-  });
-  let ready = projectResult.state;
-  if (input.projectName !== undefined) {
-    await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
-  }
-  if (projectResult.createdProject && input.projectName !== undefined) {
-    const renameDeadline = Math.min(deadline, Date.now() + FLOW_PROJECT_RENAME_TIMEOUT_MS);
-    const renamed = await renameGoogleFlowProject(webContents, input.projectName, renameDeadline);
-    input.onProgress?.('project', Date.now() - startedAt, {
-      projectName: input.projectName,
-      projectCreated: true,
-      projectRenamed: renamed
+  let referenceUpload: ChromiumFileChooserUpload | null = null;
+  try {
+    const projectResult = await waitForGoogleFlowProjectEditor(webContents, deadline, input.projectName, (details) => {
+      input.onProgress?.('project', Date.now() - startedAt, details);
     });
-  }
-  input.onProgress?.('ready', Date.now() - startedAt);
-  input.onProgress?.('configuring', Date.now() - startedAt);
-  await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
-    input.onProgress?.('configuring', Date.now() - startedAt, details);
-  });
-
-  const references = input.referenceImages?.length
-    ? input.referenceImages
-    : input.referenceImage === undefined ? [] : [input.referenceImage];
-  if (references.length > 0) {
-    input.onProgress?.('configuring', Date.now() - startedAt, { step: 'references', referenceCount: references.length });
-    await attachImageReferences(webContents, references);
-  }
-
-  ready = await fillPrompt(webContents, input.prompt, deadline);
-  input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });
-  const existingImages = new Set(ready.images.map((image) => image.src));
-  clickAt(webContents, ready.submit!);
-  input.onProgress?.('submitted', Date.now() - startedAt);
-
-  let lastHeartbeat = 0;
-  while (Date.now() < deadline) {
-    await delay(POLL_INTERVAL_MS);
-    const state = await readState(webContents);
-    throwForAction(state);
-    const elapsed = Date.now() - startedAt;
-    if (elapsed - lastHeartbeat >= 10_000) {
-      lastHeartbeat = elapsed;
-      input.onProgress?.('generating', elapsed);
+    let ready = projectResult.state;
+    if (input.projectName !== undefined) {
+      await rememberGoogleFlowProjectUrl(webContents, input.projectName, ready.url).catch(() => undefined);
     }
-    const generated = state.images.find((image) => !existingImages.has(image.src));
-    if (generated !== undefined) {
-      input.onProgress?.('downloading', elapsed);
-      return generated.src;
+    if (projectResult.createdProject && input.projectName !== undefined) {
+      const renameDeadline = Math.min(deadline, Date.now() + FLOW_PROJECT_RENAME_TIMEOUT_MS);
+      const renamed = await renameGoogleFlowProject(webContents, input.projectName, renameDeadline);
+      input.onProgress?.('project', Date.now() - startedAt, {
+        projectName: input.projectName,
+        projectCreated: true,
+        projectRenamed: renamed
+      });
     }
+    input.onProgress?.('ready', Date.now() - startedAt);
+    input.onProgress?.('configuring', Date.now() - startedAt);
+    await configureGeneration(webContents, ready, input.model, input.aspectRatio, (details) => {
+      input.onProgress?.('configuring', Date.now() - startedAt, details);
+    });
+
+    const references = input.referenceImages?.length
+      ? input.referenceImages
+      : input.referenceImage === undefined ? [] : [input.referenceImage];
+    if (references.length > 0) {
+      input.onProgress?.('configuring', Date.now() - startedAt, { step: 'references', referenceCount: references.length });
+      referenceUpload = await attachImageReferences(webContents, references);
+    }
+
+    ready = await fillPrompt(webContents, input.prompt, deadline);
+    input.onProgress?.('configuring', Date.now() - startedAt, { step: 'prompt_filled' });
+    const existingImages = new Set(ready.images.map((image) => image.src));
+    clickAt(webContents, ready.submit!);
+    input.onProgress?.('submitted', Date.now() - startedAt);
+
+    let lastHeartbeat = 0;
+    while (Date.now() < deadline) {
+      await delay(POLL_INTERVAL_MS);
+      const state = await readState(webContents);
+      throwForAction(state);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed - lastHeartbeat >= 10_000) {
+        lastHeartbeat = elapsed;
+        input.onProgress?.('generating', elapsed);
+      }
+      const generated = state.images.find((image) => !existingImages.has(image.src));
+      if (generated !== undefined) {
+        input.onProgress?.('downloading', elapsed);
+        return generated.src;
+      }
+    }
+    throw new Error('Google Flow did not produce an image before the timeout. Check the prompt, account credits, and Flow access, then retry.');
+  } finally {
+    await referenceUpload?.cleanup().catch(() => undefined);
   }
-  throw new Error('Google Flow did not produce an image before the timeout. Check the prompt, account credits, and Flow access, then retry.');
 }
 
 export function detectDownloadedImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | null {

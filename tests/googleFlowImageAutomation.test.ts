@@ -1,4 +1,6 @@
 import type { WebContents } from 'electron';
+import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -145,8 +147,7 @@ describe('Google Flow browser image automation', () => {
     });
   });
 
-  it('uploads world style first and every character reference through a separate Flow menu cycle', async () => {
-    vi.useFakeTimers();
+  it('uploads world style first and every character reference through Chromium in one ordered multiple-file selection', async () => {
     const input = { x: 10, y: 700, width: 300, height: 50 };
     const config = { x: 20, y: 800, width: 260, height: 40 };
     const uploadLauncher = { x: 35, y: 810, width: 36, height: 36 };
@@ -173,22 +174,46 @@ describe('Google Flow browser image automation', () => {
     const states = [
       editorState, editorState, editorState, editorState,
       panelState, panelState, panelState, panelState,
-      editorState, uploadMenuState, editorState,
-      editorState, uploadMenuState, editorState,
-      editorState, uploadMenuState, editorState,
+      editorState,
+      uploadMenuState,
       editorState,
       { ...editorState, submit }, { ...editorState, submit, images: [oldImage, newImage] }
     ];
     const executeJavaScript = vi.fn().mockImplementation(async (script: string) => {
-      if (script.includes('input[type="file"]')) return true;
+      if (script.includes('input[type="file"]')) return false;
       return states.shift() ?? { ...editorState, submit, images: [oldImage, newImage] };
     });
     const insertText = vi.fn(async () => undefined);
-    const sendInputEvent = vi.fn();
+    let attached = false;
+    let interceptionEnabled = false;
+    const messageListeners = new Set<(event: unknown, method: string, params: unknown, sessionId: string) => void>();
+    const debuggerApi = {
+      isAttached: vi.fn(() => attached),
+      attach: vi.fn(() => { attached = true; }),
+      detach: vi.fn(() => { attached = false; }),
+      sendCommand: vi.fn(async (method: string, params?: { enabled?: boolean }) => {
+        if (method === 'Page.setInterceptFileChooserDialog') interceptionEnabled = params?.enabled === true;
+        return {};
+      }),
+      on: vi.fn((event: string, listener: (event: unknown, method: string, params: unknown, sessionId: string) => void) => {
+        if (event === 'message') messageListeners.add(listener);
+      }),
+      removeListener: vi.fn((event: string, listener: (event: unknown, method: string, params: unknown, sessionId: string) => void) => {
+        if (event === 'message') messageListeners.delete(listener);
+      })
+    };
+    const sendInputEvent = vi.fn((event: { type: string; x?: number; y?: number }) => {
+      if (event.type === 'mouseDown' && event.x === 105 && event.y === 708 && interceptionEnabled) {
+        for (const listener of messageListeners) {
+          listener({}, 'Page.fileChooserOpened', { backendNodeId: 73, mode: 'selectMultiple' }, '');
+        }
+      }
+    });
     const operation = automateGoogleFlowImageGeneration({
       executeJavaScript,
       insertText,
-      sendInputEvent
+      sendInputEvent,
+      debugger: debuggerApi
     } as unknown as WebContents, {
       prompt: 'Create a storyboard frame', model: 'nano-banana-2', aspectRatio: '16:9', timeoutMs: 10_000,
       referenceImages: [
@@ -198,19 +223,23 @@ describe('Google Flow browser image automation', () => {
       ]
     });
 
-    await vi.runAllTimersAsync();
     await expect(operation).resolves.toBe(newImage.src);
-    const uploadScripts = executeJavaScript.mock.calls
-      .map(([script]) => script as string)
-      .filter((script) => script.includes('input[type="file"]'));
-    expect(uploadScripts).toHaveLength(3);
-    expect(uploadScripts[0]).toContain('V09STEQ=');
-    expect(uploadScripts[1]).toContain('VEhPSw==');
-    expect(uploadScripts[2]).toContain('QlVL');
+    const setFilesCall = debuggerApi.sendCommand.mock.calls.find(([method]) => method === 'DOM.setFileInputFiles');
+    expect(setFilesCall).toBeDefined();
+    const files = (setFilesCall![1] as { files: string[]; backendNodeId: number }).files;
+    expect((setFilesCall![1] as { backendNodeId: number }).backendNodeId).toBe(73);
+    expect(files.map((file) => file.replace(/\\/g, '/').split('/').at(-1))).toEqual([
+      '01-world-style.png',
+      '02-thok.jpg',
+      '03-buk.webp'
+    ]);
+    expect(existsSync(dirname(files[0]!))).toBe(false);
+    expect(debuggerApi.attach).toHaveBeenCalledWith('1.3');
+    expect(debuggerApi.detach).toHaveBeenCalledOnce();
     const mouseDownEvents = sendInputEvent.mock.calls.map(([event]) => event)
       .filter((event) => event.type === 'mouseDown');
-    expect(mouseDownEvents.filter((event) => event.x === 53 && event.y === 828)).toHaveLength(3);
-    expect(mouseDownEvents.filter((event) => event.x === 105 && event.y === 708)).toHaveLength(3);
+    expect(mouseDownEvents.filter((event) => event.x === 53 && event.y === 828)).toHaveLength(1);
+    expect(mouseDownEvents.filter((event) => event.x === 105 && event.y === 708)).toHaveLength(1);
     expect(insertText).toHaveBeenCalledWith('Create a storyboard frame');
-  });
+  }, 15_000);
 });
