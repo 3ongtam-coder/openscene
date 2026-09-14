@@ -201,7 +201,7 @@ export function buildGoogleFlowStateProbeScript(): string {
     const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex="0"]')
       .filter(({ element }) => {
         const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
-        return /^(upload|upload image|tai len)$/.test(text);
+        return /^(upload|upload image|upload media|upload media files|tai len|tai tep len|tai noi dung nghe nhin len)$/.test(text);
       })
       .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
 
@@ -833,12 +833,16 @@ async function attachImageReferences(
     throw new Error('Google Flow Image does not expose an upload control for the selected reference images.');
   }
 
-  if (state.uploadChoice === undefined) clickAt(webContents, state.uploadLauncher!);
+  if (state.uploadChoice === undefined) {
+    onDiagnostic({ step: 'picker_launcher' });
+    clickAt(webContents, state.uploadLauncher!);
+  }
 
   const deadline = Date.now() + FLOW_REFERENCE_UPLOAD_TIMEOUT_MS;
   while (Date.now() < deadline) {
     state = await readState(webContents);
     if (state.uploadChoice !== undefined) {
+      onDiagnostic({ step: 'picker_upload_action' });
       const upload = await uploadReferencesThroughChromiumFileChooser(
         webContents,
         references,
@@ -856,7 +860,7 @@ async function attachImageReferences(
     await delay(FLOW_REFERENCE_UPLOAD_POLL_MS);
   }
 
-  throw new Error('Google Flow opened its image picker, but Chromium could not assign the selected reference images. Retry after closing Flow DevTools or import the references manually.');
+  throw new Error('Google Flow opened its media library, but OpenScene could not find the Upload media action. The Flow UI may have changed; close the worker and retry after updating OpenScene.');
 }
 
 async function fillPrompt(webContents: WebContents, prompt: string, deadline: number): Promise<AutomationState> {
