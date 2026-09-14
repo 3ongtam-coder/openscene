@@ -210,7 +210,11 @@ export function buildGoogleFlowStateProbeScript(): string {
     // The current Flow composer opens a second menu after the + button. Its
     // explicit Upload/Tai len action must be selected before Flow creates the
     // file input used by the reference importer.
-    const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex="0"]')
+    // Flow's current asset library renders the Upload media action as a
+    // clickable container with its readable label in a nested span. Search
+    // visible text containers as well as semantic controls; clicking the label
+    // center bubbles to the library action without relying on CSS classes.
+    const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex], div, span')
       .filter(({ element }) => {
         const labels = [
           label(element),

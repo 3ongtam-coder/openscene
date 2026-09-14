@@ -24,6 +24,7 @@ describe('Google Flow browser image automation', () => {
     expect(script).toContain('attentionText');
     expect(script).toContain('uploadLauncherEntry');
     expect(script).toContain('uploadChoiceEntry');
+    expect(script).toContain('[tabindex], div, span');
     expect(script).toContain('tai noi dung nghe nhin len');
     expect(script).not.toContain("/rate limit|usage limit|not enough credits|insufficient credits|hết tín dụng|đã đạt giới hạn/.test(body)");
   });
