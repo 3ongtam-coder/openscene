@@ -474,10 +474,10 @@ export async function waitForGoogleFlowProjectEditor(
   projectName: string | undefined,
   onProject: (details?: Readonly<Record<string, unknown>>) => void = () => undefined
 ): Promise<{ readonly state: AutomationState; readonly createdProject: boolean }> {
-  let enteredProject = false;
   let createdProject = false;
   let rememberedProjectAttempted = false;
   let projectDiscoveryStartedAt: number | undefined;
+  let lastProjectOpenAttemptAt = 0;
   let lastHeartbeat = Date.now();
   const readinessDetails = (state: AutomationState): Readonly<Record<string, unknown>> => ({
     projectCandidates: state.projectCandidates?.length ?? 0,
@@ -503,6 +503,7 @@ export async function waitForGoogleFlowProjectEditor(
       continue;
     }
     throwForAction(state);
+    const projectPage = isFlowProjectUrl(state.url);
     if (state.agentSettingsOpen === true) {
       if (state.agentSettingsClose !== undefined) clickAt(webContents, state.agentSettingsClose);
       else pressKey(webContents, 'ESCAPE');
@@ -517,19 +518,19 @@ export async function waitForGoogleFlowProjectEditor(
       continue;
     }
     if (state.input !== undefined && state.configButton !== undefined) return { state, createdProject };
-    if (!enteredProject && !rememberedProjectAttempted && projectName !== undefined) {
+    if (!projectPage && !rememberedProjectAttempted && projectName !== undefined) {
       rememberedProjectAttempted = true;
       const rememberedUrl = await readRememberedProjectUrl(webContents, projectName).catch(() => undefined);
       if (rememberedUrl !== undefined) {
         onProject({ rememberedProject: true, requestedProject: projectName });
-        enteredProject = true;
-        await webContents.loadURL(rememberedUrl);
+        lastProjectOpenAttemptAt = Date.now();
+        await webContents.loadURL(rememberedUrl).catch(() => undefined);
         lastHeartbeat = Date.now();
         await delay(500);
         continue;
       }
     }
-    if (!enteredProject && state.dismiss !== undefined) {
+    if (!projectPage && state.dismiss !== undefined) {
       clickAt(webContents, state.dismiss);
       await delay(500);
       continue;
@@ -538,7 +539,7 @@ export async function waitForGoogleFlowProjectEditor(
     const matchingProject = target === undefined || target.length === 0
       ? undefined
       : (state.projectCandidates ?? []).find((candidate) => candidateMatchesProjectName(candidate.text, projectName!));
-    if (!enteredProject && target !== undefined && target.length > 0 && state.newProject !== undefined && matchingProject === undefined) {
+    if (!projectPage && target !== undefined && target.length > 0 && state.newProject !== undefined && matchingProject === undefined) {
       projectDiscoveryStartedAt ??= Date.now();
     }
     const projectDiscoveryComplete = projectDiscoveryStartedAt !== undefined
@@ -550,17 +551,29 @@ export async function waitForGoogleFlowProjectEditor(
       ?? (target === undefined || target.length === 0
         ? state.existingProject ?? state.newProject
         : projectDiscoveryComplete ? state.newProject : undefined);
-    if (!enteredProject && projectTarget !== undefined) {
-      enteredProject = true;
+    if (!projectPage && projectTarget !== undefined && Date.now() - lastProjectOpenAttemptAt >= 2_000) {
+      lastProjectOpenAttemptAt = Date.now();
       createdProject = matchingProject === undefined && state.newProject !== undefined && projectTarget === state.newProject;
       onProject({
         ...readinessDetails(state),
         matchingProject: matchingProject?.text ?? '',
         creatingProject: createdProject,
-        waitingForProjectList: !projectDiscoveryComplete && matchingProject === undefined
+        waitingForProjectList: !projectDiscoveryComplete && matchingProject === undefined,
+        openingByUrl: matchingProject?.href !== undefined
       });
       lastHeartbeat = Date.now();
-      clickAt(webContents, projectTarget);
+      // Current Flow places the project name outside the small "Open project"
+      // anchor. A synthetic coordinate click can hit the card overlay without
+      // navigating, while the anchor's own href remains authoritative. Load
+      // that exact visible href and retain a timed click fallback for older
+      // cards which do not expose one.
+      if (matchingProject?.href !== undefined && isFlowProjectUrl(matchingProject.href)) {
+        await webContents.loadURL(matchingProject.href).catch(() => undefined);
+      } else {
+        clickAt(webContents, projectTarget);
+      }
+      await delay(500);
+      continue;
     }
     if (Date.now() - lastHeartbeat >= 10_000) {
       lastHeartbeat = Date.now();
