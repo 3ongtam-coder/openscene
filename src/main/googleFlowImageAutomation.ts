@@ -4,6 +4,7 @@ import type { ReferenceImageSelection } from '../shared/providerSeams';
 import { BrowserGenerationActionRequiredError } from './browserGenerationAction';
 import {
   uploadReferencesThroughChromiumFileChooser,
+  type ChromiumFileChooserDiagnostic,
   type ChromiumFileChooserUpload
 } from './chromiumFileChooserUpload';
 
@@ -824,7 +825,8 @@ async function injectImageFiles(webContents: WebContents, references: readonly R
 
 async function attachImageReferences(
   webContents: WebContents,
-  references: readonly ReferenceImageSelection[]
+  references: readonly ReferenceImageSelection[],
+  onDiagnostic: (details: ChromiumFileChooserDiagnostic) => void
 ): Promise<ChromiumFileChooserUpload | null> {
   let state = await readState(webContents);
   if (state.uploadLauncher === undefined && state.uploadChoice === undefined) {
@@ -841,7 +843,8 @@ async function attachImageReferences(
         webContents,
         references,
         () => clickAt(webContents, state.uploadChoice!),
-        Math.max(1, deadline - Date.now())
+        Math.max(1, deadline - Date.now()),
+        onDiagnostic
       );
       if (upload !== null) return upload;
       // Older Flow builds expose a page-owned multiple file input. Keep that
@@ -924,7 +927,14 @@ export async function automateGoogleFlowImageGeneration(
       : input.referenceImage === undefined ? [] : [input.referenceImage];
     if (references.length > 0) {
       input.onProgress?.('configuring', Date.now() - startedAt, { step: 'references', referenceCount: references.length });
-      referenceUpload = await attachImageReferences(webContents, references);
+      referenceUpload = await attachImageReferences(webContents, references, (details) => {
+        const { step: referenceUploadStep, ...safeDetails } = details;
+        input.onProgress?.('configuring', Date.now() - startedAt, {
+          step: 'reference_upload',
+          referenceUploadStep,
+          ...safeDetails
+        });
+      });
     }
 
     ready = await fillPrompt(webContents, input.prompt, deadline);
