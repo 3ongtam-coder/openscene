@@ -14,6 +14,17 @@ const FLOW_PROJECT_RENAME_TIMEOUT_MS = 5_000;
 const FLOW_PROJECT_DISCOVERY_GRACE_MS = 4_000;
 const FLOW_REFERENCE_UPLOAD_TIMEOUT_MS = 5_000;
 const FLOW_REFERENCE_UPLOAD_POLL_MS = 250;
+const GOOGLE_FLOW_UPLOAD_ACTION_LABELS = [
+  'upload',
+  'upload image',
+  'upload media',
+  'upload media files',
+  'upload files',
+  'tai len',
+  'tai tep len',
+  'tai noi dung nghe nhin len',
+  'tai noi dung da phuong tien len'
+] as const;
 
 type RectangleWithText = {
   readonly rectangle: Rectangle;
@@ -131,6 +142,7 @@ export function buildGoogleFlowStateProbeScript(): string {
     const projectLink = projectLinks.find(({ rectangle }) => rectangle.width > 50 && rectangle.height > 30);
     const normalized = (value) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[đĐ]/g, 'd').toLowerCase();
+    const uploadActionLabels = ${JSON.stringify(GOOGLE_FLOW_UPLOAD_ACTION_LABELS)};
     const interactive = visible('button, [role="button"], a, [tabindex="0"]');
     const projectCandidates = [];
     const seenProjectElements = new Set();
@@ -200,8 +212,14 @@ export function buildGoogleFlowStateProbeScript(): string {
     // file input used by the reference importer.
     const uploadChoiceEntry = visible('button, [role="button"], [role="menuitem"], [role="option"], [tabindex="0"]')
       .filter(({ element }) => {
-        const text = normalized(label(element) + ' ' + (element.getAttribute('aria-label') || ''));
-        return /^(upload|upload image|upload media|upload media files|tai len|tai tep len|tai noi dung nghe nhin len)$/.test(text);
+        const labels = [
+          label(element),
+          element.getAttribute('aria-label') || '',
+          element.getAttribute('title') || ''
+        ].map((value) => normalized(value).replace(/\\s+/g, ' ').trim()).filter(Boolean);
+        return labels.some((text) => uploadActionLabels.some((candidate) =>
+          text === candidate || text.startsWith(candidate + ' ') || text.endsWith(' ' + candidate)
+        ));
       })
       .sort((left, right) => (left.rectangle.width * left.rectangle.height) - (right.rectangle.width * right.rectangle.height))[0];
 
@@ -437,6 +455,13 @@ async function readState(webContents: WebContents): Promise<AutomationState> {
 
 function normalizedLabel(value: string): string {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase();
+}
+
+export function flowUploadActionLabelMatches(value: string): boolean {
+  const normalized = normalizedLabel(value).replace(/\s+/g, ' ').trim();
+  return GOOGLE_FLOW_UPLOAD_ACTION_LABELS.some((candidate) =>
+    normalized === candidate || normalized.startsWith(`${candidate} `) || normalized.endsWith(` ${candidate}`)
+  );
 }
 
 function actionRequiredError(kind: NonNullable<AutomationState['actionRequired']>): Error {

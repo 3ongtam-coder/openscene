@@ -7,6 +7,7 @@ import {
   automateGoogleFlowImageGeneration,
   buildGoogleFlowStateProbeScript,
   detectDownloadedImageMime,
+  flowUploadActionLabelMatches,
   flowConfigurationHasExactModel,
   flowOrientationForAspectRatio,
   renameGoogleFlowProject
@@ -34,6 +35,13 @@ describe('Google Flow browser image automation', () => {
       0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50
     ]))).toBe('image/webp');
     expect(detectDownloadedImageMime(new TextEncoder().encode('<html>sign in</html>'))).toBeNull();
+  });
+
+  it('recognizes current Flow upload labels without combining duplicate accessible names', () => {
+    expect(flowUploadActionLabelMatches('Upload media')).toBe(true);
+    expect(flowUploadActionLabelMatches('Tải nội dung nghe nhìn lên')).toBe(true);
+    expect(flowUploadActionLabelMatches('Upload media Upload media')).toBe(true);
+    expect(flowUploadActionLabelMatches('Open media library')).toBe(false);
   });
 
   it('maps exact ratios onto the coarse orientation available in Flow', () => {
